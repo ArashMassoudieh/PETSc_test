@@ -4,6 +4,7 @@
 #include "petscvector.h"
 #include <cmath>
 #include <iostream>
+#include "grid.h"
 
 static inline PetscInt idx(PetscInt i, PetscInt j, PetscInt nx) { return j*nx + i; }
 static inline bool on_bc(PetscInt i, PetscInt j, PetscInt nx, PetscInt ny, double x, double y, double Lx, double Ly) {
@@ -13,6 +14,11 @@ static inline bool on_bc(PetscInt i, PetscInt j, PetscInt nx, PetscInt ny, doubl
 
 int main(int argc, char** argv) {
     PETScInit petsc(argc, argv);
+
+    Grid2D g(100,100,1,1);
+
+    g.makeGaussianFieldSGS("K_normal_score",0.2,0.2,10);
+    g.writeNamedMatrix("K_normal_score",Grid2D::ArrayKind::Cell, "K_normal_score.txt");
 
     // ----- Problem size & coefficients -----
     PetscInt  nx = 1000, ny = 1000;

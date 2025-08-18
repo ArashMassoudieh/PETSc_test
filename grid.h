@@ -59,6 +59,9 @@ public:
         return static_cast<std::size_t>(j)*nx_ + i;
     }
 
+    // --- Index helper ---
+    inline int idx(int i, int j) const { return j*nx_ + i; }
+
     /// (i,j) from flattened index I
     void cellIJ(std::size_t I, int& i, int& j) const {
         i = static_cast<int>(I % nx_);
@@ -128,18 +131,23 @@ public:
         fields_.erase(name);
     }
 
-    // --------- Flux storage (face-centered) ---------
-
-    /// allocate/zero the face-centered flux arrays
-    void allocateFluxes() {
-        Fx_.assign(FxSize(), 0.0);
-        Fy_.assign(FySize(), 0.0);
+    // --- Flux fields (defined at interfaces) ---
+    std::vector<double>& flux(const std::string& name) {
+        return fluxes_[name];
+    }
+    const std::vector<double>& flux(const std::string& name) const {
+        auto it = fluxes_.find(name);
+        assert(it != fluxes_.end());
+        return it->second;
     }
 
-    std::vector<double>& Fx() { return Fx_; }
-    std::vector<double>& Fy() { return Fy_; }
-    const std::vector<double>& Fx() const { return Fx_; }
-    const std::vector<double>& Fy() const { return Fy_; }
+    // --- Initialization helpers ---
+    void addField(const std::string& name, double initVal = 0.0) {
+        fields_[name] = std::vector<double>(numCells(), initVal);
+    }
+    void addFlux(const std::string& name, std::size_t numInterfaces, double initVal = 0.0) {
+        fluxes_[name] = std::vector<double>(numInterfaces, initVal);
+    }
 
     // --------- Iteration helpers ---------
 
@@ -183,6 +191,87 @@ public:
     /// Unpack a PETScVector back into a named cell field.
     void unpackFieldFromPETSc(const PETScVector& v, const std::string& fieldName);
 
+    /**
+ * @brief Sequential Gaussian Simulation (SGS) with exponential covariance.
+ *
+ * - Marginal: standard normal (mean 0, var 1).
+ * - Covariance: C(dx,dy) = exp(-|dx|/lx - |dy|/ly)   (separable exponential).
+ * - Path: random permutation of all cells (first seed point is random).
+ * - Each new node is conditioned on up to @p nneigh *already simulated* nearest
+ *   neighbors using simple kriging (known mean = 0).
+ *
+ * @param name      Field name to create/overwrite (size = nx*ny).
+ * @param lx, ly    Correlation lengths (physical units; >0).
+ * @param nneigh    Max # of nearest neighbors to use (e.g. 8, 12, 16).
+ * @param seed      RNG seed (used for path & Gaussian draws).
+ * @param nugget    Small diagonal added to the kriging system for numerical stability.
+ * @param max_ring  (optional) cap on neighbor search ring radius in *cells*;
+ *                  if <=0, it expands until enough neighbors or domain boundary.
+ *
+ * Notes:
+ * - Uses GSL for N(0,1) draws; uses Matrix_Arma / Vector_Arma for solves.
+ * - For very large grids, keep nneigh modest; complexity is roughly O(N * nneigh^3)
+ *   for the kriging solves, with cheap neighbor search per node.
+ */
+    void makeGaussianFieldSGS(const std::string& name,
+                              double lx, double ly,
+                              int nneigh,
+                              unsigned seed = 0,
+                              double nugget = 1e-10,
+                              int max_ring = 0);
+
+    // How the named array is laid out on the grid
+    enum class ArrayKind { Cell, Fx, Fy };
+
+    /**
+   * @brief Write a named array (cell field or flux) as a dense matrix file.
+   *
+   * For Cell:  rows = ny,     cols = nx.
+   * For Fx:    rows = ny,     cols = nx-1   (vertical faces).
+   * For Fy:    rows = ny-1,   cols = nx     (horizontal faces).
+   *
+   * @param name            Field/flux name.
+   * @param kind            Layout kind (Cell, Fx, Fy).
+   * @param filename        Output file path.
+   * @param delimiter       Column separator (default ',').
+   * @param precision       FP precision (default 8, scientific).
+   * @param include_header  Prepend a one-line header with grid info.
+   * @param flipY           If true, write j = ny-1 .. 0 (top→bottom).
+   *
+   * Throws std::runtime_error on missing name or size mismatch.
+   */
+    void writeNamedMatrix(const std::string& name, ArrayKind kind,
+                          const std::string& filename,
+                          char delimiter = ',',
+                          int precision = 8,
+                          bool include_header = true,
+                          bool flipY = false) const;
+
+    /**
+   * @brief Same as writeNamedMatrix, but auto-detects kind:
+   *        - if name in fields_  → Cell
+   *        - else if name in fluxes_ and size==FxSize() → Fx
+   *        - else if name in fluxes_ and size==FySize() → Fy
+   *        - otherwise throws.
+   */
+    void writeNamedMatrixAuto(const std::string& name,
+                              const std::string& filename,
+                              char delimiter = ',',
+                              int precision = 8,
+                              bool include_header = true,
+                              bool flipY = false) const;
+
+    // Convenience (kept for compatibility): write a cell field explicitly.
+    void writeFieldMatrix(const std::string& fieldName,
+                          const std::string& filename,
+                          char delimiter = ',',
+                          int precision = 8,
+                          bool include_header = true,
+                          bool flipY = false) const {
+        writeNamedMatrix(fieldName, ArrayKind::Cell, filename, delimiter, precision, include_header, flipY);
+    }
+
+
 private:
     int nx_, ny_;
     double Lx_, Ly_, dx_, dy_;
@@ -190,6 +279,23 @@ private:
     // Registry of cell-centered scalar fields by name
     std::unordered_map<std::string, std::vector<double>> fields_;
 
-    // Face-centered flux arrays (optional; allocate when needed)
-    std::vector<double> Fx_, Fy_;
+    // fluxes (can be per-cell, per-face, or per-interface depending on convention)
+    std::unordered_map<std::string, std::vector<double>> fluxes_;
+
+    // generic writer
+    void writeMatrixRaw(const std::vector<double>& data,
+                        int rows, int cols,
+                        const std::string& name,
+                        const std::string& filename,
+                        char delimiter,
+                        int precision,
+                        bool include_header,
+                        bool flipY) const;
 };
+
+
+// separable exponential covariance with unit variance (sill = 1)
+static inline double cov_exp_sep(double dx, double dy, double lx, double ly);
+
+// metric consistent with the covariance for nearest-neighbor sorting
+static inline double metric_sep(double dx, double dy, double lx, double ly);

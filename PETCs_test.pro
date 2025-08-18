@@ -4,6 +4,10 @@ CONFIG -= app_bundle
 CONFIG -= qt
 
 SOURCES += main.cpp \
+    Matrix.cpp \
+    Matrix_arma.cpp \
+    Vector.cpp \
+    Vector_arma.cpp \
     grid.cpp \
     petscmatrix.cpp \
     petscsolver.cpp \
@@ -33,8 +37,19 @@ QMAKE_LFLAGS += -Wl,-rpath,$$PETSC_DIR/$$PETSC_ARCH/lib
 QMAKE_CXXFLAGS += -Wall -Wextra -Wpedantic
 
 HEADERS += \
+    Matrix.h \
+    Matrix_arma.h \
+    TimeSeries.h \
+    TimeSeries.hpp \
+    TimeSeriesSet.h \
+    TimeSeriesSet.hpp \
+    Vector.h \
+    Vector_arma.h \
     grid.h \
     petsc_init.h \
     petscmatrix.h \
     petscsolver.h \
     petscvector.h
+
+DEFINES += ARMA_USE_LAPACK ARMA_USE_BLAS
+LIBS += -larmadillo -llapack -lblas -lgsl
