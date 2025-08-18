@@ -3,7 +3,11 @@ CONFIG += c++17 core gui
 CONFIG -= app_bundle
 CONFIG -= qt
 
-SOURCES += main.cpp
+SOURCES += main.cpp \
+    grid.cpp \
+    petscmatrix.cpp \
+    petscsolver.cpp \
+    petscvector.cpp
 
 # Use the MPI wrapper for both compile and link steps
 QMAKE_CXX = mpicxx
@@ -27,3 +31,10 @@ QMAKE_LFLAGS += -Wl,-rpath,$$PETSC_DIR/$$PETSC_ARCH/lib
 
 # (Optional) warnings
 QMAKE_CXXFLAGS += -Wall -Wextra -Wpedantic
+
+HEADERS += \
+    grid.h \
+    petsc_init.h \
+    petscmatrix.h \
+    petscsolver.h \
+    petscvector.h
