@@ -10,6 +10,14 @@
 #include <fstream>
 #include <iomanip>
 
+#ifdef GRID_USE_VTK
+#include <vtkSmartPointer.h>
+#include <vtkImageData.h>
+#include <vtkDoubleArray.h>
+#include <vtkCellData.h>
+#include <vtkXMLImageDataWriter.h>
+#endif
+
 // If you want PETSc interop, include your wrappers here:
 #include "petscvector.h" // adjust include path to your project
 
@@ -113,7 +121,7 @@ static inline double cov_exp_sep(double dx, double dy, double lx, double ly) {
     const double eps = 1e-15;
     lx = (lx > eps ? lx : eps);
     ly = (ly > eps ? ly : eps);
-    return std::exp(-std::abs(dx)/lx - std::abs(dy)/ly);
+    return std::exp(-std::sqrt(std::pow(dx,2)/pow(lx,2) + std::pow(dy,2)/pow(ly,2)));
 }
 
 // metric consistent with the covariance for nearest-neighbor sorting
@@ -121,198 +129,140 @@ static inline double metric_sep(double dx, double dy, double lx, double ly) {
     const double eps = 1e-15;
     lx = (lx > eps ? lx : eps);
     ly = (ly > eps ? ly : eps);
-    return std::abs(dx)/lx + std::abs(dy)/ly;
+    return std::pow(dx,2)/pow(lx,2) + std::pow(dy,2)/pow(ly,2);
 }
+
+#include "grid.h"
+#include <armadillo>
+#include <gsl/gsl_rng.h>
+#include <gsl/gsl_randist.h>
+#include <algorithm>
+#include <random>
+#include <chrono>
+
+// ---- helper already provided earlier (member) ----
+// Grid2D::NeighborSet Grid2D::gatherNeighbors(...)
+// (Use the version from my previous message; it enforces "same-row if exists".)
 
 void Grid2D::makeGaussianFieldSGS(const std::string& name,
                                   double lx, double ly,
                                   int nneigh,
-                                  unsigned seed,
+                                  unsigned long seed,
                                   double nugget,
-                                  int max_ring)
+                                  int max_ring,
+                                  double tol_var0)
 {
-    assert(lx > 0.0 && ly > 0.0);
-    assert(nneigh >= 0);
-    const std::size_t N = numCells();
+    // --- guards ---
+    if (nx_ <= 0 || ny_ <= 0) throw std::runtime_error("SGS: empty grid");
+    if (nneigh < 0) nneigh = 0;
+    if (lx <= 0.0 || ly <= 0.0) throw std::runtime_error("SGS: lx,ly must be > 0");
 
-    // Allocate/clear field
-    auto &F = fields_[name];
-    F.assign(N, 0.0);
+    // --- ensure field storage ---
+    auto& F = fields_[name];
+    F.assign(static_cast<std::size_t>(nx_)*ny_, 0.0);
 
-    // Flags: has this node been simulated yet?
-    std::vector<unsigned char> known(N, 0);
+    // --- known bitmap ---
+    std::vector<unsigned char> known(F.size(), 0);
 
-    // Coordinates lambdas
-    auto I = [&](int i,int j) -> std::size_t { return static_cast<std::size_t>(j)*nx_ + i; };
-    auto ij = [&](std::size_t idx, int &i, int &j) {
-        i = static_cast<int>(idx % nx_);
-        j = static_cast<int>(idx / nx_);
+    // --- RNGs ---
+    gsl_rng* grng = gsl_rng_alloc(gsl_rng_mt19937);
+    gsl_rng_set(grng, seed ? seed : 12345UL);
+
+    std::mt19937_64 path_rng(seed ? seed ^ 0x9e3779b97f4a7c15ULL : 0xC001D00D);
+    std::uniform_int_distribution<int> Ui(0, nx_ - 1), Uj(0, ny_ - 1);
+
+    // --- index helpers / coordinates ---
+    auto I  = [&](int i,int j)->std::size_t { return static_cast<std::size_t>(j)*nx_ + i; };
+    auto xy = [&](int i,int j,double& x,double& y){ cellCenter(i,j,x,y); };
+
+    // covariance (anisotropic exponential, Euclidean metric)
+    auto cov_exp_sep = [&](double dx, double dy)->double {
+        const double rx = dx / lx;
+        const double ry = dy / ly;
+        const double r  = std::sqrt(rx*rx + ry*ry);
+        return std::exp(-r);
     };
-    auto xy = [&](int i,int j, double &x, double &y) {
-        x = (i+0.5) * dx_; y = (j+0.5) * dy_;
-    };
 
-    // Random visiting order (path)
-    std::vector<std::size_t> order(N);
-    for (std::size_t k=0; k<N; ++k) order[k] = k;
-    std::mt19937_64 path_rng(seed ^ 0xA57B'cafe'1234ULL);
+    // --- simulation path: random permutation of all cells ---
+    std::vector<std::size_t> order(F.size());
+    std::iota(order.begin(), order.end(), 0);
     std::shuffle(order.begin(), order.end(), path_rng);
 
-    // GSL RNG for normals
-    gsl_rng_env_setup();
-    gsl_rng *grng = gsl_rng_alloc(gsl_rng_mt19937);
-    gsl_rng_set(grng, seed);
-
-    // Seed point: first in random order — unconditional standard normal
+    // --- seed the first site with N(0,1) ---
     {
-        const std::size_t s = order[0];
-        F[s] = gsl_ran_gaussian(grng, 1.0);  // mean 0, std 1
-        known[s] = 1;
+        std::size_t s0 = order[0];
+        F[s0] = gsl_ran_gaussian(grng, 1.0);
+        known[s0] = 1;
     }
 
-    // Neighbor search: expand square "rings" around target until we collect >= nneigh
-    auto gather_neighbors = [&](int it, int jt,
-                                std::vector<std::size_t>& nidx,
-                                std::vector<double>&      ndist)
-    {
-        nidx.clear(); ndist.clear();
-        if (nneigh == 0) return;
+    // --- iterate remaining sites ---
+    for (std::size_t t = 1; t < order.size(); ++t) {
+        const std::size_t s   = order[t];
+        const int it = static_cast<int>(s % nx_);
+        const int jt = static_cast<int>(s / nx_);
 
-        // optional cap on expansion
-        const int ring_cap = (max_ring > 0 ? max_ring : std::max(nx_, ny_));
-        int r = 1;
+        // gather neighbors (determined cells) near (it,jt)
+        NeighborSet nbrs = gatherNeighbors(it, jt, nneigh, lx, ly, max_ring, known, /*ensure_same_row=*/true);
+        const int m = static_cast<int>(nbrs.idx.size());
+
         double xt, yt; xy(it, jt, xt, yt);
 
-        while ((int)nidx.size() < nneigh && r <= ring_cap) {
-            const int i0 = std::max(0, it - r), i1 = std::min(nx_-1, it + r);
-            const int j0 = std::max(0, jt - r), j1 = std::min(ny_-1, jt + r);
+        double mu = 0.0, sigma2 = 1.0;
 
-            // top edge (j=j0), left->right
-            for (int i=i0; i<=i1; ++i) {
-                const int j=j0;
-                const std::size_t s = I(i,j);
-                if (!known[s]) continue;
-                double x,y; xy(i,j,x,y);
-                nidx.push_back(s);
-                ndist.push_back(metric_sep(x-xt,y-yt,lx,ly));
-            }
-            // bottom edge (j=j1), left->right (skip if same as top)
-            if (j1 != j0) {
-                for (int i=i0; i<=i1; ++i) {
-                    const int j=j1;
-                    const std::size_t s = I(i,j);
-                    if (!known[s]) continue;
-                    double x,y; xy(i,j,x,y);
-                    nidx.push_back(s);
-                    ndist.push_back(metric_sep(x-xt,y-yt,lx,ly));
-                }
-            }
-            // left edge (i=i0), interior vertical (skip corners already added)
-            for (int j=j0+1; j<=j1-1; ++j) {
-                const int i=i0;
-                const std::size_t s = I(i,j);
-                if (!known[s]) continue;
-                double x,y; xy(i,j,x,y);
-                nidx.push_back(s);
-                ndist.push_back(metric_sep(x-xt,y-yt,lx,ly));
-            }
-            // right edge (i=i1), interior vertical (skip corners)
-            if (i1 != i0) {
-                for (int j=j0+1; j<=j1-1; ++j) {
-                    const int i=i1;
-                    const std::size_t s = I(i,j);
-                    if (!known[s]) continue;
-                    double x,y; xy(i,j,x,y);
-                    nidx.push_back(s);
-                    ndist.push_back(metric_sep(x-xt,y-yt,lx,ly));
-                }
-            }
-
-            // If we already have a lot, we can break
-            if ((int)nidx.size() >= nneigh) break;
-            ++r;
-        }
-
-        // Keep the closest nneigh (by metric consistent with covariance)
-        if ((int)nidx.size() > nneigh) {
-            std::vector<std::size_t> perm(nidx.size());
-            for (std::size_t k=0;k<perm.size();++k) perm[k]=k;
-            std::nth_element(perm.begin(), perm.begin()+nneigh, perm.end(),
-                             [&](std::size_t a, std::size_t b){ return ndist[a] < ndist[b]; });
-            std::vector<std::size_t> nidx2; nidx2.reserve(nneigh);
-            std::vector<double>      ndist2; ndist2.reserve(nneigh);
-            for (int k=0; k<nneigh; ++k) { nidx2.push_back(nidx[perm[k]]); ndist2.push_back(ndist[perm[k]]); }
-            nidx.swap(nidx2); ndist.swap(ndist2);
-        }
-    };
-
-    // Main SGS loop
-    for (std::size_t t = 1; t < N; ++t) {
-        const std::size_t s = order[t];
-        if (known[s]) continue; // paranoia
-
-        int it,jt; ij(s, it, jt);
-        double xt, yt; xy(it, jt, xt, yt);
-
-        // Collect nearest conditioned neighbors (up to nneigh)
-        std::vector<std::size_t> nidx;
-        std::vector<double> ndist;
-        gather_neighbors(it, jt, nidx, ndist);
-        const int m = static_cast<int>(nidx.size());
-
-        double sample = 0.0;
-
-        if (m == 0 || nneigh == 0) {
-            // Unconditional if nothing to condition on yet
-            sample = gsl_ran_gaussian(grng, 1.0);
+        if (m == 0) {
+            // No conditioning points yet (should only happen very early)
+            mu = 0.0; sigma2 = 1.0;
         } else {
-            // Build kriging system: K w = k
+            // Build K (m×m), k (m), z (m)
             CMatrix_arma K(m, m);
             CVector_arma k(m);
             CVector_arma z(m);
 
-            // Fill K (cov among neighbors), with nugget on diag
-            for (int a=0; a<m; ++a) {
-                int ia, ja; ij(nidx[a], ia, ja);
+            for (int a = 0; a < m; ++a) {
+                const std::size_t sa = nbrs.idx[a];
+                const int ia = static_cast<int>(sa % nx_), ja = static_cast<int>(sa / nx_);
                 double xa, ya; xy(ia, ja, xa, ya);
-                z(a) = F[nidx[a]];
-                for (int b=0; b<m; ++b) {
-                    int ib, jb; ij(nidx[b], ib, jb);
+
+                z(a) = F[sa];
+                k(a) = cov_exp_sep(xa - xt, ya - yt);
+
+                for (int b = 0; b < m; ++b) {
+                    const std::size_t sb = nbrs.idx[b];
+                    const int ib = static_cast<int>(sb % nx_), jb = static_cast<int>(sb / nx_);
                     double xb, yb; xy(ib, jb, xb, yb);
-                    const double cab = cov_exp_sep(xa-xb, ya-yb, lx, ly);
-                    K(a,b) = (a==b) ? (cab + nugget) : cab;
+                    K(a,b) = cov_exp_sep(xa - xb, ya - yb);
                 }
-                // Fill k (cov to target)
-                k(a) = cov_exp_sep(xa-xt, ya-yt, lx, ly);
             }
 
-            // Solve K w = k (SPD-ish); fall back to regular solve if Cholesky fails
-            CVector_arma w;
-            bool ok = false;
-            try {
-                // Prefer Cholesky for speed/stability
-                arma::mat cholU;
-                if (arma::chol(cholU, K)) {
-                    // solve via two triangular systems: K = U^T U
-                    w = arma::solve(arma::trimatu(cholU), arma::solve(arma::trimatl(cholU.t()), k));
-                    ok = true;
-                }
-            } catch (...) { /* ignore */ }
+            if (nugget > 0.0) {
+                for (int a = 0; a < m; ++a) K(a,a) += nugget;
+            }
 
+            // Solve K w = k   (avoid forming K^{-1})
+            arma::vec w;
+            bool ok = arma::solve(w, K, k, arma::solve_opts::fast + arma::solve_opts::likely_sympd);
             if (!ok) {
-                // Fallback (should rarely happen with nugget)
-                w = arma::solve(K, k, arma::solve_opts::fast + arma::solve_opts::likely_sympd);
+                // small fallback jitter if needed
+                arma::mat K2 = K;
+                for (int a = 0; a < m; ++a) K2(a,a) += (nugget > 0.0 ? nugget : 1e-12);
+                ok = arma::solve(w, K2, k, arma::solve_opts::fast + arma::solve_opts::likely_sympd);
+                if (!ok) throw std::runtime_error("SGS: solve failed (K nearly singular)");
             }
 
-            const double mu     = dotproduct(w, z);                 // kriging mean
-            const double kKw    = dotproduct(k, w);
-            double sigma2       = std::max(1e-14, 1.0 - kKw);      // kriging variance (unit sill)
-            const double sigma  = std::sqrt(sigma2);
-            const double epsN01 = gsl_ran_gaussian(grng, 1.0);
-            sample = mu + sigma * epsN01;
+            mu     = dotproduct(w, z);
+            sigma2 = std::max(0.0, 1.0 - dotproduct(k, w));  // C(0)=1 for standardized field
         }
 
-        F[s]     = sample;
+        // Draw (or clamp)
+        double val;
+        if (sigma2 < tol_var0) {
+            val = mu;  // deterministic if variance is (near) zero
+        } else {
+            const double stddev = std::sqrt(sigma2);
+            val = mu + stddev * gsl_ran_gaussian(grng, 1.0);
+        }
+
+        F[s] = val;
         known[s] = 1;
     }
 
@@ -439,3 +389,218 @@ void Grid2D::writeMatrixRaw(const std::vector<double>& data,
     if (!ofs) throw std::runtime_error("writeMatrixRaw: write failed for '" + filename + "'");
 }
 
+#ifdef GRID_USE_VTK
+
+static void FillVTKCellArray(vtkDoubleArray* arr,
+                             const std::vector<double>& data,
+                             int cx, int cy, bool flipY)
+{
+    arr->SetNumberOfComponents(1);
+    vtkIdType nT = static_cast<vtkIdType>(cx) * static_cast<vtkIdType>(cy);
+    arr->SetNumberOfTuples(nT);
+
+    vtkIdType id = 0;
+    if (!flipY) {
+        for (int j = 0; j < cy; ++j) {
+            const std::size_t off = static_cast<std::size_t>(j) * cx;
+            for (int i = 0; i < cx; ++i, ++id)
+                arr->SetValue(id, data[off + i]);
+        }
+    } else {
+        for (int j = cy - 1; j >= 0; --j) {
+            const std::size_t off = static_cast<std::size_t>(j) * cx;
+            for (int i = 0; i < cx; ++i, ++id)
+                arr->SetValue(id, data[off + i]);
+        }
+    }
+}
+
+void Grid2D::writeNamedVTI(const std::string& name,
+                           ArrayKind kind,
+                           const std::string& filename,
+                           const std::string& arrayName,
+                           bool flipY) const
+{
+    // Select source and cell grid size
+    const std::vector<double>* src = nullptr;
+    int cellsX = 0, cellsY = 0;
+
+    switch (kind) {
+    case ArrayKind::Cell: {
+        auto it = fields_.find(name);
+        if (it == fields_.end()) throw std::runtime_error("Field not found: " + name);
+        src = &it->second;
+        cellsX = nx_; cellsY = ny_;
+        if (src->size() != static_cast<std::size_t>(cellsX * cellsY))
+            throw std::runtime_error("Field size mismatch for " + name);
+    } break;
+
+    case ArrayKind::Fx: {
+        auto it = fluxes_.find(name);
+        if (it == fluxes_.end()) throw std::runtime_error("Flux not found: " + name);
+        src = &it->second;
+        cellsX = nx_ + 1; cellsY = ny_;
+        if (src->size() != static_cast<std::size_t>(cellsX * cellsY))
+            throw std::runtime_error("Fx size mismatch for " + name);
+    } break;
+
+    case ArrayKind::Fy: {
+        auto it = fluxes_.find(name);
+        if (it == fluxes_.end()) throw std::runtime_error("Flux not found: " + name);
+        src = &it->second;
+        cellsX = nx_; cellsY = ny_ + 1;
+        if (src->size() != static_cast<std::size_t>(cellsX * cellsY))
+            throw std::runtime_error("Fy size mismatch for " + name);
+    } break;
+    }
+
+    // Points = cells + 1 (inclusive extents in POINT indices)
+    const int ptsX = cellsX + 1;
+    const int ptsY = cellsY + 1;
+
+    auto img = vtkSmartPointer<vtkImageData>::New();
+    img->SetOrigin(0.0, 0.0, 0.0);
+    img->SetSpacing(dx_, dy_, 1.0);
+    // Extent is inclusive in POINTS: to get ptsX points, use 0..ptsX-1
+    img->SetExtent(0, ptsX - 1, 0, ptsY - 1, 0, 0);
+
+    auto arr = vtkSmartPointer<vtkDoubleArray>::New();
+    arr->SetName(arrayName.empty() ? name.c_str() : arrayName.c_str());
+    FillVTKCellArray(arr, *src, cellsX, cellsY, flipY);
+    img->GetCellData()->SetScalars(arr);
+
+    auto w = vtkSmartPointer<vtkXMLImageDataWriter>::New();
+    w->SetFileName(filename.c_str());
+    w->SetInputData(img);
+    // Force ASCII to avoid any binary/appended encoding issues:
+    w->SetDataModeToAscii();
+    // (Optional) w->EncodeAppendedDataOff(); // not used in ASCII mode
+    if (w->Write() == 0) {
+        throw std::runtime_error("VTK failed to write: " + filename);
+    }
+}
+
+void Grid2D::writeNamedVTI_Auto(const std::string& name,
+                                const std::string& filename,
+                                const std::string& arrayName,
+                                bool flipY) const
+{
+    auto itF = fields_.find(name);
+    if (itF != fields_.end()) {
+        if (itF->second.size() != static_cast<std::size_t>(nx_ * ny_))
+            throw std::runtime_error("Field size mismatch for " + name);
+        writeNamedVTI(name, ArrayKind::Cell, filename, arrayName, flipY);
+        return;
+    }
+    auto itX = fluxes_.find(name);
+    if (itX != fluxes_.end()) {
+        const auto sz = itX->second.size();
+        if (sz == FxSize()) { writeNamedVTI(name, ArrayKind::Fx, filename, arrayName, flipY); return; }
+        if (sz == FySize()) { writeNamedVTI(name, ArrayKind::Fy, filename, arrayName, flipY); return; }
+        throw std::runtime_error("Flux '"+name+"' has unexpected size");
+    }
+    throw std::runtime_error("Name '"+name+"' not found in fields or fluxes");
+}
+#endif // GRID_USE_VTK
+
+
+Grid2D::NeighborSet Grid2D::gatherNeighbors(int it, int jt,
+                                            int nneigh,
+                                            double lx, double ly,
+                                            int max_ring,
+                                            const std::vector<unsigned char>& known,
+                                            bool ensure_same_row) const
+{
+    NeighborSet out;
+    if (nneigh <= 0) return out;
+
+    // metric consistent with your covariance (monotone in sqrt'd version)
+    auto metric_sep = [&](double dx, double dy) -> double {
+        const double eps = 1e-15;
+        lx = (lx > eps ? lx : eps);
+        ly = (ly > eps ? ly : eps);
+        return (dx*dx)/(lx*lx) + (dy*dy)/(ly*ly);
+    };
+
+    // helpers
+    auto I  = [&](int i,int j) -> std::size_t { return static_cast<std::size_t>(j)*nx_ + i; };
+    auto xy = [&](int i,int j, double& x,double& y){ cellCenter(i,j,x,y); };
+
+    const int ring_cap = (max_ring > 0 ? max_ring : std::max(nx_, ny_));
+
+    double xt, yt; xy(it, jt, xt, yt);
+
+    std::vector<std::size_t> cand;
+    cand.reserve(std::min(nneigh*4, nx_*ny_)); // heuristic
+
+    auto push_if_known = [&](int ii, int jj) {
+        const std::size_t s = I(ii, jj);
+        if (known[s]) cand.push_back(s);
+    };
+
+    // Does the target row contain any known cells at all?
+    auto row_has_known = [&]()->bool{
+        for (int ii = 0; ii < nx_; ++ii) if (known[I(ii,jt)]) return true;
+        return false;
+    }();
+
+    auto has_same_row_in = [&](const std::vector<std::size_t>& v)->bool{
+        for (auto s : v) { int ii = s % nx_, jj = s / nx_; if (jj == jt) return true; }
+        return false;
+    };
+
+    // Expand rings; do NOT break merely on count—also ensure same-row presence if required
+    for (int r = 1; r <= ring_cap; ++r) {
+        const int i0 = std::max(0, it - r), i1 = std::min(nx_-1, it + r);
+        const int j0 = std::max(0, jt - r), j1 = std::min(ny_-1, jt + r);
+
+        // top and bottom edges
+        for (int i=i0; i<=i1; ++i) push_if_known(i, j0);
+        if (j1 != j0) for (int i=i0; i<=i1; ++i) push_if_known(i, j1);
+
+        // left and right edges (interior only)
+        for (int j=j0+1; j<=j1-1; ++j) push_if_known(i0, j);
+        if (i1 != i0) for (int j=j0+1; j<=j1-1; ++j) push_if_known(i1, j);
+
+        // stop once we have enough AND (if needed) a same-row candidate
+        if ((int)cand.size() >= nneigh) {
+            if (!ensure_same_row || !row_has_known || has_same_row_in(cand))
+                break;
+        }
+    }
+
+    // De-duplicate (ring expansion won’t normally dup within a ring, but safe)
+    std::sort(cand.begin(), cand.end());
+    cand.erase(std::unique(cand.begin(), cand.end()), cand.end());
+
+    if (cand.empty()) return out;
+
+    // Compute distances once
+    std::vector<double> dist(cand.size());
+    for (std::size_t k=0; k<cand.size(); ++k) {
+        int ii = cand[k] % nx_, jj = cand[k] / nx_;
+        double x,y; xy(ii,jj,x,y);
+        dist[k] = metric_sep(x - xt, y - yt);
+    }
+
+    // Keep true top-n by metric (partial select over an index indirection)
+    if ((int)cand.size() > nneigh) {
+        std::vector<std::size_t> idx(cand.size());
+        std::iota(idx.begin(), idx.end(), 0);
+        auto cmp = [&](std::size_t a, std::size_t b){ return dist[a] < dist[b]; };
+        std::nth_element(idx.begin(), idx.begin()+nneigh, idx.end(), cmp);
+
+        NeighborSet sel;
+        sel.idx.reserve(nneigh);
+        sel.dist.reserve(nneigh);
+        for (int k=0; k<nneigh; ++k) {
+            sel.idx.push_back(cand[idx[k]]);
+            sel.dist.push_back(dist[idx[k]]);
+        }
+        return sel;
+    } else {
+        out.idx = std::move(cand);
+        out.dist = std::move(dist);
+        return out;
+    }
+}

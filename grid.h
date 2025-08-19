@@ -191,6 +191,14 @@ public:
     /// Unpack a PETScVector back into a named cell field.
     void unpackFieldFromPETSc(const PETScVector& v, const std::string& fieldName);
 
+    // grid.h  (inside class Grid2D)
+public:
+    struct NeighborSet {
+        std::vector<std::size_t> idx;   // global linear cell indices (j*nx_ + i)
+        std::vector<double>      dist;  // anisotropic metric distance to target (same order as idx)
+    };
+
+
     /**
  * @brief Sequential Gaussian Simulation (SGS) with exponential covariance.
  *
@@ -216,9 +224,10 @@ public:
     void makeGaussianFieldSGS(const std::string& name,
                               double lx, double ly,
                               int nneigh,
-                              unsigned seed = 0,
-                              double nugget = 1e-10,
-                              int max_ring = 0);
+                              unsigned long seed = 12345UL,
+                              double nugget = 0.0,
+                              int max_ring = 0,
+                              double tol_var0 = 1e-12);
 
     // How the named array is laid out on the grid
     enum class ArrayKind { Cell, Fx, Fy };
@@ -271,6 +280,34 @@ public:
         writeNamedMatrix(fieldName, ArrayKind::Cell, filename, delimiter, precision, include_header, flipY);
     }
 
+#ifdef GRID_USE_VTK
+    /**
+ * @brief Write a named array (cell field or face flux) to a .vti file using VTK.
+ *
+ * ArrayKind::Cell → cells = (nx × ny)
+ * ArrayKind::Fx   → cells = ((nx+1) × ny)      // vertical faces
+ * ArrayKind::Fy   → cells = (nx × (ny+1))      // horizontal faces
+ *
+ * The data are written as CellData (one scalar per cell).
+ *
+ * @param name       Key in fields_ (Cell) or fluxes_ (Fx/Fy).
+ * @param kind       Layout of the named array.
+ * @param filename   Path to .vti file.
+ * @param arrayName  Optional name for the VTK array (defaults to 'name').
+ * @param flipY      If true, reverse Y row order when writing (visual preference).
+ */
+    void writeNamedVTI(const std::string& name,
+                       ArrayKind kind,
+                       const std::string& filename,
+                       const std::string& arrayName = "",
+                       bool flipY = false) const;
+
+    /** Convenience: auto-detect Cell / Fx / Fy from maps + sizes. */
+    void writeNamedVTI_Auto(const std::string& name,
+                            const std::string& filename,
+                            const std::string& arrayName = "",
+                            bool flipY = false) const;
+#endif // GRID_USE_VTK
 
 private:
     int nx_, ny_;
@@ -291,6 +328,31 @@ private:
                         int precision,
                         bool include_header,
                         bool flipY) const;
+
+    /**
+   * @brief Collect the n nearest *determined* neighbors of (it,jt) using ring expansion,
+   *        then select the true top-n by the anisotropic metric.
+   *
+   * The function keeps expanding rings until:
+   *  - we have at least `nneigh` candidates, and
+   *  - if the target row has any known cells, at least one **same-row** neighbor
+   *    is included in the candidate set (ensures correctness for lx >> Lx).
+   *
+   * @param it,jt       target cell indices
+   * @param nneigh      number of neighbors to return (<=0 returns empty)
+   * @param lx,ly       correlation lengths (for metric)
+   * @param max_ring    if >0, cap ring radius in cells; if 0, expand up to max(nx_,ny_)
+   * @param known       bitmap of which cells are already simulated (size nx_*ny_)
+   * @param ensure_same_row  if true, enforces presence of a same-row neighbor when one exists
+   * @return NeighborSet {idx, dist}, both sized <= nneigh
+   */
+    NeighborSet gatherNeighbors(int it, int jt,
+                                int nneigh,
+                                double lx, double ly,
+                                int max_ring,
+                                const std::vector<unsigned char>& known,
+                                bool ensure_same_row = true) const;
+
 };
 
 

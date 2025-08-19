@@ -15,11 +15,11 @@ static inline bool on_bc(PetscInt i, PetscInt j, PetscInt nx, PetscInt ny, doubl
 int main(int argc, char** argv) {
     PETScInit petsc(argc, argv);
 
-    Grid2D g(100,100,1,1);
+    Grid2D g(1000,1000,1,1);
 
-    g.makeGaussianFieldSGS("K_normal_score",0.2,0.2,10);
+    g.makeGaussianFieldSGS("K_normal_score",0.5,0.01,10);
     g.writeNamedMatrix("K_normal_score",Grid2D::ArrayKind::Cell, "K_normal_score.txt");
-
+    g.writeNamedVTI_Auto("K_normal_score","NormalScore.vti");
     // ----- Problem size & coefficients -----
     PetscInt  nx = 1000, ny = 1000;
     PetscReal Lx = 1.0,  Ly = 1.0;
