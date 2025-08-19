@@ -9,6 +9,8 @@
 #include "Vector_arma.h"
 #include <fstream>
 #include <iomanip>
+#include "petscmatrix.h"
+#include "petscvector.h"
 
 #ifdef GRID_USE_VTK
 #include <vtkSmartPointer.h>
@@ -603,4 +605,209 @@ Grid2D::NeighborSet Grid2D::gatherNeighbors(int it, int jt,
         out.dist = std::move(dist);
         return out;
     }
+}
+
+static inline double harm(double a, double b) {
+    // harmonic average, guarding zeros
+    if (a <= 0 && b <= 0) return 0.0;
+    if (a <= 0) return b;
+    if (b <= 0) return a;
+    return 2.0*a*b/(a+b);
+}
+
+
+void Grid2D::DarcySolve(double H_west, double H_east, const std::string &kx_field, const std::string &ky_field, const char* ksp_prefix)
+{
+    if (!hasField(kx_field) || !hasField(ky_field))
+        throw std::runtime_error("DarcySolve: missing Kx and/or Ky fields");
+    const auto& Kx = field(kx_field);  // size nx*ny
+    const auto& Ky = field(ky_field);  // size nx*ny
+
+    const int NX = nx(), NY = ny();
+    const double DX = dx(), DY = dy();
+
+    // FV transmissibility scalings on rectangles:
+    //   T_x(face) = Kx_face * (DY/DX)
+    //   T_y(face) = Ky_face * (DX/DY)
+    const double sx = DY / DX;
+    const double sy = DX / DY;
+
+    auto I = [&](int i,int j)->PetscInt { return static_cast<PetscInt>(j*NX + i); };
+    auto kx_at = [&](int i,int j)->double { return Kx[static_cast<std::size_t>(j)*NX + i]; };
+    auto ky_at = [&](int i,int j)->double { return Ky[static_cast<std::size_t>(j)*NX + i]; };
+
+    const PetscInt N = static_cast<PetscInt>(NX*NY);
+    PETScMatrix A(N, N, /*nzPerRow=*/5);
+    PETScVector b(N); b.set(0.0);
+
+    PetscInt Istart=0, Iend=0;
+    A.ownershipRange(Istart, Iend);
+
+    for (PetscInt Irow = Istart; Irow < Iend; ++Irow) {
+        const int j = static_cast<int>(Irow / NX);
+        const int i = static_cast<int>(Irow - j*NX);
+
+        double diag = 0.0;
+        double rhs  = 0.0;
+
+        // ---- X faces ----
+        if (i == 0) {
+            // West boundary: Dirichlet at x=0 -> half-cell face to boundary.
+            // Transmissibility from cell center to boundary:
+            //   T_W^D = Kx(i,j) * DY / (DX/2) = 2*Kx(i,j)*(DY/DX) = 2*Kx*sx
+            const double TWD = 2.0 * kx_at(i,j) * sx;
+            diag += TWD * 1.0;                 // contributes 1*TWD on the diagonal twice (see below)
+            rhs  += TWD * H_west * 1.0;        // RHS gets 1*TWD*H_west twice
+            // NOTE: using “twice” is equivalent to (2*T_W^D)*H_west and (2*T_W^D) on diag.
+            // We’ll add the second contribution right after to keep the pattern clear:
+            diag += TWD;
+            rhs  += TWD * H_west;
+
+            // East interior face
+            const int iE = i+1;
+            const double kxE = harm(kx_at(i,j), kx_at(iE,j));
+            const double TE  = kxE * sx;
+            diag += TE;
+            const PetscInt colE = I(iE,j);
+            A.setValue(Irow, colE, -TE, ADD_VALUES);
+
+        } else if (i == NX-1) {
+            // East boundary: Dirichlet at x=DX -> half-cell face
+            const double TED = 2.0 * kx_at(i,j) * sx;
+            diag += TED;
+            rhs  += TED * H_east;
+            diag += TED;
+            rhs  += TED * H_east;
+
+            // West interior face
+            const int iW = i-1;
+            const double kxW = harm(kx_at(i,j), kx_at(iW,j));
+            const double TW  = kxW * sx;
+            diag += TW;
+            const PetscInt colW = I(iW,j);
+            A.setValue(Irow, colW, -TW, ADD_VALUES);
+
+
+        } else {
+            // Interior in x: both west and east faces exist
+            const int iW = i-1, iE = i+1;
+            const double kxW = harm(kx_at(i,j), kx_at(iW,j));
+            const double kxE = harm(kx_at(i,j), kx_at(iE,j));
+            const double TW  = kxW * sx;
+            const double TE  = kxE * sx;
+
+            diag += TW + TE;
+
+            const PetscInt cols[2] = { I(iW,j), I(iE,j) };
+            const PetscScalar vals[2] = { -TW, -TE };
+            A.setValues(1, &Irow, 2, cols, vals, ADD_VALUES);
+        }
+
+        // ---- Y faces (no-flux top/bottom => omit exterior faces) ----
+        if (j > 0) {
+            const int jS = j-1;
+            const double kyS = harm(ky_at(i,j), ky_at(i,jS));
+            const double TS  = kyS * sy;
+            diag += TS;
+            const PetscInt colS = I(i,jS);
+            A.setValue(Irow, colS, -TS, ADD_VALUES);
+
+
+        }
+        if (j < NY-1) {
+            const int jN = j+1;
+            const double kyN = harm(ky_at(i,j), ky_at(i,jN));
+            const double TN  = kyN * sy;
+            diag += TN;
+            const PetscInt colN = I(i,jN);
+            A.setValue(Irow, colN, -TN, ADD_VALUES);
+
+        }
+
+        // finalize diagonal & RHS for this row
+        A.setValue(Irow, Irow, diag, ADD_VALUES);
+        if (rhs != 0.0)
+            b.setValue(Irow, rhs, ADD_VALUES);
+    }
+
+    A.assemble();
+    b.assemble();
+
+    PetscCallAbort(PETSC_COMM_WORLD, MatSetOption(A.raw(), MAT_SPD, PETSC_TRUE));
+    PetscCallAbort(PETSC_COMM_WORLD, MatSetOption(A.raw(), MAT_SYMMETRIC, PETSC_TRUE));
+    PetscCallAbort(PETSC_COMM_WORLD, MatSetOption(A.raw(), MAT_SYMMETRY_ETERNAL, PETSC_TRUE));
+
+    PETScVector h = (ksp_prefix ? A.solveNew(b, ksp_prefix) : (A / b));
+
+    // --- store head field ---
+    auto& HEAD = field("head");
+    HEAD.assign(static_cast<std::size_t>(NX)*NY, 0.0);
+    {
+        PetscInt Istart=0, Iend=0;
+        A.ownershipRange(Istart, Iend);
+        for (PetscInt Irow = Istart; Irow < Iend; ++Irow) {
+            PetscScalar v;
+            PetscCallAbort(PETSC_COMM_WORLD, VecGetValues(h.raw(), 1, &Irow, &v));
+            HEAD[static_cast<std::size_t>(Irow)] = static_cast<double>(v);
+        }
+    }
+
+    // --- compute fluxes (unchanged; consistent with BCs) ---
+    auto& QX = flux("qx"); QX.assign(FxSize(), 0.0);
+    auto& QY = flux("qy"); QY.assign(FySize(), 0.0);
+    auto head_at = [&](int i,int j)->double { return HEAD[static_cast<std::size_t>(j)*NX + i]; };
+
+    // vertical faces
+    for (int j=0; j<NY; ++j) {
+        // left boundary: one-sided gradient to Dirichlet
+        {
+            const int i = 0;
+            const double kface = kx_at(i,j);
+            const double grad  = (head_at(i,j) - H_west) / (0.5*DX);
+            QX[FxIndex(0, j)] = -kface * grad;
+        }
+        // interior faces
+        for (int i=1; i<=NX-1; ++i) {
+            const double kface = harm(kx_at(i-1,j), kx_at(i,j));
+            const double grad  = (head_at(i,j) - head_at(i-1,j)) / DX;
+            QX[FxIndex(i, j)] = -kface * grad;
+        }
+        // right boundary
+        {
+            const int i = NX-1;
+            const double kface = kx_at(i,j);
+            const double grad  = (H_east - head_at(i,j)) / (0.5*DX);
+            QX[FxIndex(NX, j)] = -kface * grad;
+        }
+    }
+    // horizontal faces (no-flux at bottom/top)
+    for (int i=0; i<NX; ++i) {
+        QY[FyIndex(i, 0)] = 0.0;
+        for (int j=1; j<=NY-1; ++j) {
+            const double kface = harm(ky_at(i,j-1), ky_at(i,j));
+            const double grad  = (head_at(i,j) - head_at(i,j-1)) / DY;
+            QY[FyIndex(i, j)] = -kface * grad;
+        }
+        QY[FyIndex(i, NY)] = 0.0;
+    }
+}
+
+void Grid2D::createExponentialField(const std::string& inputFieldName,
+                            double a, double b,
+                            const std::string& outputFieldName) {
+    auto it = fields_.find(inputFieldName);
+    if (it == fields_.end()) {
+        throw std::runtime_error("Input field not found: " + inputFieldName);
+    }
+
+    const std::vector<double>& input = it->second;
+    std::vector<double> output;
+    output.reserve(input.size());
+
+    for (double x : input) {
+        output.push_back(std::exp(a * x + b));
+    }
+
+    // Overwrite if the output field already exists
+    fields_[outputFieldName] = std::move(output);
 }

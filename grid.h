@@ -86,20 +86,23 @@ public:
     // Fy is stored on horizontal faces between (i,j-1) and (i,j), i in [0..nx-1], j in [1..ny-1]
     // index: FyIndex(i,j) with layout nx * (ny-1)
 
-    std::size_t FxSize() const { return static_cast<std::size_t>(nx_-1)*ny_; }
-    std::size_t FySize() const { return static_cast<std::size_t>(nx_)*(ny_-1); }
-
-    std::size_t FxIndex(int i, int j) const {
-        // valid i: 1..nx-1, j: 0..ny-1
-        assert(i>=1 && i<=nx_-1 && j>=0 && j<ny_);
-        return static_cast<std::size_t>(j)*(nx_-1) + (i-1);
+    // Vertical faces (qx): size = (nx_+1) * ny_
+    // Valid: i = 0..nx_, j = 0..ny_-1
+    inline std::size_t FxIndex(int i, int j) const {
+        assert(i >= 0 && i <= nx_ && j >= 0 && j < ny_);
+        return static_cast<std::size_t>(j) * (nx_ + 1) + static_cast<std::size_t>(i);
     }
 
-    std::size_t FyIndex(int i, int j) const {
-        // valid i: 0..nx-1, j: 1..ny-1
-        assert(i>=0 && i<nx_ && j>=1 && j<=ny_-1);
-        return static_cast<std::size_t>( (j-1)*nx_ + i );
+    // Horizontal faces (qy): size = nx_ * (ny_+1)
+    // Valid: i = 0..nx_-1, j = 0..ny_
+    inline std::size_t FyIndex(int i, int j) const {
+        assert(i >= 0 && i < nx_ && j >= 0 && j <= ny_);
+        return static_cast<std::size_t>(j) * nx_ + static_cast<std::size_t>(i);
     }
+
+    // And ensure these match:
+    inline std::size_t FxSize() const { return static_cast<std::size_t>(nx_ + 1) * ny_; }
+    inline std::size_t FySize() const { return static_cast<std::size_t>(nx_) * (ny_ + 1); }
 
     // --------- Field registry (cell-centered scalars) ---------
 
@@ -280,6 +283,12 @@ public:
         writeNamedMatrix(fieldName, ArrayKind::Cell, filename, delimiter, precision, include_header, flipY);
     }
 
+    void DarcySolve(double H_west, double H_east, const std::string &kx_field, const std::string &ky_field, const char* ksp_prefix = nullptr);
+
+
+    void createExponentialField(const std::string& inputFieldName,
+                                        double a, double b,
+                                        const std::string& outputFieldName);
 #ifdef GRID_USE_VTK
     /**
  * @brief Write a named array (cell field or face flux) to a .vti file using VTK.
@@ -355,6 +364,8 @@ private:
 
 };
 
+// harmonic mean
+static inline double harm(double a, double b);
 
 // separable exponential covariance with unit variance (sill = 1)
 static inline double cov_exp_sep(double dx, double dy, double lx, double ly);
