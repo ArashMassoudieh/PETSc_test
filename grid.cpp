@@ -811,3 +811,371 @@ void Grid2D::createExponentialField(const std::string& inputFieldName,
     // Overwrite if the output field already exists
     fields_[outputFieldName] = std::move(output);
 }
+
+double Grid2D::interpolate(const std::string& name, ArrayKind kind,
+                           double x, double y, bool clamp) const
+{
+    const double Lx = nx_ * dx_;
+    const double Ly = ny_ * dy_;
+
+    auto clamp01 = [](double v, double lo, double hi) {
+        return (v < lo ? lo : (v > hi ? hi : v));
+    };
+
+    // Clamp or reject outside-domain queries
+    if (clamp) {
+        x = clamp01(x, 0.0, Lx);
+        y = clamp01(y, 0.0, Ly);
+    } else {
+        if (x < 0.0 || x > Lx || y < 0.0 || y > Ly)
+            throw std::out_of_range("interpolate(): (x,y) outside domain");
+    }
+
+    // Accessors
+    auto const& A_cell = (kind == ArrayKind::Cell) ? field(name)
+                         : (kind == ArrayKind::Fx)  ? flux(name)
+                                                   :                            flux(name); // Fy also in flux()
+    // indexers
+    auto idx_cell = [&](int i,int j) -> std::size_t {
+        return static_cast<std::size_t>(j)*nx_ + static_cast<std::size_t>(i);
+    };
+    auto idx_fx = [&](int i,int j) -> std::size_t { // (nx+1)*ny
+        return static_cast<std::size_t>(j)*(nx_+1) + static_cast<std::size_t>(i);
+    };
+    auto idx_fy = [&](int i,int j) -> std::size_t { // nx*(ny+1)
+        return static_cast<std::size_t>(j)*nx_ + static_cast<std::size_t>(i);
+    };
+
+    // Bilinear helper
+    auto bilerp = [](double v00, double v10, double v01, double v11,
+                     double sx, double sy) -> double {
+        // sx,sy in [0,1]; (0,0)=lower-left, (1,1)=upper-right
+        const double vx0 = v00*(1.0 - sx) + v10*sx;
+        const double vx1 = v01*(1.0 - sx) + v11*sx;
+        return vx0*(1.0 - sy) + vx1*sy;
+    };
+
+    // Compute discrete coordinates and neighbors per kind
+    if (kind == ArrayKind::Cell) {
+        // logical coords in cell-center lattice
+        double xi = x / dx_ - 0.5;          // i + frac; cell centers
+        double yi = y / dy_ - 0.5;          // j + frac
+
+        // For bilinear, base index must allow +1 neighbor
+        int i0 = static_cast<int>(std::floor(xi));
+        int j0 = static_cast<int>(std::floor(yi));
+
+        // Clamp to interior so i1<=nx_-1, j1<=ny_-1
+        i0 = std::max(0, std::min(nx_ - 2, i0));
+        j0 = std::max(0, std::min(ny_ - 2, j0));
+
+        const int i1 = i0 + 1;
+        const int j1 = j0 + 1;
+
+        const double sx = xi - i0;          // in [0,1]
+        const double sy = yi - j0;
+
+        const double v00 = field(name)[idx_cell(i0, j0)];
+        const double v10 = field(name)[idx_cell(i1, j0)];
+        const double v01 = field(name)[idx_cell(i0, j1)];
+        const double v11 = field(name)[idx_cell(i1, j1)];
+
+        return bilerp(v00, v10, v01, v11, sx, sy);
+    }
+    else if (kind == ArrayKind::Fx) {
+        // vertical faces at x = i*dx (i=0..nx_), y = (j+0.5)dy (j=0..ny_-1)
+        double ui = x / dx_;                // face index i with fractional
+        double vj = y / dy_ - 0.5;          // row index j (cell-centered in y)
+
+        // Base indices: i in [0..nx_-1] so i+1 exists; j in [0..ny_-2] so j+1 exists
+        int i0 = static_cast<int>(std::floor(ui));
+        int j0 = static_cast<int>(std::floor(vj));
+
+        i0 = std::max(0, std::min(nx_ - 1, i0));    // note: faces go to nx_, but for bilinear we keep base <= nx_-1
+        j0 = std::max(0, std::min(ny_ - 2, j0));
+
+        const int i1 = std::min(nx_, i0 + 1);       // neighbor face to the right; clamp at nx_
+        const int j1 = j0 + 1;
+
+        const double sx = ui - i0;                  // [0,1]
+        const double sy = vj - j0;
+
+        const auto& FX = flux(name);                // (nx_+1)*ny_
+        const double v00 = FX[idx_fx(i0, j0)];
+        const double v10 = FX[idx_fx(i1, j0)];
+        const double v01 = FX[idx_fx(i0, j1)];
+        const double v11 = FX[idx_fx(i1, j1)];
+
+        return bilerp(v00, v10, v01, v11, sx, sy);
+    }
+    else { // ArrayKind::Fy
+        // horizontal faces at x = (i+0.5)dx (i=0..nx_-1), y = j*dy (j=0..ny_)
+        double ui = x / dx_ - 0.5;          // column index i (cell-centered in x)
+        double vj = y / dy_;                // face row j with fractional
+
+        int i0 = static_cast<int>(std::floor(ui));
+        int j0 = static_cast<int>(std::floor(vj));
+
+        i0 = std::max(0, std::min(nx_ - 2, i0));
+        j0 = std::max(0, std::min(ny_ - 1, j0));    // base <= ny_-1
+
+        const int i1 = i0 + 1;
+        const int j1 = std::min(ny_, j0 + 1);
+
+        const double sx = ui - i0;
+        const double sy = vj - j0;
+
+        const auto& FY = flux(name);                // nx_*(ny_+1)
+        const double v00 = FY[idx_fy(i0, j0)];
+        const double v10 = FY[idx_fy(i1, j0)];
+        const double v01 = FY[idx_fy(i0, j1)];
+        const double v11 = FY[idx_fy(i1, j1)];
+
+        return bilerp(v00, v10, v01, v11, sx, sy);
+    }
+}
+
+double Grid2D::fieldMean(const std::string& name, ArrayKind kind) const
+{
+    const std::vector<double>* A = nullptr;
+    std::size_t N = 0;
+
+    if (kind == ArrayKind::Cell) {
+        A = &field(name);
+        N = static_cast<std::size_t>(nx_) * ny_;
+    } else if (kind == ArrayKind::Fx) {
+        A = &flux(name);
+        N = static_cast<std::size_t>(nx_ + 1) * ny_;
+    } else { // ArrayKind::Fy
+        A = &flux(name);
+        N = static_cast<std::size_t>(nx_) * (ny_ + 1);
+    }
+
+    double sum = 0.0;
+    for (std::size_t i = 0; i < N; ++i)
+        sum += (*A)[i];
+
+    return (N > 0 ? sum / static_cast<double>(N) : 0.0);
+}
+
+double Grid2D::fieldStdDev(const std::string& name, ArrayKind kind) const
+{
+    const std::vector<double>* A = nullptr;
+    std::size_t N = 0;
+
+    if (kind == ArrayKind::Cell) {
+        A = &field(name);
+        N = static_cast<std::size_t>(nx_) * ny_;
+    } else if (kind == ArrayKind::Fx) {
+        A = &flux(name);
+        N = static_cast<std::size_t>(nx_ + 1) * ny_;
+    } else { // ArrayKind::Fy
+        A = &flux(name);
+        N = static_cast<std::size_t>(nx_) * (ny_ + 1);
+    }
+
+    if (N == 0) return 0.0;
+
+    // First pass: mean
+    double mean = 0.0;
+    for (std::size_t i = 0; i < N; ++i)
+        mean += (*A)[i];
+    mean /= static_cast<double>(N);
+
+    // Second pass: variance
+    double var = 0.0;
+    for (std::size_t i = 0; i < N; ++i) {
+        double d = (*A)[i] - mean;
+        var += d * d;
+    }
+    var /= static_cast<double>(N);
+
+    return std::sqrt(var);
+}
+
+void Grid2D::normalizeField(const std::string& name, ArrayKind kind, double a, double b)
+{
+    if (b == 0.0)
+        throw std::runtime_error("normalizeField: divisor b cannot be zero");
+
+    std::vector<double>* A = nullptr;
+    std::size_t N = 0;
+
+    if (kind == ArrayKind::Cell) {
+        A = &field(name);
+        N = static_cast<std::size_t>(nx_) * ny_;
+    } else if (kind == ArrayKind::Fx) {
+        A = &flux(name);
+        N = static_cast<std::size_t>(nx_ + 1) * ny_;
+    } else { // ArrayKind::Fy
+        A = &flux(name);
+        N = static_cast<std::size_t>(nx_) * (ny_ + 1);
+    }
+
+    for (std::size_t i = 0; i < N; ++i)
+        (*A)[i] = ((*A)[i] - a) / b;
+}
+
+double Grid2D::fieldAverageAtX(const std::string& name, double x) const
+{
+    if (!hasField(name))
+        throw std::runtime_error("fieldAverageAtX: missing field " + name);
+
+    const auto& F = field(name);
+    if (F.size() != static_cast<std::size_t>(nx_ * ny_))
+        throw std::runtime_error("fieldAverageAtX: only works with cell-centered fields");
+
+    // map x to column index
+    int i = static_cast<int>(std::floor(x / dx_));
+    if (i < 0) i = 0;
+    if (i > nx_-1) i = nx_-1;
+
+    double sum = 0.0;
+    for (int j=0; j<ny_; ++j)
+        sum += F[static_cast<std::size_t>(j)*nx_ + i];
+
+    return sum / static_cast<double>(ny_);
+}
+
+void Grid2D::transportStepUpwind(const std::string& name, double dt)
+{
+    if (dt <= 0.0) throw std::runtime_error("transportStepUpwind: dt must be > 0");
+
+    // Ensure fluxes exist
+    if (!hasFlux("qx") || !hasFlux("qy"))
+        throw std::runtime_error("transportStepUpwind: fluxes qx/qy are missing; run Darcy first");
+
+    const int NX = nx_, NY = ny_;
+    const double DX = dx_, DY = dy_;
+    const double cellArea = DX * DY; // unit thickness
+
+    // Access/create concentration field
+    auto& C = field(name);
+    if (C.size() != static_cast<std::size_t>(NX) * NY)
+        C.assign(static_cast<std::size_t>(NX) * NY, 0.0);
+
+    // Read face fluxes (Darcy volumetric flux per unit thickness)
+    const auto& QX = flux("qx"); // (NX+1)*NY
+    const auto& QY = flux("qy"); // NX*(NY+1)
+
+    // Helpers to index cell and faces
+    auto idx_cell = [&](int i,int j)->std::size_t {
+        return static_cast<std::size_t>(j)*NX + static_cast<std::size_t>(i);
+    };
+    auto idx_fx = [&](int i,int j)->std::size_t { // vertical faces: i=0..NX, j=0..NY-1
+        return static_cast<std::size_t>(j)*(NX+1) + static_cast<std::size_t>(i);
+    };
+    auto idx_fy = [&](int i,int j)->std::size_t { // horizontal faces: i=0..NX-1, j=0..NY
+        return static_cast<std::size_t>(j)*NX + static_cast<std::size_t>(i);
+    };
+
+    // Optional: quick CFL guard (upwind explicit)
+    {
+        double umax = 0.0, vmax = 0.0;
+        // max |u_x|
+        for (int j=0; j<NY; ++j) {
+            for (int i=0; i<=NX; ++i) umax = std::max(umax, std::abs(QX[idx_fx(i,j)]));
+        }
+        // max |u_y|
+        for (int j=0; j<=NY; ++j) {
+            for (int i=0; i<NX; ++i)  vmax = std::max(vmax, std::abs(QY[idx_fy(i,j)]));
+        }
+        double dtCFL = std::numeric_limits<double>::infinity();
+        if (umax > 0.0) dtCFL = std::min(dtCFL, DX / umax);
+        if (vmax > 0.0) dtCFL = std::min(dtCFL, DY / vmax);
+        if (dt > 0.99 * dtCFL && std::isfinite(dtCFL)) {
+            // not throwing—just a gentle guardrail note
+            fprintf(stderr, "Warning: dt exceeds CFL (dt=%.3e, dtCFL=%.3e)\n", dt, dtCFL);
+        }
+    }
+
+    // One step: C^{n+1} = C^n - dt/Vol * (F_E - F_W + F_N - F_S)
+    // with upwinded face concentrations.
+    std::vector<double> Cnew(C.size(), 0.0);
+
+    for (int j=0; j<NY; ++j) {
+        for (int i=0; i<NX; ++i) {
+
+            const std::size_t s = idx_cell(i,j);
+            const double Cij = C[s];
+
+            // West face (i-1/2): flux qx(i, j) defined at vertical face i
+            const double qW = QX[idx_fx(i, j)]; // positive: left->right
+            double CW; // upwind concentration at west face into cell (i,j)
+            if (qW > 0.0) {
+                // flow into cell from west boundary/neighbor: take upstream from left side
+                if (i == 0) {
+                    // Left boundary: Dirichlet C=1 applied on inflow
+                    CW = 1.0;
+                } else {
+                    CW = C[idx_cell(i-1, j)];
+                }
+            } else {
+                // flow leaving cell (to the west): upwind is the cell itself
+                CW = Cij;
+            }
+
+            // East face (i+1/2): flux qx(i+1, j) at vertical face i+1
+            const double qE = QX[idx_fx(i+1, j)]; // positive: left->right
+            double CE;
+            if (qE < 0.0) {
+                // flow into cell from east side (right->left)
+                if (i == NX-1) {
+                    // Right boundary: "no-diffusion" outflow; for backflow we choose Cin = 0.
+                    // (You can parameterize this if you prefer another inflow value.)
+                    CE = 0.0;
+                } else {
+                    CE = C[idx_cell(i+1, j)];
+                }
+            } else {
+                // flow leaving cell to the east: upwind is the cell
+                CE = Cij;
+            }
+
+            // South face (i, j-1/2): qy(i, j)
+            const double qS = QY[idx_fy(i, j)]; // positive: bottom->top
+            double CS;
+            if (qS > 0.0) {
+                // into cell from south
+                if (j == 0) {
+                    // bottom boundary: Darcy no-flux ⇒ qS should be 0, but guard anyway
+                    CS = Cij; // zero-gradient fallback (no inflow value specified)
+                } else {
+                    CS = C[idx_cell(i, j-1)];
+                }
+            } else {
+                // leaving cell downward
+                CS = Cij;
+            }
+
+            // North face (i, j+1/2): qy(i, j+1)
+            const double qN = QY[idx_fy(i, j+1)]; // positive: bottom->top
+            double CN;
+            if (qN < 0.0) {
+                // into cell from north
+                if (j == NY-1) {
+                    // top boundary: Darcy no-flux ⇒ qN should be 0, guard:
+                    CN = Cij; // zero-gradient fallback
+                } else {
+                    CN = C[idx_cell(i, j+1)];
+                }
+            } else {
+                // leaving cell upward
+                CN = Cij;
+            }
+
+            // Face areas (unit thickness): vertical faces area = DY, horizontal faces area = DX
+            const double FW = qW * CW * DY;
+            const double FE = qE * CE * DY;
+            const double FS = qS * CS * DX;
+            const double FN = qN * CN * DX;
+
+            const double net = (FE - FW) + (FN - FS); // net outflow
+            Cnew[s] = Cij - (dt / cellArea) * net;
+        }
+    }
+
+    // Overwrite the field with the new step
+    C.swap(Cnew);
+}
+

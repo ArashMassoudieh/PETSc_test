@@ -129,6 +129,11 @@ public:
         return fields_.find(name) != fields_.end();
     }
 
+    /// true if a flux with @p name exists
+    bool hasFlux(const std::string& name) const {
+        return fluxes_.find(name) != fluxes_.end();
+    }
+
     /// erase a field if it exists
     void dropField(const std::string& name) {
         fields_.erase(name);
@@ -282,6 +287,27 @@ public:
                           bool flipY = false) const {
         writeNamedMatrix(fieldName, ArrayKind::Cell, filename, delimiter, precision, include_header, flipY);
     }
+
+    /// Bilinear interpolation of a stored array at physical (x,y).
+    /// - Cell: centers at ((i+0.5)dx, (j+0.5)dy), size nx*ny
+    /// - Fx  : vertical faces at (i*dx,      (j+0.5)dy), size (nx+1)*ny
+    /// - Fy  : horizontal faces at ((i+0.5)dx, j*dy     ), size nx*(ny+1)
+    /// If clamp=true (default), x,y are clamped to the domain box before sampling.
+    /// If clamp=false and (x,y) is outside, throws std::out_of_range.
+    double interpolate(const std::string& name, ArrayKind kind,
+                       double x, double y, bool clamp = true) const;
+
+    // Compute mean and standard deviation of a field
+    double fieldMean(const std::string& name, ArrayKind kind) const;
+    double fieldStdDev(const std::string& name, ArrayKind kind) const;
+
+    // Normalize values of a field: v -> (v - a)/b
+    void normalizeField(const std::string& name, ArrayKind kind, double a, double b);
+
+    // Average of field values at given x (cell field only)
+    double fieldAverageAtX(const std::string& name, double x) const;
+
+    void transportStepUpwind(const std::string& name, double dt);
 
     void DarcySolve(double H_west, double H_east, const std::string &kx_field, const std::string &ky_field, const char* ksp_prefix = nullptr);
 
