@@ -2,6 +2,9 @@
 #include <vector>
 #include <sstream>
 #include <iomanip>
+#include <petscviewer.h>
+#include <fstream>
+
 
 PETScVector::PETScVector() = default;
 
@@ -95,4 +98,31 @@ PETScVector PETScVector::adopt(Vec v) {
     PETScVector out;
     out.v_ = v; // take ownership; destructor will VecDestroy(v)
     return out;
+}
+
+void PETScVector::ownershipRange(PetscInt& start, PetscInt& end) const {
+    PetscCallAbort(PETSC_COMM_WORLD, VecGetOwnershipRange(v_, &start, &end));
+}
+
+void PETScVector::saveToFile(const std::string& filename) const {
+    if (!v_) throw std::runtime_error("PETScVector::saveToFile: vector is null");
+
+    PetscInt n;
+    VecGetSize(v_, &n);
+
+    std::vector<PetscScalar> values(n);
+    std::vector<PetscInt> idx(n);
+    for (PetscInt i = 0; i < n; ++i) idx[i] = i;
+
+    VecGetValues(v_, n, idx.data(), values.data());
+
+    std::ofstream ofs(filename);
+    if (!ofs) throw std::runtime_error("Could not open file: " + filename);
+
+    ofs << "[";
+    for (PetscInt i = 0; i < n; ++i) {
+        ofs << values[i];
+        if (i < n - 1) ofs << ", ";
+    }
+    ofs << "]\n";
 }

@@ -126,6 +126,9 @@ public:
     /** Quick summary string: "Mat(type=..., m×n, nnz=...)" */
     std::string toStringSummary() const;
 
+    /** Saves the matrix to file */
+    void saveToFile(const std::string& filename) const;
+
     /// Non-owning access to the underlying PETSc Mat.
     Mat raw() const { return A_; }
 

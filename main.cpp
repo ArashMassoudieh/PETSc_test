@@ -15,24 +15,34 @@ static inline bool on_bc(PetscInt i, PetscInt j, PetscInt nx, PetscInt ny, doubl
 int main(int argc, char** argv) {
     PETScInit petsc(argc, argv);
 
-    Grid2D g(300,100,3,1);
+    Grid2D g(600,200,3,1);
     PetscLogDouble t_total0, t_total1, t_asm0, t_asm1, t_solve0, t_solve1;
     g.makeGaussianFieldSGS("K_normal_score",0.5,0.1,10);
     PetscTime(&t_asm0);
     PetscTime(&t_total0);
     g.writeNamedMatrix("K_normal_score",Grid2D::ArrayKind::Cell, "K_normal_score.txt");
     g.writeNamedVTI_Auto("K_normal_score","NormalScore.vti");
-    g.createExponentialField("K_normal_score",0,1,"K");
+    g.createExponentialField("K_normal_score",1,0,"K");
     PetscTime(&t_asm1);
     PetscTime(&t_solve0);
     g.DarcySolve(1,0,"K","K");
+    std::cout<<"Darcy solved ... " <<std::endl;
     g.writeNamedVTI_Auto("K", "K.vti");
     PetscTime(&t_solve1);
     g.writeNamedVTI_Auto("head", "Head.vti");
+    g.writeNamedMatrixAuto("head", "Head.txt");
     g.writeNamedVTI_Auto("qx", "qx.vti");
     g.writeNamedVTI_Auto("qy", "qy.vti");
-    for (int i=0; i<100; i++)
-        g.transportStepUpwind("C",0.0025);
+    double dt_optimal = 0.5*g.fieldMinMax("qx",Grid2D::ArrayKind::Fx).first;
+    std::cout<<"Optimal Time-Step: " << dt_optimal<<std::endl;
+    g.writeNamedMatrixAuto("qx", "qx.txt");
+    g.writeNamedMatrixAuto("qy", "qy.txt");
+    g.writeNamedMatrixAuto("K", "K.txt");
+
+    g.SetVal("diffusion", 0.0);
+    g.SetVal("porosity", 1);
+    g.SetVal("c_left", 1.0);
+    g.SolveTransport(0.5,dt_optimal, "transport_");
     g.writeNamedVTI_Auto("C","C.vti");
     PetscTime(&t_total1);
 

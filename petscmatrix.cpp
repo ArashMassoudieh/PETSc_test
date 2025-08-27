@@ -1,6 +1,7 @@
 #include "petscmatrix.h"
 #include "petscvector.h"   // for setDiagonal/multiply
 #include <sstream>
+#include <fstream>
 
 PETScMatrix::PETScMatrix() = default;
 
@@ -181,4 +182,34 @@ PETScVector PETScMatrix::solveNew(const PETScVector& b, const char* optionsPrefi
 
 PETScVector PETScMatrix::operator/(const PETScVector& b) const {
     return solveNew(b, nullptr);
+}
+
+
+void PETScMatrix::saveToFile(const std::string& filename) const {
+    if (!A_) throw std::runtime_error("PETScMatrix::saveToFile: matrix is null");
+
+    PetscInt m, n;
+    MatGetSize(A_, &m, &n);
+
+    std::ofstream ofs(filename);
+    if (!ofs) throw std::runtime_error("Could not open file: " + filename);
+
+    ofs << "[\n";
+    for (PetscInt i = 0; i < m; ++i) {
+        ofs << "  [";
+        std::vector<PetscInt> cols(n);
+        std::vector<PetscScalar> vals(n);
+        for (PetscInt j = 0; j < n; ++j) cols[j] = j;
+
+        MatGetValues(A_, 1, &i, n, cols.data(), vals.data());
+
+        for (PetscInt j = 0; j < n; ++j) {
+            ofs << vals[j];
+            if (j < n - 1) ofs << ", ";
+        }
+        ofs << "]";
+        if (i < m - 1) ofs << ",";
+        ofs << "\n";
+    }
+    ofs << "]\n";
 }

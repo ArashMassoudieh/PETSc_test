@@ -5,6 +5,10 @@
 #include <unordered_map>
 #include <cassert>
 #include <cstddef>
+#include <petscsys.h>
+
+class PETScMatrix;
+
 
 /**
  * @file grid.h
@@ -264,7 +268,7 @@ public:
                           bool include_header = true,
                           bool flipY = false) const;
 
-    /**
+   /**
    * @brief Same as writeNamedMatrix, but auto-detects kind:
    *        - if name in fields_  → Cell
    *        - else if name in fluxes_ and size==FxSize() → Fx
@@ -315,6 +319,26 @@ public:
     void createExponentialField(const std::string& inputFieldName,
                                         double a, double b,
                                         const std::string& outputFieldName);
+
+    // Main transport matrix assembly function
+    void assembleTransportMatrix(PETScMatrix *A, double dt) const;
+
+    void assembleTransportRHS(PETScVector& b, const std::string& c_field, double dt) const;
+
+    void transportStep(double dt, const char* ksp_prefix);
+
+    void SetVal(const std::string& prop, const double& value);
+
+    // Getter functions for accessing transport properties
+    double getDiffusion() const { return diffusion_coeff_; }
+    double getPorosity() const { return porosity_; }
+    double getLeftBC() const { return c_left_; }
+
+    void SolveTransport(const double& t_end, const double& dt, const char* ksp_prefix = nullptr);
+
+    void printSampleC(const std::vector<std::pair<int,int>>& pts) const;
+
+    std::pair<double,double> fieldMinMax(const std::string& name, ArrayKind kind) const;
 #ifdef GRID_USE_VTK
     /**
  * @brief Write a named array (cell field or face flux) to a .vti file using VTK.
@@ -347,6 +371,11 @@ public:
 private:
     int nx_, ny_;
     double Lx_, Ly_, dx_, dy_;
+
+    // Transport properties
+    double diffusion_coeff_;     // Diffusion coefficient D
+    double porosity_;           // Porosity
+    double c_left_;            // Left boundary concentration
 
     // Registry of cell-centered scalar fields by name
     std::unordered_map<std::string, std::vector<double>> fields_;
@@ -388,6 +417,19 @@ private:
                                 const std::vector<unsigned char>& known,
                                 bool ensure_same_row = true) const;
 
+    // Transport equation utility functions
+    double getVelocityX(int i, int j, double porosity) const;
+    double getVelocityY(int i, int j, double porosity) const;
+    PetscInt cellToPetscIndex(int i, int j) const;
+
+    void addTransportXTerms(int i, int j, double dt, double D, double porosity,
+                            double& diag, std::vector<PetscInt>& cols,
+                            std::vector<PetscScalar>& vals) const;
+
+    void addTransportYTerms(int i, int j, double dt, double D, double porosity,
+                            double& diag, std::vector<PetscInt>& cols,
+                            std::vector<PetscScalar>& vals) const;
+    PETScMatrix *A = nullptr; //Transport Matrix
 };
 
 // harmonic mean
