@@ -108,6 +108,11 @@ public:
     inline std::size_t FxSize() const { return static_cast<std::size_t>(nx_ + 1) * ny_; }
     inline std::size_t FySize() const { return static_cast<std::size_t>(nx_) * (ny_ + 1); }
 
+
+    void computeMassBalanceError(const std::string& fieldName);
+    void computeRowSumErrorField(PETScMatrix* A,
+                                         double dt,
+                                         const std::string& fieldName);
     // --------- Field registry (cell-centered scalars) ---------
 
     /**
@@ -334,11 +339,13 @@ public:
     double getPorosity() const { return porosity_; }
     double getLeftBC() const { return c_left_; }
 
-    void SolveTransport(const double& t_end, const double& dt, const char* ksp_prefix = nullptr);
+    void SolveTransport(const double& t_end, const double& dt, const char* ksp_prefix = nullptr, int output_interval = 1);
 
     void printSampleC(const std::vector<std::pair<int,int>>& pts) const;
 
     std::pair<double,double> fieldMinMax(const std::string& name, ArrayKind kind) const;
+
+    void assignConstant(const std::string& name, ArrayKind kind, double value);
 #ifdef GRID_USE_VTK
     /**
  * @brief Write a named array (cell field or face flux) to a .vti file using VTK.
@@ -385,13 +392,14 @@ private:
 
     // generic writer
     void writeMatrixRaw(const std::vector<double>& data,
-                        int rows, int cols,
-                        const std::string& name,
-                        const std::string& filename,
-                        char delimiter,
-                        int precision,
-                        bool include_header,
-                        bool flipY) const;
+                                int rows, int cols,
+                                const std::string& name,
+                                const std::string& filename,
+                                char delimiter = ',',
+                                int precision = 3,
+                                bool include_header = true,
+                                bool flipY = false,
+                                ArrayKind kind = Grid2D::ArrayKind::Cell) const;
 
     /**
    * @brief Collect the n nearest *determined* neighbors of (it,jt) using ring expansion,

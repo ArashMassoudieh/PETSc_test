@@ -12,6 +12,7 @@
 #include "petscmatrix.h"
 #include "petscvector.h"
 
+
 #ifdef GRID_USE_VTK
 #include <vtkSmartPointer.h>
 #include <vtkImageData.h>
@@ -315,27 +316,52 @@ void Grid2D::writeNamedMatrix(const std::string& name, ArrayKind kind,
 
 void Grid2D::writeNamedMatrixAuto(const std::string& name,
                                   const std::string& filename,
-                                  char delimiter, int precision,
-                                  bool include_header, bool flipY) const
+                                  char delimiter,
+                                  int precision,
+                                  bool include_header,
+                                  bool flipY) const
 {
+    // --- Check for cell field ---
     auto itF = fields_.find(name);
     if (itF != fields_.end()) {
-        if (itF->second.size() != static_cast<std::size_t>(nx_ * ny_))
-            throw std::runtime_error("field '" + name + "' size mismatch");
-        writeMatrixRaw(itF->second, ny_, nx_, name, filename, delimiter, precision, include_header, flipY);
+        const auto& f = itF->second;
+        if (f.size() != static_cast<std::size_t>(nx_ * ny_))
+            throw std::runtime_error("field '" + name + "' size mismatch (expected nx*ny)");
+        writeMatrixRaw(f, ny_, nx_, name, filename, delimiter, precision,
+                       include_header, flipY, Grid2D::ArrayKind::Cell);
         return;
     }
 
+    // --- Check for flux ---
     auto itX = fluxes_.find(name);
     if (itX != fluxes_.end()) {
-        const std::size_t sz = itX->second.size();
-        if (sz == FxSize()) { writeMatrixRaw(itX->second, ny_, nx_ + 1, name, filename, delimiter, precision, include_header, flipY); return; }
-        if (sz == FySize()) { writeMatrixRaw(itX->second, ny_ + 1, nx_, name, filename, delimiter, precision, include_header, flipY); return; }
-        throw std::runtime_error("flux '" + name + "' unexpected size");
+        const auto& f = itX->second;
+        const std::size_t sz = f.size();
+
+        if (sz == FxSize()) {
+            // Fx = ny rows, nx+1 cols
+            if (sz != static_cast<std::size_t>((nx_+1)*ny_))
+                throw std::runtime_error("flux '" + name + "' Fx size mismatch");
+            writeMatrixRaw(f, ny_, nx_+1, name, filename, delimiter, precision,
+                           include_header, flipY, Grid2D::ArrayKind::Fx);
+            return;
+        }
+        if (sz == FySize()) {
+            // Fy = ny+1 rows, nx cols
+            if (sz != static_cast<std::size_t>(nx_*(ny_+1)))
+                throw std::runtime_error("flux '" + name + "' Fy size mismatch");
+            writeMatrixRaw(f, ny_+1, nx_, name, filename, delimiter, precision,
+                           include_header, flipY, Grid2D::ArrayKind::Fy);
+            return;
+        }
+
+        throw std::runtime_error("flux '" + name + "' unexpected size = " +
+                                 std::to_string(sz));
     }
 
     throw std::runtime_error("'" + name + "' not found in fields or fluxes");
 }
+
 
 void Grid2D::writeMatrixRaw(const std::vector<double>& data,
                             int rows, int cols,
@@ -344,11 +370,12 @@ void Grid2D::writeMatrixRaw(const std::vector<double>& data,
                             char delimiter,
                             int precision,
                             bool include_header,
-                            bool flipY) const
+                            bool flipY,
+                            ArrayKind kind) const
 {
     if (rows <= 0 || cols <= 0)
         throw std::runtime_error("writeMatrixRaw: nonpositive rows/cols");
-    if (static_cast<std::size_t>(rows)*static_cast<std::size_t>(cols) != data.size())
+    if (static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols) != data.size())
         throw std::runtime_error("writeMatrixRaw: size mismatch for '" + name + "'");
 
     std::ofstream ofs(filename, std::ios::out | std::ios::trunc);
@@ -366,8 +393,12 @@ void Grid2D::writeMatrixRaw(const std::vector<double>& data,
     ofs << std::setprecision(precision) << std::scientific;
 
     auto idxRC = [&](int r, int c) -> std::size_t {
-        // stored row-major: r*cols + c
-        return static_cast<std::size_t>(r)*cols + c;
+        switch (kind) {
+        case ArrayKind::Cell: return static_cast<std::size_t>(r)*nx_ + c;
+        case ArrayKind::Fx:   return static_cast<std::size_t>(r)*(nx_+1) + c;
+        case ArrayKind::Fy:   return static_cast<std::size_t>(r)*nx_ + c;
+        default: throw std::runtime_error("Unknown ArrayKind in writeMatrixRaw");
+        }
     };
 
     if (!flipY) {
@@ -391,6 +422,7 @@ void Grid2D::writeMatrixRaw(const std::vector<double>& data,
     ofs.flush();
     if (!ofs) throw std::runtime_error("writeMatrixRaw: write failed for '" + filename + "'");
 }
+
 
 #ifdef GRID_USE_VTK
 
@@ -547,8 +579,20 @@ Grid2D::NeighborSet Grid2D::gatherNeighbors(int it, int jt,
         return false;
     }();
 
+    auto col_has_known = [&]()->bool {
+        for (int jj = 0; jj < ny_; ++jj) {
+            if (known[I(it, jj)]) return true;
+        }
+        return false;
+    }();
+
     auto has_same_row_in = [&](const std::vector<std::size_t>& v)->bool{
         for (auto s : v) { int ii = s % nx_, jj = s / nx_; if (jj == jt) return true; }
+        return false;
+    };
+
+    auto has_same_col_in = [&](const std::vector<std::size_t>& v)->bool{
+        for (auto s : v) { int ii = s % nx_, jj = s / nx_; if (ii == it) return true; }
         return false;
     };
 
@@ -567,7 +611,9 @@ Grid2D::NeighborSet Grid2D::gatherNeighbors(int it, int jt,
 
         // stop once we have enough AND (if needed) a same-row candidate
         if ((int)cand.size() >= nneigh) {
-            if (!ensure_same_row || !row_has_known || has_same_row_in(cand))
+            bool ok_row = !ensure_same_row || !row_has_known || has_same_row_in(cand);
+            bool ok_col = !ensure_same_row || !col_has_known || has_same_col_in(cand);
+            if (ok_row && ok_col)
                 break;
         }
     }
@@ -753,22 +799,24 @@ void Grid2D::DarcySolve(double H_west, double H_east, const std::string &kx_fiel
     auto& QY = flux("qy"); QY.assign(FySize(), 0.0);
     auto head_at = [&](int i,int j)->double { return HEAD[static_cast<std::size_t>(j)*NX + i]; };
 
-    // vertical faces
+    // --- vertical faces (QX) ---
     for (int j=0; j<NY; ++j) {
-        // left boundary: one-sided gradient to Dirichlet
+        // Left boundary face (Dirichlet head at west boundary)
         {
             const int i = 0;
             const double kface = kx_at(i,j);
             const double grad  = (head_at(i,j) - H_west) / (0.5*DX);
             QX[FxIndex(0, j)] = -kface * grad;
         }
-        // interior faces
-        for (int i=1; i<=NX-1; ++i) {
+
+        // Interior vertical faces
+        for (int i=1; i<NX; ++i) {  // strictly < NX
             const double kface = harm(kx_at(i-1,j), kx_at(i,j));
             const double grad  = (head_at(i,j) - head_at(i-1,j)) / DX;
             QX[FxIndex(i, j)] = -kface * grad;
         }
-        // right boundary
+
+        // Right boundary face (Dirichlet head at east boundary)
         {
             const int i = NX-1;
             const double kface = kx_at(i,j);
@@ -776,16 +824,24 @@ void Grid2D::DarcySolve(double H_west, double H_east, const std::string &kx_fiel
             QX[FxIndex(NX, j)] = -kface * grad;
         }
     }
-    // horizontal faces (no-flux at bottom/top)
+
+    // --- horizontal faces (QY) ---
+    // --- horizontal faces (QY) ---
     for (int i=0; i<NX; ++i) {
-        QY[FyIndex(i, 0)] = 0.0;
-        for (int j=1; j<=NY-1; ++j) {
+        // Interior horizontal faces
+        for (int j=1; j<NY; ++j) {
             const double kface = harm(ky_at(i,j-1), ky_at(i,j));
             const double grad  = (head_at(i,j) - head_at(i,j-1)) / DY;
             QY[FyIndex(i, j)] = -kface * grad;
         }
-        QY[FyIndex(i, NY)] = 0.0;
     }
+
+    // Enforce no-flux at boundaries AFTER filling everything
+    for (int i=0; i<NX; ++i) {
+        QY[FyIndex(i, 0)]  = 0.0;   // bottom boundary
+        QY[FyIndex(i, NY)] = 0.0;   // top boundary
+    }
+
 }
 
 void Grid2D::createExponentialField(const std::string& inputFieldName,
@@ -1053,132 +1109,115 @@ PetscInt Grid2D::cellToPetscIndex(int i, int j) const {
 }
 
 
+// -----------------------------
+// X-direction contributions
+// -----------------------------
 void Grid2D::addTransportXTerms(int i, int j, double dt, double D, double porosity,
                                 double& diag,
                                 std::vector<PetscInt>& cols,
                                 std::vector<PetscScalar>& vals) const
 {
     const int NX = nx();
-    const double DX    = dx();
+    const double DX = dx();
     const double inv_dx  = 1.0 / DX;
-    const double inv_dx2 = 1.0 / (DX * DX);
+    const double inv_dx2 = 1.0 / (DX*DX);
 
     // face velocities
-    double u_west = (i > 0)      ? getVelocityX(i, j, porosity)   : getVelocityX(0, j, porosity);
-    double u_east = (i < NX - 1) ? getVelocityX(i+1, j, porosity) : getVelocityX(NX, j, porosity);
+    double u_west = (i > 0)      ? getVelocityX(i, j, porosity)   : 0.0;
+    double u_east = (i < NX - 1) ? getVelocityX(i+1, j, porosity) : 0.0;
 
-    // --------------------
-    // Interior cells
-    // --------------------
+    // ---- Interior ----
     if (i > 0 && i < NX-1) {
-        // Diagonal: outflow terms + diffusion
-        diag += (std::max(u_east,0.0) - std::min(u_west,0.0)) * inv_dx
-                + 2.0 * D * inv_dx2;
+        double aW = std::max(u_west,0.0) * inv_dx + D*inv_dx2;
+        double aE = -std::min(u_east,0.0) * inv_dx + D*inv_dx2;
 
-        // West neighbor (negative!)
-        double coeff_west = - ( std::max(u_west,0.0) * inv_dx + D * inv_dx2 );
+        diag += aW + aE;
+
         cols.push_back(cellToPetscIndex(i-1,j));
-        vals.push_back(coeff_west);
+        vals.push_back(-aW);
 
-        // East neighbor (negative!)
-        double coeff_east = - ( -std::min(u_east,0.0) * inv_dx + D * inv_dx2 );
         cols.push_back(cellToPetscIndex(i+1,j));
-        vals.push_back(coeff_east);
-        //cout<<"coeff east: " <<coeff_east<<std::endl;
-        //cout<<"coeff west: " <<coeff_west<<std::endl;
+        vals.push_back(-aE);
     }
-
     // --------------------
     // West boundary (i=0)
     // --------------------
     else if (i == 0) {
-        // Diagonal: east outflow + west inflow (ghost eliminated) + diffusion
-        diag += std::max(u_east,0.0) * inv_dx
-                - std::min(u_west,0.0) * inv_dx
-                + 3.0 * D * inv_dx2;
+        // Diagonal: east outflow + contribution from ghost (-c0 term) + diffusion
+        diag += std::max(u_east, 0.0) * inv_dx    // outflow east
+                - std::min(u_west, 0.0) * inv_dx    // inflow from west ghost
+                + 2.0 * D * inv_dx2;                // diffusion: (2cL - c0 - 2c0 + c1)
 
-        // East neighbor (negative!)
+        // East neighbor (negative)
         if (NX > 1) {
-            double coeff_east = - ( -std::min(u_east,0.0) * inv_dx + D * inv_dx2 );
-            cols.push_back(cellToPetscIndex(i+1,j));
+            double coeff_east = - ( -std::min(u_east, 0.0) * inv_dx + D * inv_dx2 );
+            cols.push_back(cellToPetscIndex(i+1, j));
             vals.push_back(coeff_east);
         }
+
+        // NOTE: the constant source term from ghost (2*u_west/dx * c_left + 2*D/dx^2 * c_left)
+        // is NOT added here — it must be added in assembleTransportRHS.
     }
-
-    // --------------------
-    // East boundary (i=NX-1)
-    // --------------------
-    else {
-        // Diagonal: advection outflow (if u_west < 0, inflow handled) + diffusion (one-sided)
-        diag += (std::max(u_west,0.0) * inv_dx)   // outflow to west
-                - (std::min(u_west,0.0) * inv_dx)   // inflow from west
-                + D * inv_dx2 * (-1.0);             // only -D/dx^2 from ghost substitution
-
-        // West neighbor (negative, from flux + diffusion)
-        double coeff_west = - ( std::max(u_west,0.0) * inv_dx )
-                            - D * inv_dx2;
+    // ---- East boundary ----
+    else if (i == NX-1) {
+        double aW = std::max(u_west,0.0) * inv_dx + D*inv_dx2;
+        diag += aW;
         cols.push_back(cellToPetscIndex(i-1,j));
-        vals.push_back(coeff_west);
+        vals.push_back(-aW);
+        // no east neighbor (outflow)
     }
 }
 
-
+// -----------------------------
+// Y-direction contributions
+// -----------------------------
 void Grid2D::addTransportYTerms(int i, int j, double dt, double D, double porosity,
-                                double& diag, std::vector<PetscInt>& cols,
-                                std::vector<PetscScalar>& vals) const {
+                                double& diag,
+                                std::vector<PetscInt>& cols,
+                                std::vector<PetscScalar>& vals) const
+{
     const int NY = ny();
     const double DY = dy();
-    const double inv_dy = 1.0 / DY;
-    const double inv_dy2 = 1.0 / (DY * DY);
+    const double inv_dy  = 1.0 / DY;
+    const double inv_dy2 = 1.0 / (DY*DY);
 
-    // Get face velocities
-    double v_south = (j > 0) ? getVelocityY(i, j, porosity) : getVelocityY(i, 0, porosity);
-    double v_north = (j < NY - 1) ? getVelocityY(i, j + 1, porosity) : getVelocityY(i, NY, porosity);
+    // face velocities
+    double v_south = (j > 0)     ? getVelocityY(i, j, porosity)   : 0.0;
+    double v_north = (j < NY-1)  ? getVelocityY(i, j+1, porosity) : 0.0;
 
-    // Advection diagonal contribution
-    double adv_diag = (std::max(v_north, 0.0) - std::min(v_south, 0.0)) * inv_dy;
-    diag += adv_diag;
+    // ---- Interior ----
+    if (j > 0 && j < NY-1) {
+        double aS = std::max(v_south,0.0) * inv_dy + D*inv_dy2;
+        double aN = -std::min(v_north,0.0) * inv_dy + D*inv_dy2;
 
-    // --- Interior cell handling ---
-    if (j > 0 && j < NY - 1) {
-        // South neighbor
-        double coeff_south = std::max(v_south, 0.0) * inv_dy - D * inv_dy2;
-        cols.push_back(cellToPetscIndex(i, j-1));
-        vals.push_back(coeff_south);
+        diag += aS + aN;
 
-        // North neighbor
-        double coeff_north = -std::min(v_north, 0.0) * inv_dy - D * inv_dy2;
-        cols.push_back(cellToPetscIndex(i, j+1));
-        vals.push_back(coeff_north);
+        cols.push_back(cellToPetscIndex(i,j-1));
+        vals.push_back(-aS);
 
-        // Diffusion diagonal contribution
-        diag += 2.0 * D * inv_dy2;
+        cols.push_back(cellToPetscIndex(i,j+1));
+        vals.push_back(-aN);
     }
-
-    // --- Bottom boundary (j = 0): Zero gradient c_{i,-1} = c_{i,0} ---
+    // ---- Bottom boundary ----
     else if (j == 0) {
-        // North neighbor only
+        double aN = -std::min(v_north,0.0) * inv_dy + D*inv_dy2;
+        diag += aN;
         if (NY > 1) {
-            double coeff_north = -std::min(v_north, 0.0) * inv_dy - D * inv_dy2;
-            cols.push_back(cellToPetscIndex(i, j+1));
-            vals.push_back(coeff_north);
+            cols.push_back(cellToPetscIndex(i,j+1));
+            vals.push_back(-aN);
         }
-
-        // Zero gradient: no additional boundary source terms
-        diag += D * inv_dy2;  // Only one diffusion term (north side)
+        // no south face (Neumann)
     }
-
-    // --- Top boundary (j = NY-1): Zero gradient c_{i,ny} = c_{i,ny-1} ---
-    else { // j == NY-1
-        // South neighbor only
-        double coeff_south = std::max(v_south, 0.0) * inv_dy - D * inv_dy2;
-        cols.push_back(cellToPetscIndex(i, j-1));
-        vals.push_back(coeff_south);
-
-        // Zero gradient: no additional boundary source terms
-        diag += D * inv_dy2;  // Only one diffusion term (south side)
+    // ---- Top boundary ----
+    else if (j == NY-1) {
+        double aS = std::max(v_south,0.0) * inv_dy + D*inv_dy2;
+        diag += aS;
+        cols.push_back(cellToPetscIndex(i,j-1));
+        vals.push_back(-aS);
+        // no north face (Neumann)
     }
 }
+
 
 void Grid2D::assembleTransportMatrix(PETScMatrix *A, double dt) const
 {
@@ -1188,7 +1227,6 @@ void Grid2D::assembleTransportMatrix(PETScMatrix *A, double dt) const
     const int NX = nx(), NY = ny();
     const double inv_dt = 1.0 / dt;
 
-    // Get ownership range for parallel assembly
     PetscInt Istart, Iend;
     A->ownershipRange(Istart, Iend);
 
@@ -1196,25 +1234,33 @@ void Grid2D::assembleTransportMatrix(PETScMatrix *A, double dt) const
         const int j = static_cast<int>(Irow / NX);
         const int i = static_cast<int>(Irow - j * NX);
 
-        double diag = inv_dt;  // Time derivative term (include only once)
+        double diag = inv_dt;
         std::vector<PetscInt> cols;
         std::vector<PetscScalar> vals;
 
-        // Add x-direction terms (advection + diffusion)
         addTransportXTerms(i, j, dt, diffusion_coeff_, porosity_, diag, cols, vals);
-
-        // Add y-direction terms (advection + diffusion)
         addTransportYTerms(i, j, dt, diffusion_coeff_, porosity_, diag, cols, vals);
 
-        // Set matrix entries
         if (!cols.empty()) {
-            A->setValues(1, &Irow, static_cast<PetscInt>(cols.size()),
-                        cols.data(), vals.data(), ADD_VALUES);
+            A->setValues(1, &Irow,
+                         static_cast<PetscInt>(cols.size()),
+                         cols.data(), vals.data(), ADD_VALUES);
         }
-
-        // Set diagonal
         A->setValue(Irow, Irow, diag, ADD_VALUES);
 
+        /* -------- DEBUG PRINT --------
+        if (NX <= 6 && NY <= 6) { // only for small grids
+            double sum = diag;
+            std::ostringstream oss;
+            oss << "Row(" << i << "," << j << "): diag=" << diag;
+            for (std::size_t k = 0; k < cols.size(); ++k) {
+                sum += vals[k];
+                oss << " , N" << k << "=" << vals[k] << "(col " << cols[k] << ")";
+            }
+            oss << " , RowSum=" << sum << " , ShouldBe=" << inv_dt;
+            std::cout << oss.str() << std::endl;
+        }
+        /* -----------------------------*/
     }
 
     A->assemble();
@@ -1244,13 +1290,15 @@ void Grid2D::assembleTransportRHS(PETScVector& b,
 
         double rhs = C[cell_idx] * inv_dt;
 
-        // West boundary ghost contributions
+        // --- West boundary: inject boundary concentration ---
         if (i == 0) {
             double u_west = getVelocityX(0, j, porosity_);
-            // Advection inflow from boundary
+            // Advection inflow contribution
             rhs += (std::max(u_west,0.0) * inv_dx) * c_left_;
-            // Diffusion contribution from ghost
-            rhs += (2.0 * diffusion_coeff_ * inv_dx2) * c_left_;
+            // Diffusion ghost contribution
+            if (diffusion_coeff_ > 0.0) {
+                rhs += (2.0 * diffusion_coeff_ * inv_dx2) * c_left_;
+            }
         }
 
         b.setValue(Irow, rhs, INSERT_VALUES);
@@ -1258,6 +1306,7 @@ void Grid2D::assembleTransportRHS(PETScVector& b,
 
     b.assemble();
 }
+
 
 
 void Grid2D::transportStep(double dt, const char* ksp_prefix)
@@ -1281,7 +1330,7 @@ void Grid2D::transportStep(double dt, const char* ksp_prefix)
     PETScVector b(N);
     assembleTransportRHS(b, "C", dt);
 
-
+    //b.saveToFile("RHS.txt");
     // Solve A * C^{n+1} = b
     PETScVector c_new = ksp_prefix ? A->solveNew(b, ksp_prefix) : (A->operator/(b));
 
@@ -1299,6 +1348,7 @@ void Grid2D::transportStep(double dt, const char* ksp_prefix)
     for (PetscInt i = 0; i < n; ++i) {
         C[static_cast<std::size_t>(i)] = static_cast<double>(values[i]);
     }
+    //writeNamedMatrixAuto("C", "C.txt");
 }
 
 void Grid2D::SetVal(const std::string& prop, const double& value) {
@@ -1320,101 +1370,86 @@ void Grid2D::SetVal(const std::string& prop, const double& value) {
     }
 }
 
-void Grid2D::SolveTransport(const double& t_end, const double& dt, const char* ksp_prefix) {
-    if (t_end <= 0.0) {
-        throw std::runtime_error("SolveTransport: t_end must be positive");
-    }
-    if (dt <= 0.0) {
-        throw std::runtime_error("SolveTransport: dt must be positive");
-    }
-    if (dt > t_end) {
-        throw std::runtime_error("SolveTransport: dt cannot be larger than t_end");
-    }
+void Grid2D::SolveTransport(const double& t_end,
+                            const double& dt,
+                            const char* ksp_prefix,
+                            int output_interval)   // <-- new arg
+{
+    if (t_end <= 0.0) throw std::runtime_error("SolveTransport: t_end must be positive");
+    if (dt <= 0.0) throw std::runtime_error("SolveTransport: dt must be positive");
+    if (dt > t_end) throw std::runtime_error("SolveTransport: dt cannot be larger than t_end");
 
-    // Check if flow has been solved (need velocity fields for transport)
-    if (!hasFlux("qx") || !hasFlux("qy")) {
-        throw std::runtime_error("SolveTransport: must call DarcySolve() first to generate velocity fields");
-    }
+    if (!hasFlux("qx") || !hasFlux("qy"))
+        throw std::runtime_error("SolveTransport: must call DarcySolve() first");
 
-    std::cout << "Transport parameters:" << std::endl;
-    std::cout << "  c_left = " << c_left_ << std::endl;
-    std::cout << "  diffusion = " << diffusion_coeff_ << std::endl;
-    std::cout << "  porosity = " << porosity_ << std::endl;
+    std::cout << "Transport parameters:\n"
+              << "  c_left = " << c_left_ << "\n"
+              << "  diffusion = " << diffusion_coeff_ << "\n"
+              << "  porosity = " << porosity_ << "\n\n";
 
-    // Initialize time tracking
     double current_time = 0.0;
     int step_count = 0;
-
-    // Calculate total number of steps
     const int total_steps = static_cast<int>(std::ceil(t_end / dt));
 
-    std::cout << "Starting transport simulation:" << std::endl;
-    std::cout << "  End time: " << t_end << std::endl;
-    std::cout << "  Time step: " << dt << std::endl;
-    std::cout << "  Total steps: " << total_steps << std::endl;
-    std::cout << "  Diffusion coeff: " << diffusion_coeff_ << std::endl;
-    std::cout << "  Porosity: " << porosity_ << std::endl;
-    std::cout << "  Left BC: " << c_left_ << std::endl;
-    std::cout << std::endl;
+    std::cout << "Starting transport simulation:\n"
+              << "  End time: " << t_end << "\n"
+              << "  Time step: " << dt << "\n"
+              << "  Total steps: " << total_steps << "\n"
+              << "  Diffusion coeff: " << diffusion_coeff_ << "\n"
+              << "  Porosity: " << porosity_ << "\n"
+              << "  Left BC: " << c_left_ << "\n\n";
 
-    // Time stepping loop
-
-    // Assemble transport matrix A (includes time derivative)
+    // Assemble transport matrix A
     const int N = nx() * ny();
-    A = new PETScMatrix(N, N, 5);  // 5-point stencil
+    A = new PETScMatrix(N, N, 5);
     assembleTransportMatrix(A, dt);
 
-    while (current_time < t_end) {
-        // Adjust final time step if needed
-        double this_dt = dt;
-        if (current_time + dt > t_end) {
-            this_dt = t_end - current_time;
-        }
+    // Write initial state
+    writeNamedVTI_Auto("C", "transport_C_step000.vti");
 
-        // Perform one transport step
+    while (current_time < t_end) {
+        double this_dt = dt;
+
         try {
             transportStep(this_dt, ksp_prefix);
             step_count++;
             current_time += this_dt;
 
-            // Progress output every 10% or every 100 steps, whichever is less frequent
             const int progress_interval = std::max(1, std::min(100, total_steps / 10));
             if (step_count % progress_interval == 0 || current_time >= t_end) {
-                const double progress = (current_time / t_end) * 100.0;
+                double progress = (current_time / t_end) * 100.0;
                 std::cout << "Step " << step_count << "/" << total_steps
                           << ", Time: " << std::fixed << std::setprecision(6) << current_time
-                          << " (" << std::setprecision(1) << progress << "%)" << std::endl;
-            }
-
-            if (step_count % progress_interval == 0 || current_time >= t_end) {
-                const double progress = (current_time / t_end) * 100.0;
-                std::cout << "Step " << step_count << "/" << total_steps
-                          << ", Time: " << std::fixed << std::setprecision(6) << current_time
-                          << " (" << std::setprecision(1) << progress << "%)" << std::endl;
-
-                // Monitor a few sample points
+                          << " (" << std::setprecision(1) << progress << "%)\n";
                 std::cout << "   Samples: ";
                 printSampleC({{0,50}, {10,50}, {50,50}, {100,50}, {200,50}, {299,50}});
             }
 
+            // Write snapshots
+            if (output_interval > 0 && step_count % output_interval == 0) {
+                std::ostringstream fname;
+                fname << "transport_C_step"
+                      << std::setw(4) << std::setfill('0') << step_count << ".vti";
+                writeNamedVTI_Auto("C", fname.str());
+            }
+
         } catch (const std::exception& e) {
-            std::cerr << "Error in transport step " << step_count << " at time "
-                      << current_time << ": " << e.what() << std::endl;
+            std::cerr << "Error in transport step " << step_count
+                      << " at time " << current_time << ": " << e.what() << std::endl;
             throw;
         }
     }
 
-    std::cout << "\nTransport simulation completed successfully!" << std::endl;
-    std::cout << "Final time: " << current_time << std::endl;
-    std::cout << "Total steps taken: " << step_count << std::endl;
+    std::cout << "\nTransport simulation completed successfully!\n"
+              << "Final time: " << current_time << "\n"
+              << "Total steps taken: " << step_count << "\n";
 
-    // Optional: compute and display final concentration statistics
     if (hasField("C")) {
         const double mean_c = fieldMean("C", ArrayKind::Cell);
-        const double std_c = fieldStdDev("C", ArrayKind::Cell);
+        const double std_c  = fieldStdDev("C", ArrayKind::Cell);
         std::cout << "Final concentration - Mean: " << std::scientific
                   << std::setprecision(4) << mean_c
-                  << ", Std Dev: " << std_c << std::endl;
+                  << ", Std Dev: " << std_c << "\n";
     }
 }
 
@@ -1461,4 +1496,97 @@ std::pair<double,double> Grid2D::fieldMinMax(const std::string& name, ArrayKind 
 
     auto [minIt, maxIt] = std::minmax_element(A->begin(), A->end());
     return { *minIt, *maxIt };
+}
+
+void Grid2D::assignConstant(const std::string& name, ArrayKind kind, double value)
+{
+    std::vector<double>* A = nullptr;
+    std::size_t N = 0;
+
+    if (kind == ArrayKind::Cell) {
+        auto& f = field(name);  // creates if missing
+        f.resize(static_cast<std::size_t>(nx_) * ny_);
+        A = &f;
+        N = A->size();
+    }
+    else if (kind == ArrayKind::Fx) {
+        auto& f = flux(name);  // creates if missing
+        f.resize(static_cast<std::size_t>(nx_ + 1) * ny_);
+        A = &f;
+        N = A->size();
+    }
+    else if (kind == ArrayKind::Fy) {
+        auto& f = flux(name);
+        f.resize(static_cast<std::size_t>(nx_) * (ny_ + 1));
+        A = &f;
+        N = A->size();
+    }
+    else {
+        throw std::runtime_error("assignConstant: unknown ArrayKind");
+    }
+
+    std::fill(A->begin(), A->end(), value);
+}
+
+void Grid2D::computeMassBalanceError(const std::string& fieldName) {
+    const int NX = nx();
+    const int NY = ny();
+
+    // allocate/overwrite field
+    auto& MB = field(fieldName);
+    MB.assign(static_cast<std::size_t>(NX)*NY, 0.0);
+
+    const auto& QX = flux("qx"); // size: (NX+1)*NY
+    const auto& QY = flux("qy"); // size: NX*(NY+1)
+
+    for (int j = 0; j < NY; ++j) {
+        for (int i = 0; i < NX; ++i) {
+            // fluxes at the four faces of cell (i,j)
+            double q_west  = QX[j*(NX+1) + i];     // inflow (+ into cell)
+            double q_east  = QX[j*(NX+1) + (i+1)]; // outflow (+ out of cell)
+            double q_south = QY[j*NX + i];         // inflow (+ into cell)
+            double q_north = QY[(j+1)*NX + i];     // outflow (+ out of cell)
+
+            // net divergence = inflows - outflows
+            double balance = (q_west - q_east) + (q_south - q_north);
+
+            MB[static_cast<std::size_t>(j)*NX + i] = balance;
+        }
+    }
+}
+
+void Grid2D::computeRowSumErrorField(PETScMatrix* A,
+                                     double dt,
+                                     const std::string& fieldName)
+{
+    const int NX = nx(), NY = ny();
+    const PetscInt N = NX * NY;
+
+    auto& ERR = field(fieldName);
+    ERR.assign(static_cast<std::size_t>(N), 0.0);
+
+    PetscInt Istart, Iend;
+    A->ownershipRange(Istart, Iend);
+
+    const double inv_dt = 1.0 / dt;
+
+    for (PetscInt Irow = Istart; Irow < Iend; ++Irow) {
+        PetscInt ncols;
+        const PetscInt *cols;
+        const PetscScalar *vals;
+
+        // Grab nonzeros in this row
+        PetscErrorCode ierr = MatGetRow(A->raw(), Irow, &ncols, &cols, &vals);
+        if (ierr) throw std::runtime_error("MatGetRow failed");
+
+        double sum = 0.0;
+        for (PetscInt k = 0; k < ncols; ++k) {
+            sum += static_cast<double>(vals[k]);
+        }
+
+        // Compare to expected 1/dt
+        ERR[static_cast<std::size_t>(Irow)] = sum - inv_dt;
+
+        MatRestoreRow(A->raw(), Irow, &ncols, &cols, &vals);
+    }
 }
