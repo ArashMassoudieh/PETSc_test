@@ -15,7 +15,7 @@ static inline bool on_bc(PetscInt i, PetscInt j, PetscInt nx, PetscInt ny, doubl
 int main(int argc, char** argv) {
     PETScInit petsc(argc, argv);
 
-    Grid2D g(300,100,3,1);
+    Grid2D g(30,10,3,1);
     PetscLogDouble t_total0, t_total1, t_asm0, t_asm1, t_solve0, t_solve1;
     g.makeGaussianFieldSGS("K_normal_score",0.5,0.1,10);
     PetscTime(&t_asm0);
