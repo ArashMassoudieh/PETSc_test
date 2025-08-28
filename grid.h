@@ -393,6 +393,24 @@ public:
         ArrayKind kind
         ) const;
 
+
+    /**
+ * @brief Assign values from a TimeSeries<double> into a new field/flux.
+ *
+ * The TimeSeries length must match the size of the target ArrayKind:
+ *   - Cell: nx * ny
+ *   - Fx:   (nx+1) * ny
+ *   - Fy:   nx * (ny+1)
+ *
+ * @param ts         Input TimeSeries<double> (values in .c).
+ * @param fieldName  Name of the field/flux to create/overwrite.
+ * @param kind       ArrayKind (Cell, Fx, or Fy).
+ */
+    void assignFromTimeSeries(
+        const TimeSeries<double>& ts,
+        const std::string& fieldName,
+        ArrayKind kind
+        );
 #ifdef GRID_USE_VTK
     /**
  * @brief Write a named array (cell field or face flux) to a .vti file using VTK.

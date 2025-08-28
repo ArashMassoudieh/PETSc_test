@@ -1659,3 +1659,49 @@ TimeSeries<double> Grid2D::exportFieldToTimeSeries(
     return ts;
 }
 
+void Grid2D::assignFromTimeSeries(
+    const TimeSeries<double>& ts,
+    const std::string& fieldName,
+    ArrayKind kind
+    )
+{
+    std::size_t expectedSize = 0;
+    switch (kind) {
+    case ArrayKind::Cell:
+        expectedSize = static_cast<std::size_t>(nx_) * ny_;
+        break;
+    case ArrayKind::Fx:
+        expectedSize = static_cast<std::size_t>(nx_ + 1) * ny_;
+        break;
+    case ArrayKind::Fy:
+        expectedSize = static_cast<std::size_t>(nx_) * (ny_ + 1);
+        break;
+    default:
+        throw std::runtime_error("assignFromTimeSeries: invalid ArrayKind");
+    }
+
+    if (ts.size() != expectedSize) {
+        throw std::runtime_error(
+            "assignFromTimeSeries: size mismatch (ts.size=" +
+            std::to_string(ts.size()) + ", expected=" +
+            std::to_string(expectedSize) + ")"
+            );
+    }
+
+    std::vector<double>* target = nullptr;
+
+    if (kind == ArrayKind::Cell) {
+        auto& f = fields_[fieldName];
+        f.resize(expectedSize);
+        target = &f;
+    } else {
+        auto& f = flux(fieldName);
+        f.resize(expectedSize);
+        target = &f;
+    }
+
+    for (std::size_t i = 0; i < expectedSize; ++i) {
+        (*target)[i] = ts[i].c;   // assign value from TimeSeries
+    }
+}
+

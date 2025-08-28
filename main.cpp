@@ -36,7 +36,11 @@ int main(int argc, char** argv) {
     g.writeNamedMatrix("head",Grid2D::ArrayKind::Cell, "Head.txt");
     g.writeNamedVTI("qx", Grid2D::ArrayKind::Fx, "qx.vti");
     g.writeNamedVTI("qy", Grid2D::ArrayKind::Fy, "qy.vti");
-    TimeSeries<double> curvture = g.sampleSecondDerivative("qx",Grid2D::ArrayKind::Fx, Grid2D::DerivDir::X, 10000, 0.1);
+
+    TimeSeries<double> AllQxValues = g.exportFieldToTimeSeries("qx",Grid2D::ArrayKind::Fx);
+    TimeSeries<double> QxNormalScores = AllQxValues.ConvertToNormalScore();
+    g.assignFromTimeSeries(QxNormalScores,"qx_normal_score",Grid2D::ArrayKind::Fx);
+    TimeSeries<double> curvture = g.sampleSecondDerivative("qx_normal_score",Grid2D::ArrayKind::Fx, Grid2D::DerivDir::X, 10000, 0.05);
     curvture.writefile("2nd_deriv.txt");
     std::cout<<"Sampling points for derivative ..."<<std::endl;
     double dt_optimal = 0.5*g.dx()/g.fieldMinMax("qx",Grid2D::ArrayKind::Fx).second;
