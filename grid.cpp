@@ -11,7 +11,7 @@
 #include <iomanip>
 #include "petscmatrix.h"
 #include "petscvector.h"
-
+#include "TimeSeries.h"
 
 #ifdef GRID_USE_VTK
 #include <vtkSmartPointer.h>
@@ -1590,3 +1590,72 @@ void Grid2D::computeRowSumErrorField(PETScMatrix* A,
         MatRestoreRow(A->raw(), Irow, &ncols, &cols, &vals);
     }
 }
+
+TimeSeries<double> Grid2D::sampleSecondDerivative(
+    const std::string& fieldName,
+    ArrayKind kind,
+    DerivDir dir,
+    int nPoints,
+    double delta,
+    unsigned long seed) const
+{
+    if (!hasField(fieldName) && !hasFlux(fieldName)) {
+        throw std::runtime_error("Field/flux not found: " + fieldName);
+    }
+
+    std::mt19937_64 rng(seed ? seed : std::random_device{}());
+    std::uniform_real_distribution<double> Ux(0.0, Lx_);
+    std::uniform_real_distribution<double> Uy(0.0, Ly_);
+
+    TimeSeries<double> ts;
+
+    for (int k = 0; k < nPoints; ++k) {
+        double x = Ux(rng);
+        double y = Uy(rng);
+
+        // central location
+        double g0 = interpolate(fieldName, kind, x, y, /*clamp=*/true);
+
+        double gplus, gminus;
+        if (dir == DerivDir::X) {
+            gplus  = interpolate(fieldName, kind, x+delta, y, true);
+            gminus = interpolate(fieldName, kind, x-delta, y, true);
+        } else {
+            gplus  = interpolate(fieldName, kind, x, y+delta, true);
+            gminus = interpolate(fieldName, kind, x, y-delta, true);
+        }
+
+        double secondDeriv = (gminus - 2.0*g0 + gplus) / (delta*delta);
+
+        ts.append(g0, secondDeriv);
+    }
+
+    return ts;
+}
+
+TimeSeries<double> Grid2D::exportFieldToTimeSeries(
+    const std::string& fieldName,
+    ArrayKind kind
+    ) const
+{
+    const std::vector<double>* src = nullptr;
+
+    if (kind == ArrayKind::Cell) {
+        src = &field(fieldName);
+    }
+    else if (kind == ArrayKind::Fx || kind == ArrayKind::Fy) {
+        src = &flux(fieldName);
+    }
+    else {
+        throw std::runtime_error("exportFieldToTimeSeries: unknown ArrayKind");
+    }
+
+    TimeSeries<double> ts;
+
+    for (std::size_t i = 0; i < src->size(); ++i) {
+        ts.append(static_cast<double>(i), (*src)[i]);
+    }
+
+    return ts;
+}
+

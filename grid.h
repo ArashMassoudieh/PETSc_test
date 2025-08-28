@@ -9,6 +9,8 @@
 
 class PETScMatrix;
 
+template<typename T>
+class TimeSeries;
 
 /**
  * @file grid.h
@@ -51,7 +53,7 @@ public:
     double Ly() const { return Ly_; }
     double dx() const { return dx_; }
     double dy() const { return dy_; }
-
+    enum class DerivDir { X, Y };
     /// total number of cells
     std::size_t numCells() const { return static_cast<std::size_t>(nx_)*ny_; }
 
@@ -346,6 +348,51 @@ public:
     std::pair<double,double> fieldMinMax(const std::string& name, ArrayKind kind) const;
 
     void assignConstant(const std::string& name, ArrayKind kind, double value);
+
+    /**
+     * @brief Sample second derivatives of a field at random points.
+     *
+     * Picks nPoints random (x,y) in the domain, evaluates the field g at
+     * (x-Δ, x, x+Δ) or (y-Δ, y, y+Δ) depending on dir, and approximates the
+     * second derivative using central differences.
+     *
+     * Result is returned as a TimeSeries<double>, where:
+     *   - t = g(x,y) (field value at the sample point)
+     *   - c = second derivative wrt x or y
+     *
+     * @param fieldName  Name of field or flux to sample.
+     * @param kind       ArrayKind (Cell, Fx, Fy).
+     * @param dir        DerivDir::X or DerivDir::Y.
+     * @param nPoints    Number of random samples.
+     * @param delta      Step size Δ for finite difference.
+     * @param seed       RNG seed (optional, 0 = random device).
+     * @return           TimeSeries<double> of (value, second derivative).
+     */
+    TimeSeries<double> sampleSecondDerivative(
+        const std::string& fieldName,
+        ArrayKind kind,
+        DerivDir dir,
+        int nPoints,
+        double delta,
+        unsigned long seed = 0
+        ) const;
+
+    /**
+ * @brief Export all values of a field into a TimeSeries<double>.
+ *
+ * Each entry has:
+ *   - t = counter index (0,1,2,...)
+ *   - c = field value
+ *
+ * @param fieldName  Name of field or flux
+ * @param kind       ArrayKind (Cell, Fx, Fy)
+ * @return           TimeSeries<double> of values
+ */
+    TimeSeries<double> exportFieldToTimeSeries(
+        const std::string& fieldName,
+        ArrayKind kind
+        ) const;
+
 #ifdef GRID_USE_VTK
     /**
  * @brief Write a named array (cell field or face flux) to a .vti file using VTK.

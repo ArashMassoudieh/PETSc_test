@@ -5,14 +5,19 @@ CONFIG -= qt
 
 DEFINES += GRID_USE_VTK
 CONFIG += GRID_USE_VTK
+DEFINES += GSL
 
 VTKBUILDPATH = /home/arash/Projects/VTK-9.4.1/build
 VTKHEADERPATH = /home/arash/Projects/VTK-9.4.1
 VTK_V = -9.4
 
+
+
 SOURCES += main.cpp \
     Matrix.cpp \
     Matrix_arma.cpp \
+    NormalDist.cpp \
+    Utilities.cpp \
     Vector.cpp \
     Vector_arma.cpp \
     grid.cpp \
@@ -46,10 +51,12 @@ QMAKE_CXXFLAGS += -Wall -Wextra -Wpedantic
 HEADERS += \
     Matrix.h \
     Matrix_arma.h \
+    NormalDist.h \
     TimeSeries.h \
     TimeSeries.hpp \
     TimeSeriesSet.h \
     TimeSeriesSet.hpp \
+    Utilities.h \
     Vector.h \
     Vector_arma.h \
     grid.h \

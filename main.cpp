@@ -5,6 +5,7 @@
 #include <cmath>
 #include <iostream>
 #include "grid.h"
+#include "TimeSeries.h"
 
 static inline PetscInt idx(PetscInt i, PetscInt j, PetscInt nx) { return j*nx + i; }
 static inline bool on_bc(PetscInt i, PetscInt j, PetscInt nx, PetscInt ny, double x, double y, double Lx, double Ly) {
@@ -35,6 +36,9 @@ int main(int argc, char** argv) {
     g.writeNamedMatrix("head",Grid2D::ArrayKind::Cell, "Head.txt");
     g.writeNamedVTI("qx", Grid2D::ArrayKind::Fx, "qx.vti");
     g.writeNamedVTI("qy", Grid2D::ArrayKind::Fy, "qy.vti");
+    TimeSeries<double> curvture = g.sampleSecondDerivative("qx",Grid2D::ArrayKind::Fx, Grid2D::DerivDir::X, 10000, 0.1);
+    curvture.writefile("2nd_deriv.txt");
+    std::cout<<"Sampling points for derivative ..."<<std::endl;
     double dt_optimal = 0.5*g.dx()/g.fieldMinMax("qx",Grid2D::ArrayKind::Fx).second;
     std::cout<<"Optimal Time-Step: " << dt_optimal<<std::endl;
     g.assignConstant("C",Grid2D::ArrayKind::Cell, 0);
