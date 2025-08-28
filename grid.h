@@ -5,6 +5,12 @@
 #include <unordered_map>
 #include <cassert>
 #include <cstddef>
+#include <petscsys.h>
+
+class PETScMatrix;
+
+template<typename T>
+class TimeSeries;
 
 /**
  * @file grid.h
@@ -47,7 +53,7 @@ public:
     double Ly() const { return Ly_; }
     double dx() const { return dx_; }
     double dy() const { return dy_; }
-
+    enum class DerivDir { X, Y };
     /// total number of cells
     std::size_t numCells() const { return static_cast<std::size_t>(nx_)*ny_; }
 
@@ -104,6 +110,11 @@ public:
     inline std::size_t FxSize() const { return static_cast<std::size_t>(nx_ + 1) * ny_; }
     inline std::size_t FySize() const { return static_cast<std::size_t>(nx_) * (ny_ + 1); }
 
+
+    void computeMassBalanceError(const std::string& fieldName);
+    void computeRowSumErrorField(PETScMatrix* A,
+                                         double dt,
+                                         const std::string& fieldName);
     // --------- Field registry (cell-centered scalars) ---------
 
     /**
@@ -264,7 +275,7 @@ public:
                           bool include_header = true,
                           bool flipY = false) const;
 
-    /**
+   /**
    * @brief Same as writeNamedMatrix, but auto-detects kind:
    *        - if name in fields_  → Cell
    *        - else if name in fluxes_ and size==FxSize() → Fx
@@ -315,6 +326,91 @@ public:
     void createExponentialField(const std::string& inputFieldName,
                                         double a, double b,
                                         const std::string& outputFieldName);
+
+    // Main transport matrix assembly function
+    void assembleTransportMatrix(PETScMatrix *A, double dt) const;
+
+    void assembleTransportRHS(PETScVector& b, const std::string& c_field, double dt) const;
+
+    void transportStep(double dt, const char* ksp_prefix);
+
+    void SetVal(const std::string& prop, const double& value);
+
+    // Getter functions for accessing transport properties
+    double getDiffusion() const { return diffusion_coeff_; }
+    double getPorosity() const { return porosity_; }
+    double getLeftBC() const { return c_left_; }
+
+    void SolveTransport(const double& t_end, const double& dt, const char* ksp_prefix = nullptr, int output_interval = 1);
+
+    void printSampleC(const std::vector<std::pair<int,int>>& pts) const;
+
+    std::pair<double,double> fieldMinMax(const std::string& name, ArrayKind kind) const;
+
+    void assignConstant(const std::string& name, ArrayKind kind, double value);
+
+    /**
+     * @brief Sample second derivatives of a field at random points.
+     *
+     * Picks nPoints random (x,y) in the domain, evaluates the field g at
+     * (x-Δ, x, x+Δ) or (y-Δ, y, y+Δ) depending on dir, and approximates the
+     * second derivative using central differences.
+     *
+     * Result is returned as a TimeSeries<double>, where:
+     *   - t = g(x,y) (field value at the sample point)
+     *   - c = second derivative wrt x or y
+     *
+     * @param fieldName  Name of field or flux to sample.
+     * @param kind       ArrayKind (Cell, Fx, Fy).
+     * @param dir        DerivDir::X or DerivDir::Y.
+     * @param nPoints    Number of random samples.
+     * @param delta      Step size Δ for finite difference.
+     * @param seed       RNG seed (optional, 0 = random device).
+     * @return           TimeSeries<double> of (value, second derivative).
+     */
+    TimeSeries<double> sampleSecondDerivative(
+        const std::string& fieldName,
+        ArrayKind kind,
+        DerivDir dir,
+        int nPoints,
+        double delta,
+        unsigned long seed = 0
+        ) const;
+
+    /**
+ * @brief Export all values of a field into a TimeSeries<double>.
+ *
+ * Each entry has:
+ *   - t = counter index (0,1,2,...)
+ *   - c = field value
+ *
+ * @param fieldName  Name of field or flux
+ * @param kind       ArrayKind (Cell, Fx, Fy)
+ * @return           TimeSeries<double> of values
+ */
+    TimeSeries<double> exportFieldToTimeSeries(
+        const std::string& fieldName,
+        ArrayKind kind
+        ) const;
+
+
+    /**
+ * @brief Assign values from a TimeSeries<double> into a new field/flux.
+ *
+ * The TimeSeries length must match the size of the target ArrayKind:
+ *   - Cell: nx * ny
+ *   - Fx:   (nx+1) * ny
+ *   - Fy:   nx * (ny+1)
+ *
+ * @param ts         Input TimeSeries<double> (values in .c).
+ * @param fieldName  Name of the field/flux to create/overwrite.
+ * @param kind       ArrayKind (Cell, Fx, or Fy).
+ */
+    void assignFromTimeSeries(
+        const TimeSeries<double>& ts,
+        const std::string& fieldName,
+        ArrayKind kind
+        );
 #ifdef GRID_USE_VTK
     /**
  * @brief Write a named array (cell field or face flux) to a .vti file using VTK.
@@ -348,6 +444,11 @@ private:
     int nx_, ny_;
     double Lx_, Ly_, dx_, dy_;
 
+    // Transport properties
+    double diffusion_coeff_;     // Diffusion coefficient D
+    double porosity_;           // Porosity
+    double c_left_;            // Left boundary concentration
+
     // Registry of cell-centered scalar fields by name
     std::unordered_map<std::string, std::vector<double>> fields_;
 
@@ -356,13 +457,14 @@ private:
 
     // generic writer
     void writeMatrixRaw(const std::vector<double>& data,
-                        int rows, int cols,
-                        const std::string& name,
-                        const std::string& filename,
-                        char delimiter,
-                        int precision,
-                        bool include_header,
-                        bool flipY) const;
+                                int rows, int cols,
+                                const std::string& name,
+                                const std::string& filename,
+                                char delimiter = ',',
+                                int precision = 3,
+                                bool include_header = true,
+                                bool flipY = false,
+                                ArrayKind kind = Grid2D::ArrayKind::Cell) const;
 
     /**
    * @brief Collect the n nearest *determined* neighbors of (it,jt) using ring expansion,
@@ -388,6 +490,19 @@ private:
                                 const std::vector<unsigned char>& known,
                                 bool ensure_same_row = true) const;
 
+    // Transport equation utility functions
+    double getVelocityX(int i, int j, double porosity) const;
+    double getVelocityY(int i, int j, double porosity) const;
+    PetscInt cellToPetscIndex(int i, int j) const;
+
+    void addTransportXTerms(int i, int j, double dt, double D, double porosity,
+                            double& diag, std::vector<PetscInt>& cols,
+                            std::vector<PetscScalar>& vals) const;
+
+    void addTransportYTerms(int i, int j, double dt, double D, double porosity,
+                            double& diag, std::vector<PetscInt>& cols,
+                            std::vector<PetscScalar>& vals) const;
+    PETScMatrix *A = nullptr; //Transport Matrix
 };
 
 // harmonic mean

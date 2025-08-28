@@ -106,9 +106,14 @@ public:
 
     /** Wrap and take ownership of an existing PETSc Vec (created elsewhere). */
     static PETScVector adopt(Vec v);
+
+    void ownershipRange(PetscInt& start, PetscInt& end) const;
+
+    void saveToFile(const std::string& filename) const;
 private:
     /// Helper: destroy any owned Vec and reset handle to null.
     void destroy();
 
     Vec v_ = nullptr;  ///< Owned PETSc vector handle (or nullptr if empty)
 };
+
