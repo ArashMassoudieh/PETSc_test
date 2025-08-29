@@ -4,6 +4,7 @@ QT      -= core gui widgets
 
 DEFINES += GRID_USE_VTK
 CONFIG  += GRID_USE_VTK
+DEFINES += GSL
 
 # ==== VTK paths ====
 VTKBUILDPATH  = /home/arash/Projects/VTK-build

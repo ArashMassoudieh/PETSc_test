@@ -18,3 +18,15 @@ build/Desktop_Qt_6_8_3-Release/
 PETCs_test.pro.user
 
 PETCs_test_Behzad.pro.user
+
+build/Debug/.qtc_clangd/.cache/clangd/index/
+
+build/Debug/.qtc_clangd/
+
+build/Debug/
+
+build/Release/.qtc_clangd/.cache/clangd/index/
+
+build/Release/.qtc_clangd/
+
+build/Release/
