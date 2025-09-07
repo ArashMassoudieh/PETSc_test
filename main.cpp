@@ -43,11 +43,11 @@ int main(int argc, char** argv) {
     std::cout<<"Sampling points for derivative ..."<<std::endl;
     TimeSeries<double> curvture = g.sampleSecondDerivative("qx_normal_score",Grid2D::ArrayKind::Fx, Grid2D::DerivDir::X, 10000, 0.05);
     curvture.writefile("2nd_deriv.txt");
-    TimeSeries<double> diff_purturbed = g.sampleGaussianPerturbation("qx_normal_score",Grid2D::ArrayKind::Fx,10000,0.01);
+    TimeSeries<double> diff_purturbed = g.sampleGaussianPerturbation("qx_normal_score",Grid2D::ArrayKind::Fx,10000,0.01,0, PerturbDir::Radial);
     diff_purturbed.writefile("Diff_purturbed.txt");
     std::cout << "Diffusion purturbed correlation dx = 0.01: " << diff_purturbed.correlation_tc() << endl;
 
-    TimeSeries<double> diff_purturbed2 = g.sampleGaussianPerturbation("qx_normal_score",Grid2D::ArrayKind::Fx,10000,0.005);
+    TimeSeries<double> diff_purturbed2 = g.sampleGaussianPerturbation("qx_normal_score",Grid2D::ArrayKind::Fx,10000,0.005,0, PerturbDir::Radial);
     diff_purturbed2.writefile("Diff_purturbed2.txt");
     std::cout << "Diffusion purturbed correlation dx = 0.005: " << diff_purturbed2.correlation_tc() << endl;
 

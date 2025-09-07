@@ -34,6 +34,13 @@ class TimeSeries;
  * they will be compiled only in grid.cpp where PETSc headers are present).
  */
 
+enum class PerturbDir {
+    Radial,
+    XOnly,
+    YOnly
+};
+
+
 class PETScVector; // fwd-decl to match your wrapper name via include order
 
 class Grid2D {
@@ -331,31 +338,28 @@ public:
     TimeSeries<double> toSeries(const std::string& inputFieldName) const;
 
     /**
- * @brief Sample random point pairs with Gaussian perturbations.
- *
- * For each sample:
- *  - Pick a random point (x0,y0) inside the grid.
- *  - Interpolate field value v0 at (x0,y0).
- *  - Draw ε ~ N(0,1) and θ ~ Uniform(0,2π).
- *  - Perturb the point by (Δx * ε * cosθ, Δx * ε * sinθ).
- *  - Interpolate perturbed field value v1.
- *  - Store (t=v0, c=v1) in the output TimeSeries.
- *
- * @param fieldName  Name of the field/flux to sample.
- * @param kind       ArrayKind (Cell, Fx, Fy).
- * @param nSamples   Number of samples.
- * @param delta      Scale factor for perturbation (typically dx or dy).
- * @param seed       RNG seed (0 = random device).
- * @return           TimeSeries<double> with (original_value, perturbed_value).
- */
+     * Sample perturbed field values using Gaussian perturbations.
+     * Each sample takes a random point in the field, evaluates it,
+     * then perturbs the point according to a Gaussian displacement
+     * and evaluates the field again.
+     *
+     * @param fieldName Name of the field or flux
+     * @param kind Whether it is a field or flux
+     * @param nSamples Number of perturbation samples
+     * @param delta Scaling factor for Gaussian perturbation
+     * @param seed Random seed (0 = random_device)
+     * @param dir Perturbation direction (Radial, XOnly, YOnly)
+     *
+     * @return A TimeSeries where (t = original value, c = perturbed value)
+     */
     TimeSeries<double> sampleGaussianPerturbation(
         const std::string& fieldName,
         ArrayKind kind,
         int nSamples,
         double delta,
-        unsigned long seed = 0
+        unsigned long seed,
+        PerturbDir dir = PerturbDir::Radial  // default
         ) const;
-
 
     // Main transport matrix assembly function
     void assembleTransportMatrix(PETScMatrix *A, double dt) const;

@@ -1730,7 +1730,8 @@ TimeSeries<double> Grid2D::sampleGaussianPerturbation(
     ArrayKind kind,
     int nSamples,
     double delta,
-    unsigned long seed
+    unsigned long seed,
+    PerturbDir dir  // new argument
     ) const {
     if (!hasField(fieldName) && !hasFlux(fieldName)) {
         throw std::runtime_error("sampleGaussianPerturbation: field/flux not found: " + fieldName);
@@ -1753,29 +1754,41 @@ TimeSeries<double> Grid2D::sampleGaussianPerturbation(
         // 2. Original field value
         double v0 = interpolate(fieldName, kind, x0, y0, /*clamp=*/true);
 
-        // 3–4. Random direction and Gaussian step
-        double theta = Utheta(rng);
-        double eps   = N01(rng);
+        // 3. Random Gaussian perturbation
+        double eps = N01(rng);
+
+        // 4. Direction handling
+        double dx = 0.0, dy = 0.0;
+        switch (dir) {
+        case PerturbDir::Radial: {
+            double theta = Utheta(rng);
+            dx = delta * eps * std::cos(theta);
+            dy = delta * eps * std::sin(theta);
+            break;
+        }
+        case PerturbDir::XOnly:
+            dx = delta * eps;
+            dy = 0.0;
+            break;
+        case PerturbDir::YOnly:
+            dx = 0.0;
+            dy = delta * eps;
+            break;
+        }
 
         // 5. Perturbed coordinates
-        double dx = delta * eps * std::cos(theta);
-        double dy = delta * eps * std::sin(theta);
-
-        double x1 = x0 + dx;
-        double y1 = y0 + dy;
-
-        // Clamp perturbed point to domain
-        x1 = std::max(0.0, std::min(Lx_, x1));
-        y1 = std::max(0.0, std::min(Ly_, y1));
+        double x1 = std::max(0.0, std::min(Lx_, x0 + dx));
+        double y1 = std::max(0.0, std::min(Ly_, y0 + dy));
 
         // 6. Perturbed field value
         double v1 = interpolate(fieldName, kind, x1, y1, /*clamp=*/true);
 
-        // 7. Add to TimeSeries (t=v0, c=v1)
+        // 7. Add to TimeSeries (t = v0, c = v1)
         ts.append(v0, v1);
     }
 
     return ts;
 }
+
 
 
