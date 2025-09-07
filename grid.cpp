@@ -864,6 +864,71 @@ void Grid2D::createExponentialField(const std::string& inputFieldName,
     fields_[outputFieldName] = std::move(output);
 }
 
+TimeSeries<double> Grid2D::toSeries(const std::string& inputFieldName) const {
+    auto it = fields_.find(inputFieldName);
+    if (it == fields_.end()) {
+        throw std::runtime_error("Input field not found: " + inputFieldName);
+    }
+
+    const std::vector<double>& input = it->second;
+    TimeSeries<double> output;
+
+
+    int counter = 0;
+    for (double x : input) {
+        output.append(counter, x);
+    }
+
+    return output;
+
+}
+
+void Grid2D::assignFromTimeSeries(
+    const TimeSeries<double>& ts,
+    const std::string& fieldName,
+    ArrayKind kind
+    )
+{
+    std::size_t expectedSize = 0;
+    switch (kind) {
+    case ArrayKind::Cell:
+        expectedSize = static_cast<std::size_t>(nx_) * ny_;
+        break;
+    case ArrayKind::Fx:
+        expectedSize = static_cast<std::size_t>(nx_ + 1) * ny_;
+        break;
+    case ArrayKind::Fy:
+        expectedSize = static_cast<std::size_t>(nx_) * (ny_ + 1);
+        break;
+    default:
+        throw std::runtime_error("assignFromTimeSeries: invalid ArrayKind");
+    }
+
+    if (ts.size() != expectedSize) {
+        throw std::runtime_error(
+            "assignFromTimeSeries: size mismatch (ts.size=" +
+            std::to_string(ts.size()) + ", expected=" +
+            std::to_string(expectedSize) + ")"
+            );
+    }
+
+    std::vector<double>* target = nullptr;
+
+    if (kind == ArrayKind::Cell) {
+        auto& f = fields_[fieldName];
+        f.resize(expectedSize);
+        target = &f;
+    } else {
+        auto& f = flux(fieldName);
+        f.resize(expectedSize);
+        target = &f;
+    }
+
+    for (std::size_t i = 0; i < expectedSize; ++i) {
+        (*target)[i] = ts[i].c;   // take the “c” values
+    }
+}
+
 double Grid2D::interpolate(const std::string& name, ArrayKind kind,
                            double x, double y, bool clamp) const
 {
@@ -1659,49 +1724,58 @@ TimeSeries<double> Grid2D::exportFieldToTimeSeries(
     return ts;
 }
 
-void Grid2D::assignFromTimeSeries(
-    const TimeSeries<double>& ts,
+
+TimeSeries<double> Grid2D::sampleGaussianPerturbation(
     const std::string& fieldName,
-    ArrayKind kind
-    )
-{
-    std::size_t expectedSize = 0;
-    switch (kind) {
-    case ArrayKind::Cell:
-        expectedSize = static_cast<std::size_t>(nx_) * ny_;
-        break;
-    case ArrayKind::Fx:
-        expectedSize = static_cast<std::size_t>(nx_ + 1) * ny_;
-        break;
-    case ArrayKind::Fy:
-        expectedSize = static_cast<std::size_t>(nx_) * (ny_ + 1);
-        break;
-    default:
-        throw std::runtime_error("assignFromTimeSeries: invalid ArrayKind");
+    ArrayKind kind,
+    int nSamples,
+    double delta,
+    unsigned long seed
+    ) const {
+    if (!hasField(fieldName) && !hasFlux(fieldName)) {
+        throw std::runtime_error("sampleGaussianPerturbation: field/flux not found: " + fieldName);
     }
 
-    if (ts.size() != expectedSize) {
-        throw std::runtime_error(
-            "assignFromTimeSeries: size mismatch (ts.size=" +
-            std::to_string(ts.size()) + ", expected=" +
-            std::to_string(expectedSize) + ")"
-            );
+    // RNGs
+    std::mt19937_64 rng(seed ? seed : std::random_device{}());
+    std::uniform_real_distribution<double> Ux(0.0, Lx_);
+    std::uniform_real_distribution<double> Uy(0.0, Ly_);
+    std::uniform_real_distribution<double> Utheta(0.0, 2.0 * M_PI);
+    std::normal_distribution<double> N01(0.0, 1.0);
+
+    TimeSeries<double> ts;
+
+    for (int k = 0; k < nSamples; ++k) {
+        // 1. Random location
+        double x0 = Ux(rng);
+        double y0 = Uy(rng);
+
+        // 2. Original field value
+        double v0 = interpolate(fieldName, kind, x0, y0, /*clamp=*/true);
+
+        // 3–4. Random direction and Gaussian step
+        double theta = Utheta(rng);
+        double eps   = N01(rng);
+
+        // 5. Perturbed coordinates
+        double dx = delta * eps * std::cos(theta);
+        double dy = delta * eps * std::sin(theta);
+
+        double x1 = x0 + dx;
+        double y1 = y0 + dy;
+
+        // Clamp perturbed point to domain
+        x1 = std::max(0.0, std::min(Lx_, x1));
+        y1 = std::max(0.0, std::min(Ly_, y1));
+
+        // 6. Perturbed field value
+        double v1 = interpolate(fieldName, kind, x1, y1, /*clamp=*/true);
+
+        // 7. Add to TimeSeries (t=v0, c=v1)
+        ts.append(v0, v1);
     }
 
-    std::vector<double>* target = nullptr;
-
-    if (kind == ArrayKind::Cell) {
-        auto& f = fields_[fieldName];
-        f.resize(expectedSize);
-        target = &f;
-    } else {
-        auto& f = flux(fieldName);
-        f.resize(expectedSize);
-        target = &f;
-    }
-
-    for (std::size_t i = 0; i < expectedSize; ++i) {
-        (*target)[i] = ts[i].c;   // assign value from TimeSeries
-    }
+    return ts;
 }
+
 

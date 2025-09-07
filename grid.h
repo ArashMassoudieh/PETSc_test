@@ -327,6 +327,36 @@ public:
                                         double a, double b,
                                         const std::string& outputFieldName);
 
+    // Converts a field to time-series;
+    TimeSeries<double> toSeries(const std::string& inputFieldName) const;
+
+    /**
+ * @brief Sample random point pairs with Gaussian perturbations.
+ *
+ * For each sample:
+ *  - Pick a random point (x0,y0) inside the grid.
+ *  - Interpolate field value v0 at (x0,y0).
+ *  - Draw ε ~ N(0,1) and θ ~ Uniform(0,2π).
+ *  - Perturb the point by (Δx * ε * cosθ, Δx * ε * sinθ).
+ *  - Interpolate perturbed field value v1.
+ *  - Store (t=v0, c=v1) in the output TimeSeries.
+ *
+ * @param fieldName  Name of the field/flux to sample.
+ * @param kind       ArrayKind (Cell, Fx, Fy).
+ * @param nSamples   Number of samples.
+ * @param delta      Scale factor for perturbation (typically dx or dy).
+ * @param seed       RNG seed (0 = random device).
+ * @return           TimeSeries<double> with (original_value, perturbed_value).
+ */
+    TimeSeries<double> sampleGaussianPerturbation(
+        const std::string& fieldName,
+        ArrayKind kind,
+        int nSamples,
+        double delta,
+        unsigned long seed = 0
+        ) const;
+
+
     // Main transport matrix assembly function
     void assembleTransportMatrix(PETScMatrix *A, double dt) const;
 

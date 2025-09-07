@@ -269,6 +269,12 @@ public:
     void CreatePeriodicStepFunction(const T& t_start, const T& t_end, const T& duration, const T& gap, const T& magnitude);
     TimeSeries<T> LogTransformX() const;
 
+    /**
+ * @brief Compute Pearson correlation coefficient between times (t) and values (c).
+ * @return Correlation coefficient in [-1,1].
+ */
+    T correlation_tc() const;
+
     // -------------------------------------------------------------------------
     // Serialization
     // -------------------------------------------------------------------------

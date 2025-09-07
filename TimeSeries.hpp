@@ -2376,6 +2376,46 @@ T Ybar(const TimeSeries<T>& predicted, const TimeSeries<T>& observed) {
     return sum / static_cast<T>(observed.size());
 }
 
+template<typename T>
+T TimeSeries<T>::correlation_tc() const {
+    if (this->empty()) {
+        throw std::runtime_error("correlation_tc: empty time series");
+    }
+    if (this->size() == 1) {
+        throw std::runtime_error("correlation_tc: need at least two points");
+    }
+
+    const std::size_t N = this->size();
+
+    // Compute means
+    T mean_t = T{};
+    T mean_c = T{};
+    for (const auto& dp : *this) {
+        mean_t += dp.t;
+        mean_c += dp.c;
+    }
+    mean_t /= static_cast<T>(N);
+    mean_c /= static_cast<T>(N);
+
+    // Compute covariance and variances
+    T cov = T{};
+    T var_t = T{};
+    T var_c = T{};
+    for (const auto& dp : *this) {
+        T dt = dp.t - mean_t;
+        T dc = dp.c - mean_c;
+        cov   += dt * dc;
+        var_t += dt * dt;
+        var_c += dc * dc;
+    }
+
+    if (var_t == T{} || var_c == T{}) {
+        throw std::runtime_error("correlation_tc: zero variance in t or c");
+    }
+
+    return cov / std::sqrt(var_t * var_c);
+}
+
 namespace TimeSeriesMetrics {
 
     // Computes the x-percentile from a vector using QuickSort
