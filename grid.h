@@ -375,7 +375,7 @@ public:
     double getPorosity() const { return porosity_; }
     double getLeftBC() const { return c_left_; }
 
-    void SolveTransport(const double& t_end, const double& dt, const char* ksp_prefix = nullptr, int output_interval = 1);
+    void SolveTransport(const double& t_end, const double& dt, const std::string &path, const char* ksp_prefix = nullptr, int output_interval = 1);
 
     void printSampleC(const std::vector<std::pair<int,int>>& pts) const;
 

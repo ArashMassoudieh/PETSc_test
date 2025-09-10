@@ -1437,6 +1437,7 @@ void Grid2D::SetVal(const std::string& prop, const double& value) {
 
 void Grid2D::SolveTransport(const double& t_end,
                             const double& dt,
+                            const std::string &path,
                             const char* ksp_prefix,
                             int output_interval)   // <-- new arg
 {
@@ -1470,7 +1471,7 @@ void Grid2D::SolveTransport(const double& t_end,
     assembleTransportMatrix(A, dt);
 
     // Write initial state
-    writeNamedVTI_Auto("C", "transport_C_step000.vti");
+    writeNamedVTI_Auto("C", path + "transport_C_step000.vti");
 
     while (current_time < t_end) {
         double this_dt = dt;
