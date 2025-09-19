@@ -160,11 +160,11 @@ int main(int argc, char** argv) {
     g.SetVal("porosity", 1);
     g.SetVal("c_left", 1.0);
 
-    // Solve transport for 10 steps
-    g.SolveTransport(10,std::min(dt_optimal,0.5/10.0), resultsDir, (resultsDir + "transport_").c_str(),50);
+    // Solve and save transport for 10 steps
+    g.SolveTransport(10,std::min(dt_optimal,0.5/10.0), resultsDir, (resultsDir + "transport_").c_str(),10);
 
     // Save final concentration field
-    g.writeNamedVTI_Auto("C",resultsDir + "C.vti");
+    g.writeNamedVTI_Auto("C", resultsDir);
 
     PetscTime(&t_total1);
 

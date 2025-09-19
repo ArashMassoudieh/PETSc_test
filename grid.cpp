@@ -1496,7 +1496,7 @@ void Grid2D::SolveTransport(const double& t_end,
                 std::ostringstream fname;
                 fname << "transport_C_step"
                       << std::setw(4) << std::setfill('0') << step_count << ".vti";
-                writeNamedVTI_Auto("C", fname.str());
+                writeNamedVTI_Auto("C", path + fname.str());
             }
 
         } catch (const std::exception& e) {
