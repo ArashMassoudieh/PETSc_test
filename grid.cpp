@@ -2,6 +2,7 @@
 #include <algorithm> // std::transform
 #include <gsl/gsl_rng.h>
 #include <gsl/gsl_randist.h>
+#include <gsl/gsl_cdf.h>
 #include <cmath>
 #include <random>
 #include <limits>
@@ -24,13 +25,20 @@
 // If you want PETSc interop, include your wrappers here:
 #include "petscvector.h" // adjust include path to your project
 
+// Add to grid.cpp constructor (Grid2D::Grid2D):
+
 Grid2D::Grid2D(int nx, int ny, double Lx, double Ly)
     : nx_(nx), ny_(ny), Lx_(Lx), Ly_(Ly),
-    diffusion_coeff_(0.0), porosity_(0.1), c_left_(0.0)  // Default values
+    dx_(Lx/nx), dy_(Ly/ny),
+    diffusion_coeff_(0.0),
+    porosity_(1.0),
+    c_left_(0.0),
+    lc_(1.0),
+    lambda_x_(0.1),
+    lambda_y_(0.1),
+    pdf_field_name_("c_u"),
+    A(nullptr)
 {
-    assert(nx_ >= 2 && ny_ >= 2);
-    dx_ = Lx_ / (nx_);
-    dy_ = Ly_ / (ny_);
 }
 
 void Grid2D::forEachCell(const std::function<void(int,int)>& f) const {
@@ -1246,43 +1254,57 @@ void Grid2D::addTransportYTerms(int i, int j, double dt, double D, double porosi
     const double inv_dy  = 1.0 / DY;
     const double inv_dy2 = 1.0 / (DY*DY);
 
+    // Check if variable diffusion field exists
+    bool has_D_y = hasFlux("D_y");
+
+    // Get diffusion coefficients at faces
+    double D_south = D;  // default
+    double D_north = D;  // default
+
+    if (has_D_y) {
+        const auto& D_y_field = flux("D_y");
+        // D_y is stored at vertical faces: index = j * nx + i
+        if (j > 0) {
+            D_south = D_y_field[j * nx() + i];
+        }
+        if (j < NY) {
+            D_north = D_y_field[(j + 1) * nx() + i];
+        }
+    }
+
     // face velocities
     double v_south = (j > 0)     ? getVelocityY(i, j, porosity)   : 0.0;
     double v_north = (j < NY-1)  ? getVelocityY(i, j+1, porosity) : 0.0;
 
     // ---- Interior ----
     if (j > 0 && j < NY-1) {
-        double aS = std::max(v_south,0.0) * inv_dy + D*inv_dy2;
-        double aN = -std::min(v_north,0.0) * inv_dy + D*inv_dy2;
-
+        double aS = std::max(v_south, 0.0) * inv_dy + D_south * inv_dy2;
+        double aN = -std::min(v_north, 0.0) * inv_dy + D_north * inv_dy2;
         diag += aS + aN;
-
-        cols.push_back(cellToPetscIndex(i,j-1));
+        cols.push_back(cellToPetscIndex(i, j-1));
         vals.push_back(-aS);
-
-        cols.push_back(cellToPetscIndex(i,j+1));
+        cols.push_back(cellToPetscIndex(i, j+1));
         vals.push_back(-aN);
     }
     // ---- Bottom boundary ----
     else if (j == 0) {
-        double aN = -std::min(v_north,0.0) * inv_dy + D*inv_dy2;
+        double aN = -std::min(v_north, 0.0) * inv_dy + D_north * inv_dy2;
         diag += aN;
         if (NY > 1) {
-            cols.push_back(cellToPetscIndex(i,j+1));
+            cols.push_back(cellToPetscIndex(i, j+1));
             vals.push_back(-aN);
         }
         // no south face (Neumann)
     }
     // ---- Top boundary ----
     else if (j == NY-1) {
-        double aS = std::max(v_south,0.0) * inv_dy + D*inv_dy2;
+        double aS = std::max(v_south, 0.0) * inv_dy + D_south * inv_dy2;
         diag += aS;
-        cols.push_back(cellToPetscIndex(i,j-1));
+        cols.push_back(cellToPetscIndex(i, j-1));
         vals.push_back(-aS);
         // no north face (Neumann)
     }
 }
-
 
 void Grid2D::assembleTransportMatrix(PETScMatrix *A, double dt) const
 {
@@ -1438,7 +1460,8 @@ void Grid2D::SetVal(const std::string& prop, const double& value) {
 void Grid2D::SolveTransport(const double& t_end,
                             const double& dt,
                             const char* ksp_prefix,
-                            int output_interval)   // <-- new arg
+                            int output_interval,
+                            const std::string& output_dir)   // <-- new arg
 {
     if (t_end <= 0.0) throw std::runtime_error("SolveTransport: t_end must be positive");
     if (dt <= 0.0) throw std::runtime_error("SolveTransport: dt must be positive");
@@ -1495,7 +1518,7 @@ void Grid2D::SolveTransport(const double& t_end,
                 std::ostringstream fname;
                 fname << "transport_C_step"
                       << std::setw(4) << std::setfill('0') << step_count << ".vti";
-                writeNamedVTI_Auto("C", fname.str());
+                writeNamedVTI_Auto("C", output_dir+ "/" + fname.str());
             }
 
         } catch (const std::exception& e) {
@@ -1790,5 +1813,656 @@ TimeSeries<double> Grid2D::sampleGaussianPerturbation(
     return ts;
 }
 
+// Add to grid.cpp
+std::pair<double, double> Grid2D::getVelocityAt(double x, double y,
+                                                const std::string& qx_name,
+                                                const std::string& qy_name) const
+{
+    // Check bounds
+    if (x < 0.0 || x > Lx_ || y < 0.0 || y > Ly_) {
+        throw std::runtime_error("getVelocityAt: point (" + std::to_string(x) + ", "
+                                 + std::to_string(y) + ") is outside domain");
+    }
+
+    // Check if flux fields exist
+    if (!hasFlux(qx_name)) {
+        throw std::runtime_error("getVelocityAt: flux field '" + qx_name + "' not found");
+    }
+    if (!hasFlux(qy_name)) {
+        throw std::runtime_error("getVelocityAt: flux field '" + qy_name + "' not found");
+    }
+
+    // Get flux arrays - changed from const double* to const std::vector<double>&
+    const std::vector<double>& qx = flux(qx_name);
+    const std::vector<double>& qy = flux(qy_name);
+
+    // Find cell indices (which cell contains this point)
+    // Cell (i,j) has corners at (i*dx, j*dy) and ((i+1)*dx, (j+1)*dy)
+    int i = static_cast<int>(x / dx_);
+    int j = static_cast<int>(y / dy_);
+
+    // Clamp to valid cell indices
+    i = std::min(i, nx_ - 1);
+    j = std::min(j, ny_ - 1);
+
+    // Local coordinates within the cell [0,1] x [0,1]
+    double xi = (x - i * dx_) / dx_;   // normalized x position in cell
+    double eta = (y - j * dy_) / dy_;  // normalized y position in cell
+
+    // Clamp to [0,1] to handle boundary cases
+    xi = std::max(0.0, std::min(1.0, xi));
+    eta = std::max(0.0, std::min(1.0, eta));
+
+    // Interpolate qx (defined at x-faces)
+    // qx is defined at faces: left face of cell (i,j) and right face
+    // For cell (i,j):
+    //   - qx at left face (x = i*dx) has index: j*(nx_+1) + i
+    //   - qx at right face (x = (i+1)*dx) has index: j*(nx_+1) + (i+1)
+
+    double vx = 0.0;
+    if (i < nx_) {
+        // Bilinear interpolation for qx
+        // We need 4 qx values at the corners of a cell-centered grid
+        int idx_left = j * (nx_ + 1) + i;
+        int idx_right = j * (nx_ + 1) + (i + 1);
+
+        if (j < ny_ - 1) {
+            int idx_left_top = (j + 1) * (nx_ + 1) + i;
+            int idx_right_top = (j + 1) * (nx_ + 1) + (i + 1);
+
+            // Bilinear interpolation in eta direction first, then xi
+            double qx_bottom = (1.0 - xi) * qx[idx_left] + xi * qx[idx_right];
+            double qx_top = (1.0 - xi) * qx[idx_left_top] + xi * qx[idx_right_top];
+            vx = (1.0 - eta) * qx_bottom + eta * qx_top;
+        } else {
+            // On top boundary, only interpolate in xi direction
+            vx = (1.0 - xi) * qx[idx_left] + xi * qx[idx_right];
+        }
+    }
+
+    // Interpolate qy (defined at y-faces)
+    // qy is defined at faces: bottom face of cell (i,j) and top face
+    // For cell (i,j):
+    //   - qy at bottom face (y = j*dy) has index: j*nx_ + i
+    //   - qy at top face (y = (j+1)*dy) has index: (j+1)*nx_ + i
+
+    double vy = 0.0;
+    if (j < ny_) {
+        // Bilinear interpolation for qy
+        int idx_bottom = j * nx_ + i;
+        int idx_top = (j + 1) * nx_ + i;
+
+        if (i < nx_ - 1) {
+            int idx_bottom_right = j * nx_ + (i + 1);
+            int idx_top_right = (j + 1) * nx_ + (i + 1);
+
+            // Bilinear interpolation in xi direction first, then eta
+            double qy_left = (1.0 - eta) * qy[idx_bottom] + eta * qy[idx_top];
+            double qy_right = (1.0 - eta) * qy[idx_bottom_right] + eta * qy[idx_top_right];
+            vy = (1.0 - xi) * qy_left + xi * qy_right;
+        } else {
+            // On right boundary, only interpolate in eta direction
+            vy = (1.0 - eta) * qy[idx_bottom] + eta * qy[idx_top];
+        }
+    }
+
+    return std::make_pair(vx, vy);
+}
+
+// Standard normal PDF
+double Grid2D::phi(double z)
+{
+    return gsl_ran_gaussian_pdf(z, 1.0);
+}
+
+// Standard normal CDF
+double Grid2D::Phi(double z)
+{
+    return gsl_cdf_gaussian_P(z, 1.0);
+}
+
+// Inverse standard normal CDF (probit function)
+double Grid2D::Phi_inv(double u)
+{
+    // Clamp u to valid range (0, 1) to avoid numerical issues
+    if (u <= 0.0) u = 1e-10;
+    if (u >= 1.0) u = 1.0 - 1e-10;
+
+    return gsl_cdf_gaussian_Pinv(u, 1.0);
+}
+
+// Mixing kernel: κ(v) = v/lc + D/λ_x² + D/λ_y²
+double Grid2D::kappa(double v, double lc, double lambda_x, double lambda_y) const
+{
+    double D = diffusion_coeff_;  // Use the existing diffusion coefficient
+
+    double term1 = v / lc;
+    double term2 = D / (lambda_x * lambda_x);
+    double term3 = D / (lambda_y * lambda_y);
+
+    return term1 + term2 + term3;
+}
+
+// Set mixing parameters
+void Grid2D::setMixingParams(double lc, double lambda_x, double lambda_y)
+{
+    if (lc <= 0.0 || lambda_x <= 0.0 || lambda_y <= 0.0) {
+        throw std::runtime_error("setMixingParams: all parameters must be positive");
+    }
+
+    lc_ = lc;
+    lambda_x_ = lambda_x;
+    lambda_y_ = lambda_y;
+
+    std::cout << "Mixing parameters set:\n"
+              << "  lc = " << lc_ << "\n"
+              << "  lambda_x = " << lambda_x_ << "\n"
+              << "  lambda_y = " << lambda_y_ << "\n";
+}
+
+// Add to grid.cpp:
+
+void Grid2D::convertToUniformScore(const std::string& c_field_name,
+                                   const std::string& u_field_name)
+{
+    const auto& c_field = field(c_field_name);
+    auto& u_field = field(u_field_name);
+
+    if (c_field.empty()) {
+        throw std::runtime_error("convertToUniformScore: field " + c_field_name + " is empty");
+    }
+
+    const int N = numCells();
+
+    // Create sorted indices for ranking
+    std::vector<std::pair<double, int>> sorted_vals;
+    sorted_vals.reserve(N);
+
+    for (int i = 0; i < N; ++i) {
+        sorted_vals.push_back({c_field[i], i});
+    }
+
+    // Sort by concentration value
+    std::sort(sorted_vals.begin(), sorted_vals.end());
+
+    // Assign uniform scores based on rank
+    for (int rank = 0; rank < N; ++rank) {
+        int idx = sorted_vals[rank].second;
+        // Use (rank + 0.5) / N to avoid exactly 0 or 1
+        u_field[idx] = (rank + 0.5) / N;
+    }
+
+    std::cout << "Converted " << c_field_name << " to uniform scores in "
+              << u_field_name << std::endl;
+}
+
+void Grid2D::convertFromUniformScore(const std::string& u_field_name,
+                                     const std::string& c_field_name)
+{
+    const auto& u_field = field(u_field_name);
+    auto& c_field = field(c_field_name);
+
+    if (u_field.empty()) {
+        throw std::runtime_error("convertFromUniformScore: field " + u_field_name + " is empty");
+    }
+
+    const int N = numCells();
+
+    // For now, just convert using normal scores
+    // In practice, you'd need to store the original marginal distribution
+    for (int i = 0; i < N; ++i) {
+        double u = u_field[i];
+        // Clamp to valid range
+        u = std::max(1e-10, std::min(1.0 - 1e-10, u));
+
+        // Convert to normal score
+        c_field[i] = Phi_inv(u);
+    }
+
+    std::cout << "Converted uniform scores " << u_field_name
+              << " back to " << c_field_name << std::endl;
+}
+
+double Grid2D::velocityAtU(double x, double u) const
+{
+    // This requires interpolation from the flux field
+    // For now, we'll assume a simple approach where we find the y-location
+    // corresponding to u and then get velocity at (x, y)
+
+    // This is a placeholder - you'll need to implement proper interpolation
+    // based on your specific needs
+
+    throw std::runtime_error("velocityAtU: not yet implemented - need to map u to y");
+}
 
 
+void Grid2D::SolveMixingPDF(const double& t_end,
+                            const double& dt,
+                            const char* ksp_prefix,
+                            int output_interval,
+                            const std::string& output_dir)
+{
+    if (t_end <= 0.0) throw std::runtime_error("SolveMixingPDF: t_end must be positive");
+    if (dt <= 0.0) throw std::runtime_error("SolveMixingPDF: dt must be positive");
+    if (dt > t_end) throw std::runtime_error("SolveMixingPDF: dt cannot be larger than t_end");
+    if (!hasFlux("qx") || !hasFlux("qy"))
+        throw std::runtime_error("SolveMixingPDF: must call DarcySolve() first");
+
+
+
+    std::cout << "Mixing PDF parameters:\n"
+              << "  c_left = " << c_left_ << "\n"
+              << "  diffusion = " << diffusion_coeff_ << "\n"
+              << "  lc = " << lc_ << "\n"
+              << "  lambda_x = " << lambda_x_ << "\n"
+              << "  lambda_y = " << lambda_y_ << "\n\n";
+
+    // Helper function for output paths
+    auto makeOutputPath = [&output_dir](const std::string& filename) {
+        if (output_dir.empty()) return filename;
+        if (output_dir.back() == '/' || output_dir.back() == '\\') {
+            return output_dir + filename;
+        }
+        return output_dir + "/" + filename;
+    };
+
+    double current_time = 0.0;
+    int step_count = 0;
+    const int total_steps = static_cast<int>(std::ceil(t_end / dt));
+
+    std::cout << "Starting mixing PDF simulation:\n"
+              << "  End time: " << t_end << "\n"
+              << "  Time step: " << dt << "\n"
+              << "  Total steps: " << total_steps << "\n"
+              << "  Grid: " << nx_ << " x " << ny_ << " (x is spatial, y is u-space)\n\n";
+
+    // Initialize PDF field if not exists
+    pdf_field_name_ = "c_u";
+    if (!hasField(pdf_field_name_)) {
+        // Initialize with uniform distribution at left boundary
+        auto& c_u = field(pdf_field_name_);
+        for (int j = 0; j < ny_; ++j) {
+            for (int i = 0; i < nx_; ++i) {
+                int idx = j * nx_ + i;
+                if (i == 0) {
+                    // Left boundary: uniform distribution
+                    c_u[idx] = 1.0;  // ∫c_u du = 1
+                } else {
+                    c_u[idx] = 0.0;
+                }
+            }
+        }
+    }
+
+    // Assemble mixing PDF matrix
+    const int N = nx() * ny();
+    A = new PETScMatrix(N, N, 9);  // 9-point stencil for 2D with cross-derivatives
+    assembleMixingPDFMatrix(A, dt);
+
+    // Write initial state
+    writeNamedVTI_Auto(pdf_field_name_, makeOutputPath("mixing_pdf_step000.vti"));
+
+    while (current_time < t_end) {
+        double this_dt = dt;
+        try {
+            mixingPDFStep(this_dt, ksp_prefix);
+            step_count++;
+            current_time += this_dt;
+
+            const int progress_interval = std::max(1, std::min(100, total_steps / 10));
+            if (step_count % progress_interval == 0 || current_time >= t_end) {
+                double progress = (current_time / t_end) * 100.0;
+                std::cout << "Step " << step_count << "/" << total_steps
+                          << ", Time: " << std::fixed << std::setprecision(6) << current_time
+                          << " (" << std::setprecision(1) << progress << "%)\n";
+            }
+
+            // Write snapshots
+            if (output_interval > 0 && step_count % output_interval == 0) {
+                std::ostringstream fname;
+                fname << "mixing_pdf_step"
+                      << std::setw(4) << std::setfill('0') << step_count << ".vti";
+                writeNamedVTI_Auto(pdf_field_name_, makeOutputPath(fname.str()));
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Error in mixing PDF step " << step_count
+                      << " at time " << current_time << ": " << e.what() << std::endl;
+            throw;
+        }
+    }
+
+    std::cout << "\nMixing PDF simulation completed successfully!\n"
+              << "Final time: " << current_time << "\n"
+              << "Total steps taken: " << step_count << "\n";
+}
+
+void Grid2D::assembleMixingPDFMatrix(PETScMatrix* A, double dt)
+{
+    const auto& qx = flux("qx");
+    const auto& qy = flux("qy");
+    const double dx = dx_;
+    const double du = dy_;
+    const double D = diffusion_coeff_;
+    const double inv_dx = 1.0 / dx;
+    const double inv_dx2 = 1.0 / (dx * dx);
+
+    for (int j = 0; j < ny_; ++j) {
+        for (int i = 0; i < nx_; ++i) {
+            int idx = j * nx_ + i;
+            double u = static_cast<double>(j) / (ny_ - 1);
+
+            // Boundary conditions at u=0 and u=1
+            if (j == 0 || j == ny_ - 1) {
+                // Top/bottom in u-space: zero flux dc/du = 0
+                A->setValue(idx, idx, 1.0);
+                if (j == 0 && j + 1 < ny_) {
+                    A->setValue(idx, idx + nx_, -1.0);
+                } else if (j == ny_ - 1 && j - 1 >= 0) {
+                    A->setValue(idx, idx - nx_, -1.0);
+                }
+                continue;
+            }
+
+            // Right boundary: zero gradient dc/dx = 0
+            if (i == nx_ - 1) {
+                A->setValue(idx, idx, 1.0);
+                A->setValue(idx, idx - 1, -1.0);
+                continue;
+            }
+
+            // Interior AND left boundary (i=0) - treat the same way!
+            int idx_qx_left = j * (nx_ + 1) + i;
+            int idx_qx_right = j * (nx_ + 1) + i + 1;
+            double vx = 0.5 * (qx[idx_qx_left] + qx[idx_qx_right]);
+
+            // Get velocity at left face (for i=0, this is the ghost boundary)
+            double vx_west = (i > 0) ? qx[idx_qx_left] : qx[idx_qx_left];
+            double vx_east = qx[idx_qx_right];
+
+            // Calculate φ[Φ^{-1}(u)]
+            double z = Phi_inv(u);
+            double phi_z = phi(z);
+            double phi_z_sq = phi_z * phi_z;
+
+            // Calculate κ(v)
+            double kappa_v = kappa(vx, lc_, lambda_x_, lambda_y_);
+
+            // Diffusion coefficient in u-space
+            double D_u = phi_z_sq * kappa_v;
+
+            double beta_x = dt * D / (dx * dx);
+            double beta_u = dt * D_u / (du * du);
+
+            // Diagonal term
+            double diag = 1.0;
+
+            // X-direction advection-diffusion
+            if (i == 0) {
+                // Left boundary - ghost cell approach
+                diag += std::max(vx_east, 0.0) * dt * inv_dx    // outflow east
+                        - std::min(vx_west, 0.0) * dt * inv_dx   // inflow from ghost
+                        + 2.0 * beta_x;                          // diffusion
+
+                // East neighbor
+                double coeff_east = - ( -std::min(vx_east, 0.0) * dt * inv_dx + beta_x );
+                A->setValue(idx, idx + 1, -coeff_east);
+
+            } else {
+                // Interior: upwind advection
+                double alpha_xm, alpha_xp;
+                if (vx_west > 0) {
+                    alpha_xm = vx_west * dt * inv_dx + beta_x;
+                    alpha_xp = -beta_x;
+                } else {
+                    alpha_xm = beta_x;
+                    alpha_xp = -vx_west * dt * inv_dx - beta_x;
+                }
+
+                diag += alpha_xm + alpha_xp;
+                A->setValue(idx, idx - 1, -alpha_xm);
+                A->setValue(idx, idx + 1, -alpha_xp);
+            }
+
+            // U-direction diffusion (central differences)
+            diag += 2.0 * beta_u;
+            A->setValue(idx, idx - nx_, -beta_u);
+            A->setValue(idx, idx + nx_, -beta_u);
+
+            if (i == 0 && j >= 1 && j <= 3) {
+                double coeff_east = - ( -std::min(vx_east, 0.0) * dt * inv_dx + beta_x );
+                std::cout << "Matrix i=0, j=" << j
+                          << ", vx_west=" << vx_west
+                          << ", vx_east=" << vx_east
+                          << ", diag (FINAL)=" << diag
+                          << ", coeff_east=" << coeff_east
+                          << ", beta_u=" << beta_u
+                          << std::endl;
+            }
+
+            A->setValue(idx, idx, diag);
+        }
+    }
+    A->assemble();
+}
+
+void Grid2D::mixingPDFStep(double dt, const char* ksp_prefix)
+{
+    auto& c_u = field(pdf_field_name_);
+    const int N = numCells();
+    const auto& qx = flux("qx");
+    const double dx = dx_;
+    const double inv_dx = 1.0 / dx;
+    const double inv_dx2 = 1.0 / (dx * dx);
+    const double D = diffusion_coeff_;
+
+
+    // Debug: Check current state
+    double sum_before = 0.0;
+    for (int i = 0; i < N; ++i) {
+        sum_before += c_u[i];
+    }
+    std::cout << "  Before solve: sum(c_u) = " << sum_before << std::endl;
+
+    // Create RHS vector
+    PETScVector b(N);
+
+    static int step_count = 0;
+    for (int j = 0; j < ny_; ++j) {
+        for (int i = 0; i < nx_; ++i) {
+            int idx = j * nx_ + i;
+            double rhs = c_u[idx];  // Current concentration
+
+            if (i == nx_ - 1) {
+                rhs = 0.0;  // RHS for constraint equation
+                b.setValue(idx, rhs);
+                continue;
+            }
+
+            // Add boundary contribution at i=0
+            if (i == 0) {
+                int idx_qx_left = j * (nx_ + 1);
+                double vx_west = qx[idx_qx_left];
+
+                // **ADD DEBUG HERE**
+                if (step_count < 1) {
+                    double adv_contrib = std::max(vx_west, 0.0) * dt * inv_dx;
+                    double diff_contrib = 2.0 * D * dt * inv_dx2;
+                    std::cout << "  j=" << j << ", vx_west=" << vx_west
+                              << ", c_u[" << idx << "]=" << c_u[idx]  // <-- ADD THIS
+                              << ", adv_contrib=" << adv_contrib
+                              << ", diff_contrib=" << diff_contrib
+                              << ", total_contrib=" << (adv_contrib + diff_contrib) * c_left_
+                              << std::endl;
+                }
+
+                // Advection inflow from ghost
+                rhs += (std::max(vx_west, 0.0) * dt * inv_dx) * c_left_;
+                // Diffusion from ghost
+                rhs += (2.0 * D * dt * inv_dx2) * c_left_;
+            }
+            b.setValue(idx, rhs);
+        }
+    }
+    b.assemble();
+
+    // **DEBUG: Print the RHS for the first few steps**
+
+    if (step_count < 3) {
+        std::cout << "\n  === RHS vector (step " << step_count << ") ===" << std::endl;
+        std::vector<PetscInt> idx(N);
+        std::vector<PetscScalar> vals(N);
+        for (int i = 0; i < N; ++i) idx[i] = i;
+        PetscCallAbort(PETSC_COMM_WORLD, VecGetValues(b.raw(), N, idx.data(), vals.data()));
+
+        for (int j = 0; j < ny_; ++j) {
+            for (int i = 0; i < nx_; ++i) {
+                int ii = j * nx_ + i;
+                std::cout << std::setw(8) << std::setprecision(3) << vals[ii] << " ";
+            }
+            std::cout << std::endl;
+        }
+
+        // Also print the solution after solving
+        PETScVector x(N);
+        A->solve(b, x, ksp_prefix);
+
+        std::cout << "\n  === Solution vector (step " << step_count << ") ===" << std::endl;
+        std::vector<PetscScalar> vals_x(N);
+        PetscCallAbort(PETSC_COMM_WORLD, VecGetValues(x.raw(), N, idx.data(), vals_x.data()));
+
+        for (int j = 0; j < ny_; ++j) {
+            for (int i = 0; i < nx_; ++i) {
+                int ii = j * nx_ + i;
+                std::cout << std::setw(8) << std::setprecision(3) << vals_x[ii] << " ";
+            }
+            std::cout << std::endl;
+        }
+        std::cout << std::endl;
+
+        // Extract solution and update field
+        for (int i = 0; i < N; ++i) {
+            c_u[i] = vals_x[i];
+        }
+
+        step_count++;
+    } else {
+        // Normal solve without debug output
+        PETScVector x(N);
+        A->solve(b, x, ksp_prefix);
+
+        // Extract solution and update field
+        std::vector<PetscInt> idx(N);
+        std::vector<PetscScalar> vals_x(N);
+        for (int i = 0; i < N; ++i) idx[i] = i;
+        PetscCallAbort(PETSC_COMM_WORLD, VecGetValues(x.raw(), N, idx.data(), vals_x.data()));
+
+        for (int i = 0; i < N; ++i) {
+            c_u[i] = vals_x[i];
+        }
+    }
+
+    // Debug: Check new state and compute change
+    double sum_after = 0.0;
+    for (int i = 0; i < N; ++i) {
+        sum_after += c_u[i];
+    }
+    double change = sum_after - sum_before;
+    std::cout << "  After solve: sum(c_u) = " << sum_after << std::endl;
+    std::cout << "  Change: " << change << std::endl;
+}
+
+
+TimeSeries<double> Grid2D::extractFieldCDF(const std::string& field_name, ArrayKind kind, int num_bins) const
+{
+    // First, export field to TimeSeries
+    TimeSeries<double> field_data = exportFieldToTimeSeries(field_name, kind);
+
+    // Get the PDF using the distribution() function
+    TimeSeries<double> pdf = field_data.distribution(num_bins,0);
+
+    // Integrate PDF to get CDF, but store as inverse CDF for interpolation
+    // We want: time = cumulative probability (u), value = field value
+    TimeSeries<double> inverse_cdf;
+    inverse_cdf.reserve(pdf.size());
+
+    double cumulative = 0.0;
+    double total_prob = 0.0;
+
+    // First pass: compute total to normalize
+    for (size_t i = 0; i < pdf.size(); ++i) {
+        total_prob += pdf.getValue(i);
+    }
+
+    // Second pass: compute inverse CDF (cumulative prob -> value)
+    for (size_t i = 0; i < pdf.size(); ++i) {
+        cumulative += pdf.getValue(i) / total_prob;
+        // Store: time = u (cumulative prob), value = field value
+        inverse_cdf.addPoint(cumulative, pdf.getTime(i));
+    }
+
+    return inverse_cdf;
+}
+
+double Grid2D::getFieldValueAtCDF(const std::string& field_name, ArrayKind kind, double u) const
+{
+    TimeSeries<double> inverse_cdf = extractFieldCDF(field_name, kind);
+    return inverse_cdf.interpol(u);
+}
+
+void Grid2D::computeMixingDiffusionCoefficient()
+{
+    // Create or get the D_y flux array
+    // D_y is located at vertical faces: (nx) × (ny+1)
+    if (!hasFlux("D_y")) {
+        std::vector<double> D_y_data(nx_ * (ny_ + 1), 0.0);
+        fluxes_["D_y"] = D_y_data;
+    }
+
+    auto& D_y = flux("D_y");
+
+    // For each vertical face
+    for (int j = 0; j <= ny_; ++j) {
+        for (int i = 0; i < nx_; ++i) {
+            int idx = j * nx_ + i;
+
+            // Compute u at this face (same as for q_y)
+            double u;
+            if (j == 0) {
+                u = 0.0;
+            } else if (j == ny_) {
+                u = 1.0;
+            } else {
+                // Average of cells above and below
+                u = static_cast<double>(j - 0.5) / (ny_ - 1);
+            }
+
+            // Get velocity at this location (average from neighboring cells)
+            double vx;
+            if (i == 0) {
+                // At left boundary, use velocity from first cell
+                int idx_qx = j * (nx_ + 1);
+                vx = flux("qx")[idx_qx];
+            } else if (i == nx_ - 1) {
+                // At right boundary, use velocity from last cell
+                int idx_qx = j * (nx_ + 1) + nx_;
+                vx = flux("qx")[idx_qx];
+            } else {
+                // Interior: average from left and right faces
+                int idx_qx_left = j * (nx_ + 1) + i;
+                int idx_qx_right = j * (nx_ + 1) + i + 1;
+                vx = 0.5 * (flux("qx")[idx_qx_left] + flux("qx")[idx_qx_right]);
+            }
+
+            // Compute phi(Phi^{-1}(u))
+            double z = Phi_inv(u);
+            double phi_z = phi(z);
+            double phi_z_sq = phi_z * phi_z;
+
+            // Compute kappa(v)
+            double kappa_v = kappa(vx, lc_, lambda_x_, lambda_y_);
+
+            // Compute D_y = phi^2(z) * kappa(v)
+            D_y[idx] = phi_z_sq * kappa_v;
+        }
+    }
+}

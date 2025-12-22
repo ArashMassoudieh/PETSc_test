@@ -218,6 +218,11 @@ public:
     void unpackFieldFromPETSc(const PETScVector& v, const std::string& fieldName);
 
     // grid.h  (inside class Grid2D)
+
+    // Add to grid.h (in the public section of Grid2D class)
+    std::pair<double, double> getVelocityAt(double x, double y,
+                                            const std::string& qx_name = "qx",
+                                            const std::string& qy_name = "qy") const;
 public:
     struct NeighborSet {
         std::vector<std::size_t> idx;   // global linear cell indices (j*nx_ + i)
@@ -375,7 +380,7 @@ public:
     double getPorosity() const { return porosity_; }
     double getLeftBC() const { return c_left_; }
 
-    void SolveTransport(const double& t_end, const double& dt, const char* ksp_prefix = nullptr, int output_interval = 1);
+    void SolveTransport(const double& t_end, const double& dt, const char* ksp_prefix = nullptr, int output_interval = 1, const std::string& output_dir = "");
 
     void printSampleC(const std::vector<std::pair<int,int>>& pts) const;
 
@@ -474,6 +479,71 @@ public:
                             bool flipY = false) const;
 #endif // GRID_USE_VTK
 
+    // Add to grid.h - in the Grid2D class public section:
+
+    // Normal distribution functions (using GSL)
+    static double phi(double z);           // Standard normal PDF
+    static double Phi(double z);           // Standard normal CDF
+    static double Phi_inv(double u);       // Inverse standard normal CDF (probit)
+
+    // Mixing kernel
+    double kappa(double v, double lc, double lambda_x, double lambda_y) const;
+
+    // Parameters for mixing equation
+    void setMixingParams(double lc, double lambda_x, double lambda_y);
+    double lc() const { return lc_; }
+    double lambda_x() const { return lambda_x_; }
+    double lambda_y() const { return lambda_y_; }
+
+    // Add to grid.h public section:
+
+    // Convert concentration field to uniform scores (u-space)
+    void convertToUniformScore(const std::string& c_field_name,
+                               const std::string& u_field_name);
+
+    // Convert uniform scores back to concentration
+    void convertFromUniformScore(const std::string& u_field_name,
+                                 const std::string& c_field_name);
+
+    // Get velocity at a given u-value (for advection in u-space)
+    double velocityAtU(double x, double u) const;
+
+    // Solve mixing PDF equation in (x,u) space
+    void SolveMixingPDF(const double& t_end,
+                        const double& dt,
+                        const char* ksp_prefix,
+                        int output_interval = 0,
+                        const std::string& output_dir = "");
+
+    // Assemble the mixing PDF matrix
+    void assembleMixingPDFMatrix(PETScMatrix* A, double dt);
+
+    // Single time step for mixing PDF
+    void mixingPDFStep(double dt, const char* ksp_prefix);
+
+    // Add to grid.h - public section:
+
+    /**
+     * @brief Extract empirical CDF from a field by integrating the PDF
+     * @param field_name Name of the field
+     * @param kind Field kind (Cell, Fx, Fy)
+     * @param num_bins Number of bins for the distribution
+     * @return TimeSeries where time=value and value=cumulative probability
+     */
+    TimeSeries<double> extractFieldCDF(const std::string& field_name, ArrayKind kind, int num_bins = 100) const;
+
+    /**
+    * @brief Get field value at a given cumulative probability
+    * @param field_name Name of the field
+    * @param kind Field kind (Cell, Fx, Fy)
+    * @param u Cumulative probability [0,1]
+    * @return Field value at probability u
+    */
+    double getFieldValueAtCDF(const std::string& field_name, ArrayKind kind, double u) const;
+
+
+    void computeMixingDiffusionCoefficient();
+
 private:
     int nx_, ny_;
     double Lx_, Ly_, dx_, dy_;
@@ -482,9 +552,13 @@ private:
     double diffusion_coeff_;     // Diffusion coefficient D
     double porosity_;           // Porosity
     double c_left_;            // Left boundary concentration
-
+    double lc_;          // Correlation length scale
+    double lambda_x_;    // Transverse dispersion length in x
+    double lambda_y_;    // Transverse dispersion length in y
     // Registry of cell-centered scalar fields by name
     std::unordered_map<std::string, std::vector<double>> fields_;
+
+    std::string pdf_field_name_;
 
     // fluxes (can be per-cell, per-face, or per-interface depending on convention)
     std::unordered_map<std::string, std::vector<double>> fluxes_;

@@ -17,6 +17,9 @@ SOURCES += main.cpp \
     Matrix.cpp \
     Matrix_arma.cpp \
     NormalDist.cpp \
+    Particle.cpp \
+    Pathway.cpp \
+    PathwaySet.cpp \
     Utilities.cpp \
     Vector.cpp \
     Vector_arma.cpp \
@@ -52,6 +55,9 @@ HEADERS += \
     Matrix.h \
     Matrix_arma.h \
     NormalDist.h \
+    Particle.h \
+    Pathway.h \
+    PathwaySet.h \
     TimeSeries.h \
     TimeSeries.hpp \
     TimeSeriesSet.h \
