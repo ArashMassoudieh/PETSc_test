@@ -11,18 +11,19 @@ VTKBUILDPATH = /home/arash/Projects/VTK-9.4.1/build
 VTKHEADERPATH = /home/arash/Projects/VTK-9.4.1
 VTK_V = -9.4
 
-
+INCLUDEPATH += Utilities
 
 SOURCES += main.cpp \
-    Matrix.cpp \
-    Matrix_arma.cpp \
-    NormalDist.cpp \
+    Utilities/Matrix.cpp \
+    Utilities/Matrix_arma.cpp \
+    Utilities/NormalDist.cpp \
     Particle.cpp \
     Pathway.cpp \
     PathwaySet.cpp \
-    Utilities.cpp \
-    Vector.cpp \
-    Vector_arma.cpp \
+    Utilities/QuickSort.cpp \
+    Utilities/Utilities.cpp \
+    Utilities/Vector.cpp \
+    Utilities/Vector_arma.cpp \
     grid.cpp \
     petscmatrix.cpp \
     petscsolver.cpp \
@@ -52,19 +53,20 @@ QMAKE_LFLAGS += -Wl,-rpath,$$PETSC_DIR/$$PETSC_ARCH/lib
 QMAKE_CXXFLAGS += -Wall -Wextra -Wpedantic
 
 HEADERS += \
-    Matrix.h \
-    Matrix_arma.h \
-    NormalDist.h \
+    Utilities/Matrix.h \
+    Utilities/Matrix_arma.h \
+    Utilities/NormalDist.h \
     Particle.h \
     Pathway.h \
     PathwaySet.h \
-    TimeSeries.h \
-    TimeSeries.hpp \
-    TimeSeriesSet.h \
-    TimeSeriesSet.hpp \
-    Utilities.h \
-    Vector.h \
-    Vector_arma.h \
+    Utilities/QuickSort.h \
+    Utilities/TimeSeries.h \
+    Utilities/TimeSeries.hpp \
+    Utilities/TimeSeriesSet.h \
+    Utilities/TimeSeriesSet.hpp \
+    Utilities/Utilities.h \
+    Utilities/Vector.h \
+    Utilities/Vector_arma.h \
     grid.h \
     petsc_init.h \
     petscmatrix.h \

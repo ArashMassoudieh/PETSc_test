@@ -6,11 +6,20 @@
 #include <cassert>
 #include <cstddef>
 #include <petscsys.h>
+#include "TimeSeriesSet.h"
 
 class PETScMatrix;
 
-template<typename T>
-class TimeSeries;
+
+enum class PerturbDir {
+    Radial,
+    XOnly,
+    YOnly
+};
+
+
+class PETScVector; // fwd-decl to match your wrapper name via include order
+
 
 /**
  * @file grid.h
@@ -33,15 +42,6 @@ class TimeSeries;
  * you’ll find at the bottom (declared but if you don’t include petsc headers,
  * they will be compiled only in grid.cpp where PETSc headers are present).
  */
-
-enum class PerturbDir {
-    Radial,
-    XOnly,
-    YOnly
-};
-
-
-class PETScVector; // fwd-decl to match your wrapper name via include order
 
 class Grid2D {
 public:
@@ -380,7 +380,7 @@ public:
     double getPorosity() const { return porosity_; }
     double getLeftBC() const { return c_left_; }
 
-    void SolveTransport(const double& t_end, const double& dt, const char* ksp_prefix = nullptr, int output_interval = 1, const std::string& output_dir = "");
+    void SolveTransport(const double& t_end, const double& dt, const char* ksp_prefix = nullptr, int output_interval = 1, const std::string& output_dir = "", const std::string& filename = "", TimeSeriesSet<double>* btc_data = nullptr);
 
     void printSampleC(const std::vector<std::pair<int,int>>& pts) const;
 
@@ -521,9 +521,7 @@ public:
     // Single time step for mixing PDF
     void mixingPDFStep(double dt, const char* ksp_prefix);
 
-    // Add to grid.h - public section:
-
-    /**
+     /**
      * @brief Extract empirical CDF from a field by integrating the PDF
      * @param field_name Name of the field
      * @param kind Field kind (Cell, Fx, Fy)
@@ -544,6 +542,13 @@ public:
 
     void computeMixingDiffusionCoefficient();
 
+    double getFieldValueAt(const std::string& property_name, double x, double y) const;
+    double getAverageAlongY(const std::string& property_name, double x) const;
+
+    void setBTCLocations(const std::vector<double>& locations);
+    const std::vector<double>& getBTCLocations() const;
+    std::vector<double>& getBTCLocations();
+
 private:
     int nx_, ny_;
     double Lx_, Ly_, dx_, dy_;
@@ -555,6 +560,8 @@ private:
     double lc_;          // Correlation length scale
     double lambda_x_;    // Transverse dispersion length in x
     double lambda_y_;    // Transverse dispersion length in y
+    std::vector<double> BTCLocations_; // Breakthrough curve monitoring locations
+
     // Registry of cell-centered scalar fields by name
     std::unordered_map<std::string, std::vector<double>> fields_;
 

@@ -66,9 +66,9 @@ int main(int argc, char** argv) {
     std::string output_dir = "/home/arash/Projects/UpscalingResults";
 
 
-    int nx = 50;   // Very coarse for debugging
-    int nu = 10;    // Very coarse for debugging
-    int ny = 10;    // Very coarse for debugging
+    int nx = 300;   // Very coarse for debugging
+    int nu = 100;    // Very coarse for debugging
+    int ny = 100;    // Very coarse for debugging
     double Lx = 3.0;
     double Ly = 1.0;
 
@@ -124,12 +124,15 @@ int main(int argc, char** argv) {
     g.writeNamedMatrix("qy", Grid2D::ArrayKind::Fy, joinPath(output_dir, "qy.txt"));
     g.writeNamedMatrix("K", Grid2D::ArrayKind::Cell, joinPath(output_dir, "K.txt"));
 
-    g.SetVal("diffusion", 0.0);
+    g.SetVal("diffusion", 0.01);
     g.SetVal("porosity", 1);
     g.SetVal("c_left", 1.0);
-    g.SolveTransport(10, std::min(dt_optimal, 0.5/10.0), "transport_", 50, output_dir);
+    std::vector<double> xLocations{0.5, 1.5, 2.5};
+    g.setBTCLocations(xLocations);
+    TimeSeriesSet<double> BTCs_FineScaled;
+    g.SolveTransport(10, std::min(dt_optimal, 0.5/10.0), "transport_", 50, output_dir, "C", &BTCs_FineScaled);
     g.writeNamedVTI_Auto("C", joinPath(output_dir, "C.vti"));
-
+    BTCs_FineScaled.write(joinPath(output_dir, "BTC_FileScaled.csv"));
     PetscTime(&t_total1);
 
     Pathway path(0);
@@ -256,12 +259,12 @@ int main(int argc, char** argv) {
     // ====================================================================
     std::cout << "\n=== Setting mixing parameters ===" << std::endl;
 
-    double lc = 1e9;        // Correlation length scale
-    double lambda_x = 1e9; // Transverse dispersion length in x
-    double lambda_y = 1e9; // Transverse dispersion length in y
+    double lc = 0.05;        // Correlation length scale
+    double lambda_x = 1; // Transverse dispersion length in x
+    double lambda_y = 0.1; // Transverse dispersion length in y
 
     g_u.setMixingParams(lc, lambda_x, lambda_y);
-    g_u.SetVal("diffusion", 0.001);  // Molecular diffusion
+    g_u.SetVal("diffusion", 0.01);  // Molecular diffusion
     g_u.SetVal("porosity", 1.0);
     g_u.SetVal("c_left", 1.0);       // Uniform PDF at inlet
 
@@ -279,7 +282,10 @@ int main(int argc, char** argv) {
     g_u.writeNamedVTI("D_y", Grid2D::ArrayKind::Fy, joinPath(output_dir, "D_y.vti"));
     std::cout << "\n=== Solving ===" << std::endl;
     g_u.assignConstant("C", Grid2D::ArrayKind::Cell, 0);
-    g_u.SolveTransport(t_end_pdf, dt_pdf, "Cu_", output_interval_pdf, output_dir);
+    TimeSeriesSet<double> BTCs_Upscaled;
+    g_u.setBTCLocations(xLocations);
+    g_u.SolveTransport(t_end_pdf, dt_pdf, "transport_", output_interval_pdf, output_dir, "Cu",&BTCs_Upscaled);
+    BTCs_Upscaled.write(joinPath(output_dir, "BTC_Upscaled.csv"));
 
     // ====================================================================
     // STEP 8: Save final PDF distribution

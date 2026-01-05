@@ -1219,7 +1219,7 @@ void Grid2D::addTransportXTerms(int i, int j, double dt, double D, double porosi
         // Diagonal: east outflow + contribution from ghost (-c0 term) + diffusion
         diag += std::max(u_east, 0.0) * inv_dx    // outflow east
                 - std::min(u_west, 0.0) * inv_dx    // inflow from west ghost
-                + 2.0 * D * inv_dx2;                // diffusion: (2cL - c0 - 2c0 + c1)
+                + 3.0 * D * inv_dx2;                // diffusion: (2cL - c0 - 2c0 + c1)
 
         // East neighbor (negative)
         if (NX > 1) {
@@ -1461,12 +1461,13 @@ void Grid2D::SolveTransport(const double& t_end,
                             const double& dt,
                             const char* ksp_prefix,
                             int output_interval,
-                            const std::string& output_dir)   // <-- new arg
+                            const std::string& output_dir,
+                            const std::string& filename,
+                            TimeSeriesSet<double>* btc_data)   // <-- new arg
 {
     if (t_end <= 0.0) throw std::runtime_error("SolveTransport: t_end must be positive");
     if (dt <= 0.0) throw std::runtime_error("SolveTransport: dt must be positive");
     if (dt > t_end) throw std::runtime_error("SolveTransport: dt cannot be larger than t_end");
-
     if (!hasFlux("qx") || !hasFlux("qy"))
         throw std::runtime_error("SolveTransport: must call DarcySolve() first");
 
@@ -1474,6 +1475,23 @@ void Grid2D::SolveTransport(const double& t_end,
               << "  c_left = " << c_left_ << "\n"
               << "  diffusion = " << diffusion_coeff_ << "\n"
               << "  porosity = " << porosity_ << "\n\n";
+
+    // Initialize breakthrough curve recording if requested
+    bool record_btc = (btc_data != nullptr && !BTCLocations_.empty());
+    if (record_btc) {
+        // Resize TimeSeriesSet to match number of BTC locations
+        btc_data->resize(BTCLocations_.size());
+
+        // Set names for each series based on x-location
+        for (size_t i = 0; i < BTCLocations_.size(); i++) {
+            std::ostringstream name;
+            name << "x=" << std::fixed << std::setprecision(2) << BTCLocations_[i];
+            btc_data->setSeriesName(i, name.str());
+        }
+
+        std::cout << "Recording breakthrough curves at " << BTCLocations_.size()
+                  << " locations\n";
+    }
 
     double current_time = 0.0;
     int step_count = 0;
@@ -1492,8 +1510,27 @@ void Grid2D::SolveTransport(const double& t_end,
     A = new PETScMatrix(N, N, 5);
     assembleTransportMatrix(A, dt);
 
+    std::string filename_;
+    if (filename == "")
+        filename_ = "transport_C";
+    else
+        filename_ = filename;
+
     // Write initial state
-    writeNamedVTI_Auto("C", "transport_C_step000.vti");
+    writeNamedVTI_Auto("C", output_dir + "/" + filename_ + "0000.vti");
+
+    // Record initial BTC values (t=0)
+    if (record_btc) {
+        std::vector<double> btc_values;
+        btc_values.reserve(BTCLocations_.size());
+
+        for (size_t i = 0; i < BTCLocations_.size(); i++) {
+            double avg = getAverageAlongY("C", BTCLocations_[i]);
+            btc_values.push_back(avg);
+        }
+
+        btc_data->append(current_time, btc_values);
+    }
 
     while (current_time < t_end) {
         double this_dt = dt;
@@ -1502,6 +1539,19 @@ void Grid2D::SolveTransport(const double& t_end,
             transportStep(this_dt, ksp_prefix);
             step_count++;
             current_time += this_dt;
+
+            // Record breakthrough curves at this timestep
+            if (record_btc) {
+                std::vector<double> btc_values;
+                btc_values.reserve(BTCLocations_.size());
+
+                for (size_t i = 0; i < BTCLocations_.size(); i++) {
+                    double avg = getAverageAlongY("C", BTCLocations_[i]);
+                    btc_values.push_back(avg);
+                }
+
+                btc_data->append(current_time, btc_values);
+            }
 
             const int progress_interval = std::max(1, std::min(100, total_steps / 10));
             if (step_count % progress_interval == 0 || current_time >= t_end) {
@@ -1516,11 +1566,10 @@ void Grid2D::SolveTransport(const double& t_end,
             // Write snapshots
             if (output_interval > 0 && step_count % output_interval == 0) {
                 std::ostringstream fname;
-                fname << "transport_C_step"
+                fname << filename_
                       << std::setw(4) << std::setfill('0') << step_count << ".vti";
                 writeNamedVTI_Auto("C", output_dir+ "/" + fname.str());
             }
-
         } catch (const std::exception& e) {
             std::cerr << "Error in transport step " << step_count
                       << " at time " << current_time << ": " << e.what() << std::endl;
@@ -1531,6 +1580,10 @@ void Grid2D::SolveTransport(const double& t_end,
     std::cout << "\nTransport simulation completed successfully!\n"
               << "Final time: " << current_time << "\n"
               << "Total steps taken: " << step_count << "\n";
+
+    if (record_btc) {
+        std::cout << "Recorded " << (*btc_data)[0].size() << " time points for breakthrough curves\n";
+    }
 
     if (hasField("C")) {
         const double mean_c = fieldMean("C", ArrayKind::Cell);
@@ -2465,4 +2518,82 @@ void Grid2D::computeMixingDiffusionCoefficient()
             D_y[idx] = phi_z_sq * kappa_v;
         }
     }
+}
+
+double Grid2D::getFieldValueAt(const std::string& field_name, double x, double y) const
+{
+    // Check if field exists
+    auto it = fields_.find(field_name);
+    if (it == fields_.end()) {
+        throw std::runtime_error("Field '" + field_name + "' not found");
+    }
+
+    // Check bounds
+    if (x < 0.0 || x > Lx_ || y < 0.0 || y > Ly_) {
+        throw std::out_of_range("Coordinates out of domain range in getFieldValueAt");
+    }
+
+    // Find grid indices that bracket (x,y)
+    double xi = x / dx_;
+    double yj = y / dy_;
+
+    int i0 = static_cast<int>(std::floor(xi));
+    int j0 = static_cast<int>(std::floor(yj));
+    int i1 = std::min(i0 + 1, nx_ - 1);
+    int j1 = std::min(j0 + 1, ny_ - 1);
+
+    // Interpolation weights
+    double alpha_x = xi - i0;
+    double alpha_y = yj - j0;
+
+    // Bilinear interpolation
+    const auto& field = it->second;
+    double val00 = field[idx(i0, j0)];
+    double val10 = field[idx(i1, j0)];
+    double val01 = field[idx(i0, j1)];
+    double val11 = field[idx(i1, j1)];
+
+    double val_y0 = (1.0 - alpha_x) * val00 + alpha_x * val10;
+    double val_y1 = (1.0 - alpha_x) * val01 + alpha_x * val11;
+
+    return (1.0 - alpha_y) * val_y0 + alpha_y * val_y1;
+}
+
+double Grid2D::getAverageAlongY(const std::string& field_name, double x) const
+{
+    // Check if field exists
+    auto it = fields_.find(field_name);
+    if (it == fields_.end()) {
+        throw std::runtime_error("Field '" + field_name + "' not found");
+    }
+
+    // Check x bounds
+    if (x < 0.0 || x > Lx_) {
+        throw std::out_of_range("x coordinate out of domain range in getAverageAlongY");
+    }
+
+    // Sample along y at ny_ points
+    double sum = 0.0;
+
+    for (int j = 0; j < ny_; j++) {
+        double y = j * dy_;
+        sum += getFieldValueAt(field_name, x, y);
+    }
+
+    return sum / static_cast<double>(ny_);
+}
+
+void Grid2D::setBTCLocations(const std::vector<double>& locations)
+{
+    BTCLocations_ = locations;
+}
+
+const std::vector<double>& Grid2D::getBTCLocations() const
+{
+    return BTCLocations_;
+}
+
+std::vector<double>& Grid2D::getBTCLocations()
+{
+    return BTCLocations_;
 }
