@@ -7,12 +7,12 @@
 #include <iostream>
 
 Pathway::Pathway()
-    : id_(-1)
+    : id_(-1), uniform_x_(false), uniform_x_checked_(false)
 {
 }
 
 Pathway::Pathway(int id)
-    : id_(id)
+    : id_(id), uniform_x_(false), uniform_x_checked_(false)
 {
 }
 
@@ -383,4 +383,151 @@ void Pathway::trackParticle(Grid2D* grid, double dx_step,
                   << max_steps << ") for pathway " << id_ << std::endl;
         current.setActive(false);
     }
+    setUniformX(true);
+}
+
+bool Pathway::isUniformX(double tolerance) const
+{
+    if (particles_.size() < 3) {
+        return true;  // Too few points to be non-uniform
+    }
+
+    // Check if we've already computed this
+    if (uniform_x_checked_) {
+        return uniform_x_;
+    }
+
+    // Sample only first 10 increments (or fewer if pathway is short)
+    size_t n_samples = std::min(size_t(10), particles_.size() - 1);
+
+    // Get first increment as reference
+    double dx_ref = particles_[1].x() - particles_[0].x();
+
+    // Check if all sampled increments match the reference
+    for (size_t i = 1; i < n_samples; ++i) {
+        double dx = particles_[i+1].x() - particles_[i].x();
+        if (std::abs(dx - dx_ref) > tolerance) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void Pathway::cacheUniformXStatus(double tolerance)
+{
+    uniform_x_ = isUniformX(tolerance);
+    uniform_x_checked_ = true;
+}
+
+Particle Pathway::interpolateAtX(double target_x, double tolerance) const
+{
+    if (particles_.empty()) {
+        throw std::runtime_error("interpolateAtX: pathway is empty");
+    }
+
+    if (particles_.size() == 1) {
+        return particles_[0];
+    }
+
+    // Check if target_x is within pathway bounds
+    double x_min = particles_.front().x();
+    double x_max = particles_.back().x();
+
+    if (target_x < x_min - tolerance || target_x > x_max + tolerance) {
+        throw std::runtime_error("interpolateAtX: target_x outside pathway bounds");
+    }
+
+    // Clamp to bounds if very close
+    if (target_x < x_min) target_x = x_min;
+    if (target_x > x_max) target_x = x_max;
+
+    size_t i1, i2;
+
+    if (uniform_x_ && uniform_x_checked_) {
+        // Fast path: use direct indexing for uniform spacing
+        double dx = particles_[1].x() - particles_[0].x();
+
+        if (std::abs(dx) < tolerance) {
+            // All particles at same x (degenerate case)
+            return particles_[0];
+        }
+
+        // Calculate which segment contains target_x
+        double frac_index = (target_x - x_min) / dx;
+        i1 = static_cast<size_t>(std::floor(frac_index));
+
+        // Clamp to valid range
+        if (i1 >= particles_.size() - 1) {
+            i1 = particles_.size() - 2;
+        }
+        i2 = i1 + 1;
+    }
+    else {
+        // Slow path: binary search for non-uniform spacing
+        // Find two consecutive particles bracketing target_x
+        bool found = false;
+        for (size_t i = 0; i < particles_.size() - 1; ++i) {
+            if (particles_[i].x() <= target_x && target_x <= particles_[i+1].x()) {
+                i1 = i;
+                i2 = i + 1;
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            throw std::runtime_error("interpolateAtX: failed to find bracketing particles");
+        }
+    }
+
+    const Particle& p1 = particles_[i1];
+    const Particle& p2 = particles_[i2];
+
+    // Calculate interpolation weight
+    double dx = p2.x() - p1.x();
+
+    if (std::abs(dx) < tolerance) {
+        // Particles at essentially same x-location
+        return p1;
+    }
+
+    double weight = (target_x - p1.x()) / dx;
+
+    // Interpolate using particle operators
+    return p1 + (p2 - p1) * weight;
+}
+
+std::pair<Particle, Particle> Pathway::extractRandomPairWithSeparation(double Delta_x) const
+{
+    if (particles_.empty()) {
+        throw std::runtime_error("extractRandomPairWithSeparation: pathway is empty");
+    }
+
+    double x_min = particles_.front().x();
+    double x_max = particles_.back().x();
+    double path_length = x_max - x_min;
+
+    if (Delta_x > path_length) {
+        throw std::runtime_error("extractRandomPairWithSeparation: Delta_x exceeds pathway length");
+    }
+
+    if (Delta_x < 0.0) {
+        throw std::runtime_error("extractRandomPairWithSeparation: Delta_x must be positive");
+    }
+
+    // Random number generator
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<double> dist(x_min, x_max - Delta_x);
+
+    // Generate random starting x position
+    double x1 = dist(gen);
+    double x2 = x1 + Delta_x;
+
+    // Interpolate particles at these locations
+    Particle p1 = interpolateAtX(x1);
+    Particle p2 = interpolateAtX(x2);
+
+    return {p1, p2};
 }

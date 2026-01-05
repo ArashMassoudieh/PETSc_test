@@ -448,3 +448,136 @@ std::pair<double, double> PathwaySet::travelTimeRange() const
 
     return {min_time, max_time};
 }
+
+PathwaySet PathwaySet::sampleParticlePairs(double Delta_x, size_t num_samples) const
+{
+    if (pathways_.empty()) {
+        throw std::runtime_error("sampleParticlePairs: PathwaySet is empty");
+    }
+
+    // Filter pathways that are long enough to accommodate Delta_x
+    std::vector<size_t> valid_pathway_indices;
+    for (size_t i = 0; i < pathways_.size(); ++i) {
+        if (!pathways_[i].empty()) {
+            double path_length = pathways_[i].last().x() - pathways_[i].first().x();
+            if (path_length >= Delta_x) {
+                valid_pathway_indices.push_back(i);
+            }
+        }
+    }
+
+    if (valid_pathway_indices.empty()) {
+        throw std::runtime_error("sampleParticlePairs: no pathways long enough for Delta_x");
+    }
+
+    // Create result PathwaySet with 2 pathways (one for x, one for x+Delta_x)
+    PathwaySet result(2);
+    Pathway pathway_at_x(0);      // Particles at location x
+    Pathway pathway_at_x_plus(1); // Particles at location x + Delta_x
+
+    // Reserve space
+    pathway_at_x.reserve(num_samples);
+    pathway_at_x_plus.reserve(num_samples);
+
+    // Random number generators
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<size_t> pathway_dist(0, valid_pathway_indices.size() - 1);
+
+    // Sample particle pairs
+    for (size_t sample = 0; sample < num_samples; ++sample) {
+        // Randomly select a valid pathway
+        size_t random_pathway_idx = valid_pathway_indices[pathway_dist(gen)];
+        const Pathway& selected_pathway = pathways_[random_pathway_idx];
+
+        try {
+            // Extract a random pair from this pathway
+            auto pair = selected_pathway.extractRandomPairWithSeparation(Delta_x);
+
+            // Add to respective pathways
+            pathway_at_x.addParticle(pair.first);
+            pathway_at_x_plus.addParticle(pair.second);
+
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: Failed to sample from pathway "
+                      << random_pathway_idx << ": " << e.what() << std::endl;
+            // Continue to next sample
+        }
+    }
+
+    // Add the two pathways to result
+    result.addPathway(pathway_at_x);
+    result.addPathway(pathway_at_x_plus);
+
+    std::cout << "Sampled " << pathway_at_x.size() << " particle pairs with separation Delta_x = "
+              << Delta_x << std::endl;
+
+    return result;
+}
+
+double PathwaySet::calculateCorrelation(size_t pathway1_idx, size_t pathway2_idx,
+                                        const std::string& quantity) const
+{
+    if (pathway1_idx >= pathways_.size() || pathway2_idx >= pathways_.size()) {
+        throw std::runtime_error("calculateCorrelation: pathway index out of range");
+    }
+
+    const Pathway& path1 = pathways_[pathway1_idx];
+    const Pathway& path2 = pathways_[pathway2_idx];
+
+    if (path1.size() != path2.size()) {
+        throw std::runtime_error("calculateCorrelation: pathways must have equal number of particles");
+    }
+
+    if (path1.empty()) {
+        throw std::runtime_error("calculateCorrelation: pathways are empty");
+    }
+
+    size_t n = path1.size();
+
+    // Extract values based on quantity
+    std::vector<double> values1(n), values2(n);
+    for (size_t i = 0; i < n; ++i) {
+        if (quantity == "qx") {
+            values1[i] = path1[i].qx();
+            values2[i] = path2[i].qx();
+        } else if (quantity == "qy") {
+            values1[i] = path1[i].qy();
+            values2[i] = path2[i].qy();
+        } else {
+            throw std::runtime_error("calculateCorrelation: unknown quantity '" + quantity + "'");
+        }
+    }
+
+    // Calculate means
+    double mean1 = 0.0, mean2 = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        mean1 += values1[i];
+        mean2 += values2[i];
+    }
+    mean1 /= n;
+    mean2 /= n;
+
+    // Calculate correlation coefficient
+    double numerator = 0.0;
+    double variance1 = 0.0;
+    double variance2 = 0.0;
+
+    for (size_t i = 0; i < n; ++i) {
+        double dev1 = values1[i] - mean1;
+        double dev2 = values2[i] - mean2;
+        numerator += dev1 * dev2;
+        variance1 += dev1 * dev1;
+        variance2 += dev2 * dev2;
+    }
+
+    // Check for zero variance
+    if (variance1 < 1e-15 || variance2 < 1e-15) {
+        std::cerr << "Warning: calculateCorrelation has near-zero variance" << std::endl;
+        return 0.0;
+    }
+
+    double correlation = numerator / std::sqrt(variance1 * variance2);
+
+    return correlation;
+}

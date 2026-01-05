@@ -158,6 +158,50 @@ int main(int argc, char** argv) {
     // Track all pathways
     pathways.trackAllPathways(&g, 0.01);  // dx_step = 0.01
 
+    // ====================================================================
+    // Compute velocity correlation as a function of separation distance
+    // ====================================================================
+    std::cout << "\n=== Computing velocity correlation function ===" << std::endl;
+
+    // Define range of separation distances (logarithmic spacing)
+    double Delta_x_min = 0.001;
+    double Delta_x_max = 0.5;
+    int num_Delta_x = 30;  // Number of separation distances to sample
+    int num_samples_per_Delta_x = 1000;  // Number of particle pairs per distance
+
+    TimeSeries<double> qx_correlation;
+
+    for (int i = 0; i < num_Delta_x; ++i) {
+        // Logarithmic spacing: Delta_x = Delta_x_min * (Delta_x_max/Delta_x_min)^(i/(num-1))
+        double exponent = static_cast<double>(i) / (num_Delta_x - 1);
+        double Delta_x = Delta_x_min * std::pow(Delta_x_max / Delta_x_min, exponent);
+
+        try {
+            // Sample particle pairs at this separation distance
+            PathwaySet particle_pairs = pathways.sampleParticlePairs(Delta_x, num_samples_per_Delta_x);
+
+            // Calculate correlation between qx values at x and x+Delta_x
+            // particle_pairs[0] contains particles at x
+            // particle_pairs[1] contains particles at x+Delta_x
+            double correlation = particle_pairs.calculateCorrelation(0, 1, "qx");
+
+            // Store in TimeSeries
+            qx_correlation.append(Delta_x, correlation);
+
+            std::cout << "  Delta_x = " << Delta_x
+                      << ", correlation = " << correlation << std::endl;
+
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: Failed to compute correlation at Delta_x = "
+                      << Delta_x << ": " << e.what() << std::endl;
+        }
+    }
+
+    // Save correlation function to file
+    qx_correlation.writefile(joinPath(output_dir, "qx_correlation_vs_distance.txt"));
+    std::cout << "Velocity correlation function saved with "
+              << qx_correlation.size() << " points" << std::endl;
+
     // Get statistics
     std::cout << "Mean path length: " << pathways.meanPathLength() << std::endl;
     std::cout << "Mean travel time: " << pathways.meanTravelTime() << std::endl;

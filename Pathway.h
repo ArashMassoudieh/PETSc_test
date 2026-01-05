@@ -71,9 +71,26 @@ public:
     void trackParticle(Grid2D* grid, double dx_step,
                        const std::string& qx_name = "qx",
                        const std::string& qy_name = "qy");
+
+    // Check if pathway has uniform x-spacing
+    bool isUniformX(double tolerance = 1e-6) const;
+    void cacheUniformXStatus(double tolerance = 1e-6);
+
+    // Setters for uniform x status
+    void setUniformX(bool is_uniform) { uniform_x_ = is_uniform; }
+    void setUniformXChecked(bool checked) { uniform_x_checked_ = checked; }
+
+    // Interpolate particle properties at given x-location
+    Particle interpolateAtX(double target_x, double tolerance = 1e-10) const;
+
+    // Extract two random particles separated by distance Delta_x
+    std::pair<Particle, Particle> extractRandomPairWithSeparation(double Delta_x) const;
+
 private:
     std::vector<Particle> particles_;
     int id_;
+    bool uniform_x_;
+    bool uniform_x_checked_;
 };
 
 #endif // PATHWAY_H

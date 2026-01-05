@@ -68,6 +68,13 @@ public:
     std::pair<double, double> pathLengthRange() const;  // min, max
     std::pair<double, double> travelTimeRange() const;  // min, max
 
+    // Sample particle pairs for correlation analysis
+    PathwaySet sampleParticlePairs(double Delta_x, size_t num_samples) const;
+
+    // Calculate correlation between corresponding particles in two pathways
+    double calculateCorrelation(size_t pathway1_idx, size_t pathway2_idx,
+                                const std::string& quantity = "qx") const;
+
 private:
     std::vector<Pathway> pathways_;
 };

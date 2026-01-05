@@ -20,3 +20,46 @@ void Particle::move(double dx, double dy) {
     x_ += dx;
     y_ += dy;
 }
+
+// Operator overloads
+Particle Particle::operator+(const Particle& other) const {
+    Particle result;
+    result.x_ = x_ + other.x_;
+    result.y_ = y_ + other.y_;
+    result.t_ = t_ + other.t_;
+    result.qx_ = qx_ + other.qx_;
+    result.qy_ = qy_ + other.qy_;
+    result.active_ = active_;  // Keep the state of first particle
+    result.id_ = id_;          // Keep the ID of first particle
+    return result;
+}
+
+Particle Particle::operator-(const Particle& other) const {
+    Particle result;
+    result.x_ = x_ - other.x_;
+    result.y_ = y_ - other.y_;
+    result.t_ = t_ - other.t_;
+    result.qx_ = qx_ - other.qx_;
+    result.qy_ = qy_ - other.qy_;
+    result.active_ = active_;  // Keep the state of first particle
+    result.id_ = id_;          // Keep the ID of first particle
+    return result;
+}
+
+Particle Particle::operator*(double scalar) const {
+    Particle result;
+    result.x_ = x_;              // Position unchanged
+    result.y_ = y_;              // Position unchanged
+    result.t_ = t_ * scalar;     // Time scaled
+    result.qx_ = qx_ * scalar;   // Velocity scaled
+    result.qy_ = qy_ * scalar;   // Velocity scaled
+    result.active_ = active_;    // Keep the state
+    result.id_ = id_;            // Keep the ID
+    return result;
+}
+
+// Friend function for scalar * Particle
+Particle operator*(double scalar, const Particle& p) {
+    return p * scalar;
+}
+

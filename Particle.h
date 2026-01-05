@@ -34,6 +34,13 @@ public:
     // Existing setters...
     void setT(double t) { t_ = t; }
 
+    // Arithmetic operators
+    Particle operator+(const Particle& other) const;
+    Particle operator-(const Particle& other) const;
+    Particle operator*(double scalar) const;
+    friend Particle operator*(double scalar, const Particle& p);
+
+
 private:
     double x_;          // x-coordinate
     double y_;          // y-coordinate
