@@ -63,8 +63,15 @@ int main(int argc, char** argv) {
     PETScInit petsc(argc, argv);
 
     // Set output directory (can be modified via command line argument)
+#ifdef Arash
     std::string output_dir = "/home/arash/Projects/UpscalingResults";
-
+#elif PowerEdge
+    std::string output_dir = "/mnt/3rd900/Projects/PETSc_test/Results";
+#elif Behzad
+    std::string output_dir = "/home/behzad/Projects/PETSc_test/Results";
+#elifdef SligoCreek
+    std::string output_dir = "/media/arash/E/Projects/PETSc_test/Results";
+#endif
 
     int nx = 300;   // Very coarse for debugging
     int nu = 100;    // Very coarse for debugging

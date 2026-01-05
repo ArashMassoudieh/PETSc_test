@@ -6,10 +6,45 @@ DEFINES += GRID_USE_VTK
 CONFIG  += GRID_USE_VTK
 DEFINES += GSL
 
+#CONFIG += Behzad
+#DEFINES += Behzad
+
+
+CONFIG += PowerEdge
+DEFINES += PowerEdge
+
+
+#CONFIG += Arash
+#DEFINES += Arash
+
+
+#CONFIG += SligoCreek
+#DEFINES += SligoCreek
+
 # ==== VTK paths ====
-VTKBUILDPATH  = /home/arash/Projects/VTK-build
-VTKHEADERPATH = /home/arash/Projects/VTK
-VTK_V         = -9.0
+contains(DEFINES, Behzad) {
+    VTKBUILDPATH = /home/behzad/Projects/VTK-9.3.1/VTK-build
+    VTKHEADERPATH = /home/behzad/Projects/VTK-9.3.1
+    VTK_V = -9.3
+}
+
+contains(DEFINES, PowerEdge) {
+    VTKBUILDPATH = ../VTK-build
+    VTKHEADERPATH = ../VTK
+    VTK_V = -9.0
+}
+
+contains(DEFINES, Arash) {
+    VTKBUILDPATH = /home/arash/Projects/VTK-9.4.1/build
+    VTKHEADERPATH = /home/arash/Projects/VTK-9.4.1
+    VTK_V = -9.4
+}
+
+contains(DEFINES, SligoCreek) {
+    VTKBUILDPATH = /media/arash/E/Projects/VTK-9.1.0/VTK-build
+    VTKHEADERPATH = /media/arash/E/Projects/VTK-9.1.0
+    VTK_V = -9.1
+}
 
 # ==== PETSc (build-tree layout) ====
 PETSC_DIR  = $$(PETSC_DIR)
@@ -27,6 +62,7 @@ isEmpty(PETSC_ARCH) {
 
 INCLUDEPATH += $$PETSC_DIR/include
 INCLUDEPATH += $$PETSC_DIR/$$PETSC_ARCH/include
+INCLUDEPATH += Utilities/
 
 LIBS += -L$$PETSC_DIR/$$PETSC_ARCH/lib -lpetsc
 QMAKE_LFLAGS += -Wl,-rpath,$$PETSC_DIR/$$PETSC_ARCH/lib
@@ -44,25 +80,35 @@ QMAKE_CXXFLAGS += -Wall -Wextra -Wpedantic -O3
 
 # ==== Sources / Headers ====
 SOURCES += \
+    Particle.cpp \
+    Pathway.cpp \
+    PathwaySet.cpp \
+    Utilities/QuickSort.cpp \
+    Utilities/Utilities.cpp \
     main.cpp \
-    Matrix.cpp \
-    Matrix_arma.cpp \
-    Vector.cpp \
-    Vector_arma.cpp \
+    Utilities/Matrix.cpp \
+    Utilities/Matrix_arma.cpp \
+    Utilities/Vector.cpp \
+    Utilities/Vector_arma.cpp \
     grid.cpp \
     petscmatrix.cpp \
     petscsolver.cpp \
     petscvector.cpp
 
 HEADERS += \
-    Matrix.h \
-    Matrix_arma.h \
-    TimeSeries.h \
-    TimeSeries.hpp \
-    TimeSeriesSet.h \
-    TimeSeriesSet.hpp \
-    Vector.h \
-    Vector_arma.h \
+    Particle.h \
+    Pathway.h \
+    PathwaySet.h \
+    Utilities/Matrix.h \
+    Utilities/Matrix_arma.h \
+    Utilities/QuickSort.h \
+    Utilities/TimeSeries.h \
+    Utilities/TimeSeries.hpp \
+    Utilities/TimeSeriesSet.h \
+    Utilities/TimeSeriesSet.hpp \
+    Utilities/Utilities.h \
+    Utilities/Vector.h \
+    Utilities/Vector_arma.h \
     grid.h \
     petsc_init.h \
     petscmatrix.h \

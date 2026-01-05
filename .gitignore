@@ -30,3 +30,5 @@ build/Release/.qtc_clangd/.cache/clangd/index/
 build/Release/.qtc_clangd/
 
 build/Release/
+
+Results/
