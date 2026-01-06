@@ -144,14 +144,82 @@ int main(int argc, char** argv) {
     TimeSeries<double> curvture = g.sampleSecondDerivative("qx_normal_score", Grid2D::ArrayKind::Fx, Grid2D::DerivDir::X, 10000, 0.05);
     curvture.writefile(joinPath(output_dir, "2nd_deriv.txt"));
 
-    // Sample perturbation differences to estimate correlation/dispersion characteristics
-    TimeSeries<double> diff_purturbed = g.sampleGaussianPerturbation("qx_normal_score", Grid2D::ArrayKind::Fx, 10000, 0.01, 0, PerturbDir::Radial);
-    diff_purturbed.writefile(joinPath(output_dir, "Diff_purturbed.txt"));
-    std::cout << "Diffusion purturbed correlation dx = 0.01: " << diff_purturbed.correlation_tc() << std::endl;
+    // =============================================================================
+    // Velocity autocorrelation analysis via Gaussian perturbation sampling
+    // =============================================================================
 
-    TimeSeries<double> diff_purturbed2 = g.sampleGaussianPerturbation("qx_normal_score", Grid2D::ArrayKind::Fx, 10000, 0.005, 0, PerturbDir::Radial);
-    diff_purturbed2.writefile(joinPath(output_dir, "Diff_purturbed2.txt"));
-    std::cout << "Diffusion purturbed correlation dx = 0.005: " << diff_purturbed2.correlation_tc() << std::endl;
+    // Define range of separation distances (logarithmic spacing)
+    double delta_min = 0.001;
+    double delta_max = 0.2;
+    int num_deltas = 30;
+    int num_samples_per_delta = 10000;
+
+    // TimeSeries to store correlation vs distance for each direction
+    TimeSeries<double> corr_radial;
+    TimeSeries<double> corr_x;
+    TimeSeries<double> corr_y;
+
+    std::cout << "Computing velocity autocorrelation (radial)..." << std::endl;
+    for (int i = 0; i < num_deltas; ++i) {
+        double exponent = static_cast<double>(i) / (num_deltas - 1);
+        double delta = delta_min * std::pow(delta_max / delta_min, exponent);
+        try {
+            TimeSeries<double> samples = g.sampleGaussianPerturbation(
+                "qx_normal_score", Grid2D::ArrayKind::Fx,
+                num_samples_per_delta, delta, 0, PerturbDir::Radial);
+            double correlation = samples.correlation_tc();
+            corr_radial.append(delta, correlation);
+            std::cout << "  delta = " << delta << ", correlation = " << correlation << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: Failed at delta = " << delta << ": " << e.what() << std::endl;
+        }
+    }
+    corr_radial.writefile(joinPath(output_dir, "velocity_correlation_radial.txt"));
+    double lambda_radial = corr_radial.fitExponentialDecay();
+    std::cout << "Radial correlation length scale: " << lambda_radial << std::endl;
+
+    std::cout << "Computing velocity autocorrelation (x-direction)..." << std::endl;
+    for (int i = 0; i < num_deltas; ++i) {
+        double exponent = static_cast<double>(i) / (num_deltas - 1);
+        double delta = delta_min * std::pow(delta_max / delta_min, exponent);
+        try {
+            TimeSeries<double> samples = g.sampleGaussianPerturbation(
+                "qx_normal_score", Grid2D::ArrayKind::Fx,
+                num_samples_per_delta, delta, 0, PerturbDir::XOnly);
+            double correlation = samples.correlation_tc();
+            corr_x.append(delta, correlation);
+            std::cout << "  delta = " << delta << ", correlation = " << correlation << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: Failed at delta = " << delta << ": " << e.what() << std::endl;
+        }
+    }
+    corr_x.writefile(joinPath(output_dir, "velocity_correlation_x.txt"));
+    double lambda_x_emp = corr_x.fitExponentialDecay();
+    std::cout << "X-direction correlation length scale: " << lambda_x_emp << std::endl;
+
+    std::cout << "Computing velocity autocorrelation (y-direction)..." << std::endl;
+    for (int i = 0; i < num_deltas; ++i) {
+        double exponent = static_cast<double>(i) / (num_deltas - 1);
+        double delta = delta_min * std::pow(delta_max / delta_min, exponent);
+        try {
+            TimeSeries<double> samples = g.sampleGaussianPerturbation(
+                "qx_normal_score", Grid2D::ArrayKind::Fx,
+                num_samples_per_delta, delta, 0, PerturbDir::YOnly);
+            double correlation = samples.correlation_tc();
+            corr_y.append(delta, correlation);
+            std::cout << "  delta = " << delta << ", correlation = " << correlation << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: Failed at delta = " << delta << ": " << e.what() << std::endl;
+        }
+    }
+    corr_y.writefile(joinPath(output_dir, "velocity_correlation_y.txt"));
+    double lambda_y_emp = corr_y.fitExponentialDecay();
+    std::cout << "Y-direction correlation length scale: " << lambda_y_emp << std::endl;
+
+    std::cout << "\n=== Velocity Correlation Length Scales ===" << std::endl;
+    std::cout << "  Radial: " << lambda_radial << std::endl;
+    std::cout << "  X-dir:  " << lambda_x_emp << std::endl;
+    std::cout << "  Y-dir:  " << lambda_y_emp << std::endl;
 
     // CFL-like timestep estimate based on max qx (NOTE: if max qx ~ 0, dt becomes huge)
     double dt_optimal = 0.5 * g.dx() / g.fieldMinMax("qx", Grid2D::ArrayKind::Fx).second;
