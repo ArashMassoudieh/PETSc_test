@@ -11,6 +11,8 @@ VTKBUILDPATH = /home/arash/Projects/VTK-9.4.1/build
 VTKHEADERPATH = /home/arash/Projects/VTK-9.4.1
 VTK_V = -9.4
 
+DEFINES += Arash
+
 INCLUDEPATH += Utilities
 
 SOURCES += main.cpp \

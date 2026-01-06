@@ -174,7 +174,7 @@ int main(int argc, char** argv) {
     double Delta_x_min = 0.001;
     double Delta_x_max = 0.5;
     int num_Delta_x = 30;  // Number of separation distances to sample
-    int num_samples_per_Delta_x = 1000;  // Number of particle pairs per distance
+    int num_samples_per_Delta_x = 10000;  // Number of particle pairs per distance
 
     TimeSeries<double> qx_correlation;
 
@@ -206,8 +206,13 @@ int main(int argc, char** argv) {
 
     // Save correlation function to file
     qx_correlation.writefile(joinPath(output_dir, "qx_correlation_vs_distance.txt"));
+    double advection_correlation_length_scale = qx_correlation.fitExponentialDecay();
+
+
     std::cout << "Velocity correlation function saved with "
               << qx_correlation.size() << " points" << std::endl;
+
+    std::cout << "Velocity correlation length scale = " << advection_correlation_length_scale << std::endl;
 
     // Get statistics
     std::cout << "Mean path length: " << pathways.meanPathLength() << std::endl;
