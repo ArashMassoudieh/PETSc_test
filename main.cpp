@@ -139,6 +139,8 @@ int main(int argc, char** argv) {
     TimeSeries<double> QxNormalScores = AllQxValues.ConvertToNormalScore();
     g.assignFromTimeSeries(QxNormalScores, "qx_normal_score", Grid2D::ArrayKind::Fx);
 
+    g.writeNamedVTI("qx_normal_score", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx_normal_score.vti"));
+
     // Sample second derivative of qx_normal_score (curvature proxy) along X direction
     std::cout << "Sampling points for derivative ..." << std::endl;
     TimeSeries<double> curvture = g.sampleSecondDerivative("qx_normal_score", Grid2D::ArrayKind::Fx, Grid2D::DerivDir::X, 10000, 0.05);
@@ -250,7 +252,7 @@ int main(int argc, char** argv) {
     g.writeNamedVTI_Auto("C", joinPath(output_dir, "C.vti"));
 
     // Save BTCs
-    BTCs_FineScaled.write(joinPath(output_dir, "BTC_FileScaled.csv"));
+    BTCs_FineScaled.write(joinPath(output_dir, "BTC_FineScaled.csv"));
 
     // Total timing checkpoint (NOTE: later you overwrite t_total1 again)
     PetscTime(&t_total1);
