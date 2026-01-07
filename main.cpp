@@ -15,12 +15,15 @@
 
 static inline PetscInt idx(PetscInt i, PetscInt j, PetscInt nx) { return j*nx + i; }
 
+// NOTE: helper to detect boundary cells. Not used in this file, but can be used for BC assignment.
 static inline bool on_bc(PetscInt i, PetscInt j, PetscInt nx, PetscInt ny, double x, double y, double Lx, double Ly) {
     const double eps = 1e-14;
     return (i==0) || (j==0) || (std::abs(x - Lx) < eps) || (std::abs(y - Ly) < eps);
 }
 
 // Helper function to create directory if it doesn't exist
+// IMPORTANT: This is defined but not called in main() below.
+// If output_dir doesn't exist, file writes may fail silently depending on your I/O code.
 bool createDirectory(const std::string& path) {
     struct stat info;
 
@@ -51,6 +54,7 @@ bool createDirectory(const std::string& path) {
 }
 
 // Helper function to join path with filename
+// IMPORTANT: Uses "/" when dir does not end with "/" or "\" (works fine on Linux; ok on Windows in many cases too).
 std::string joinPath(const std::string& dir, const std::string& filename) {
     if (dir.empty()) return filename;
     if (dir.back() == '/' || dir.back() == '\\') {
@@ -60,92 +64,206 @@ std::string joinPath(const std::string& dir, const std::string& filename) {
 }
 
 int main(int argc, char** argv) {
+    // PETSc + MPI init RAII wrapper (assumed)
     PETScInit petsc(argc, argv);
 
     // Set output directory (can be modified via command line argument)
+    // IMPORTANT: output_dir is only defined if one of these macros is defined.
+    // If none are defined, output_dir will be uninitialized/undefined behavior.
 #ifdef Arash
     std::string output_dir = "/home/arash/Projects/UpscalingResults";
 #elif PowerEdge
     std::string output_dir = "/mnt/3rd900/Projects/PETSc_test/Results";
 #elif Behzad
     std::string output_dir = "/home/behzad/Projects/PETSc_test/Results";
-#elifdef SligoCreek
+#elif SligoCreek
     std::string output_dir = "/media/arash/E/Projects/PETSc_test/Results";
 #endif
 
+    // Domain / grid resolution for primary Darcy/transport solves
+    // NOTE: comments say "very coarse for debugging" but nx=300 is not super coarse.
     int nx = 300;   // Very coarse for debugging
-    int nu = 100;    // Very coarse for debugging
+    int nu = 100;    // Very coarse for debugging  (used later for u-grid logic)
     int ny = 100;    // Very coarse for debugging
     double Lx = 3.0;
     double Ly = 1.0;
 
+    // Primary spatial grid (x,y)
     Grid2D g(nx, ny, Lx, Ly);
+
+    // PETSc timers (assembly/solve/total segments)
     PetscLogDouble t_total0, t_total1, t_asm0, t_asm1, t_solve0, t_solve1;
 
+    // Generate heterogeneous field: Gaussian random field via SGS in "normal score" space
     g.makeGaussianFieldSGS("K_normal_score", 1, 0.1, 10);
 
+    // Start timing (NOTE: order here makes assembly time include earlier work depending on what follows)
     PetscTime(&t_asm0);
     PetscTime(&t_total0);
 
+    // Write raw normal-score permeability field
     g.writeNamedMatrix("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(output_dir, "K_normal_score.txt"));
     g.writeNamedVTI("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(output_dir, "NormalScore.vti"));
+
+    // Transform normal score to exponential field "K"
     g.createExponentialField("K_normal_score", 1, 0, "K");
 
+    // End "assembly" timer (name suggests assembly, but it currently covers field generation + writes too)
     PetscTime(&t_asm1);
+
+    // Start solver timer
     PetscTime(&t_solve0);
 
+    // Darcy solve using "K" (inputs/outputs depend on your Grid2D::DarcySolve signature)
     g.DarcySolve(1, 0, "K", "K");
     std::cout << "Darcy solved ... " << std::endl;
+
+    // Save K field
     g.writeNamedVTI("K", Grid2D::ArrayKind::Cell, joinPath(output_dir, "K.vti"));
 
+    // End solver timer
     PetscTime(&t_solve1);
 
+    // Diagnostics: mass balance error field
     g.computeMassBalanceError("MassBalanceError");
     g.writeNamedMatrix("MassBalanceError", Grid2D::ArrayKind::Cell, joinPath(output_dir, "error.txt"));
+
+    // Save head + flux fields
     g.writeNamedVTI("head", Grid2D::ArrayKind::Cell, joinPath(output_dir, "Head.vti"));
     g.writeNamedMatrix("head", Grid2D::ArrayKind::Cell, joinPath(output_dir, "Head.txt"));
     g.writeNamedVTI("qx", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx.vti"));
     g.writeNamedVTI("qy", Grid2D::ArrayKind::Fy, joinPath(output_dir, "qy.vti"));
 
+    // Export qx to TimeSeries then convert to normal-score for statistical derivative sampling
     TimeSeries<double> AllQxValues = g.exportFieldToTimeSeries("qx", Grid2D::ArrayKind::Fx);
     TimeSeries<double> QxNormalScores = AllQxValues.ConvertToNormalScore();
     g.assignFromTimeSeries(QxNormalScores, "qx_normal_score", Grid2D::ArrayKind::Fx);
 
+    g.writeNamedVTI("qx_normal_score", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx_normal_score.vti"));
+
+    // Sample second derivative of qx_normal_score (curvature proxy) along X direction
     std::cout << "Sampling points for derivative ..." << std::endl;
     TimeSeries<double> curvture = g.sampleSecondDerivative("qx_normal_score", Grid2D::ArrayKind::Fx, Grid2D::DerivDir::X, 10000, 0.05);
     curvture.writefile(joinPath(output_dir, "2nd_deriv.txt"));
 
-    TimeSeries<double> diff_purturbed = g.sampleGaussianPerturbation("qx_normal_score", Grid2D::ArrayKind::Fx, 10000, 0.01, 0, PerturbDir::Radial);
-    diff_purturbed.writefile(joinPath(output_dir, "Diff_purturbed.txt"));
-    std::cout << "Diffusion purturbed correlation dx = 0.01: " << diff_purturbed.correlation_tc() << std::endl;
+    // =============================================================================
+    // Velocity autocorrelation analysis via Gaussian perturbation sampling
+    // =============================================================================
 
-    TimeSeries<double> diff_purturbed2 = g.sampleGaussianPerturbation("qx_normal_score", Grid2D::ArrayKind::Fx, 10000, 0.005, 0, PerturbDir::Radial);
-    diff_purturbed2.writefile(joinPath(output_dir, "Diff_purturbed2.txt"));
-    std::cout << "Diffusion purturbed correlation dx = 0.005: " << diff_purturbed2.correlation_tc() << std::endl;
+    // Define range of separation distances (logarithmic spacing)
+    double delta_min = 0.001;
+    double delta_max = 0.2;
+    int num_deltas = 30;
+    int num_samples_per_delta = 10000;
 
+    // TimeSeries to store correlation vs distance for each direction
+    TimeSeries<double> corr_radial;
+    TimeSeries<double> corr_x;
+    TimeSeries<double> corr_y;
+
+    std::cout << "Computing velocity autocorrelation (radial)..." << std::endl;
+    for (int i = 0; i < num_deltas; ++i) {
+        double exponent = static_cast<double>(i) / (num_deltas - 1);
+        double delta = delta_min * std::pow(delta_max / delta_min, exponent);
+        try {
+            TimeSeries<double> samples = g.sampleGaussianPerturbation(
+                "qx_normal_score", Grid2D::ArrayKind::Fx,
+                num_samples_per_delta, delta, 0, PerturbDir::Radial);
+            double correlation = samples.correlation_tc();
+            corr_radial.append(delta, correlation);
+            std::cout << "  delta = " << delta << ", correlation = " << correlation << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: Failed at delta = " << delta << ": " << e.what() << std::endl;
+        }
+    }
+    corr_radial.writefile(joinPath(output_dir, "velocity_correlation_radial.txt"));
+    double lambda_radial = corr_radial.fitExponentialDecay();
+    std::cout << "Radial correlation length scale: " << lambda_radial << std::endl;
+
+    std::cout << "Computing velocity autocorrelation (x-direction)..." << std::endl;
+    for (int i = 0; i < num_deltas; ++i) {
+        double exponent = static_cast<double>(i) / (num_deltas - 1);
+        double delta = delta_min * std::pow(delta_max / delta_min, exponent);
+        try {
+            TimeSeries<double> samples = g.sampleGaussianPerturbation(
+                "qx_normal_score", Grid2D::ArrayKind::Fx,
+                num_samples_per_delta, delta, 0, PerturbDir::XOnly);
+            double correlation = samples.correlation_tc();
+            corr_x.append(delta, correlation);
+            std::cout << "  delta = " << delta << ", correlation = " << correlation << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: Failed at delta = " << delta << ": " << e.what() << std::endl;
+        }
+    }
+    corr_x.writefile(joinPath(output_dir, "velocity_correlation_x.txt"));
+    double lambda_x_emp = corr_x.fitExponentialDecay();
+    std::cout << "X-direction correlation length scale: " << lambda_x_emp << std::endl;
+
+    std::cout << "Computing velocity autocorrelation (y-direction)..." << std::endl;
+    for (int i = 0; i < num_deltas; ++i) {
+        double exponent = static_cast<double>(i) / (num_deltas - 1);
+        double delta = delta_min * std::pow(delta_max / delta_min, exponent);
+        try {
+            TimeSeries<double> samples = g.sampleGaussianPerturbation(
+                "qx_normal_score", Grid2D::ArrayKind::Fx,
+                num_samples_per_delta, delta, 0, PerturbDir::YOnly);
+            double correlation = samples.correlation_tc();
+            corr_y.append(delta, correlation);
+            std::cout << "  delta = " << delta << ", correlation = " << correlation << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: Failed at delta = " << delta << ": " << e.what() << std::endl;
+        }
+    }
+    corr_y.writefile(joinPath(output_dir, "velocity_correlation_y.txt"));
+    double lambda_y_emp = corr_y.fitExponentialDecay();
+    std::cout << "Y-direction correlation length scale: " << lambda_y_emp << std::endl;
+
+    std::cout << "\n=== Velocity Correlation Length Scales ===" << std::endl;
+    std::cout << "  Radial: " << lambda_radial << std::endl;
+    std::cout << "  X-dir:  " << lambda_x_emp << std::endl;
+    std::cout << "  Y-dir:  " << lambda_y_emp << std::endl;
+
+    // CFL-like timestep estimate based on max qx (NOTE: if max qx ~ 0, dt becomes huge)
     double dt_optimal = 0.5 * g.dx() / g.fieldMinMax("qx", Grid2D::ArrayKind::Fx).second;
     std::cout << "Optimal Time-Step: " << dt_optimal << std::endl;
 
+    // Initialize transport concentration field
     g.assignConstant("C", Grid2D::ArrayKind::Cell, 0);
+
+    // Save raw fields as matrices (for debugging / external scripts)
     g.writeNamedMatrix("qx", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx.txt"));
     g.writeNamedMatrix("qy", Grid2D::ArrayKind::Fy, joinPath(output_dir, "qy.txt"));
     g.writeNamedMatrix("K", Grid2D::ArrayKind::Cell, joinPath(output_dir, "K.txt"));
 
+    // Transport parameters
     g.SetVal("diffusion", 0.01);
     g.SetVal("porosity", 1);
     g.SetVal("c_left", 1.0);
+
+    // BTC locations (x positions) where breakthrough curves will be recorded
     std::vector<double> xLocations{0.5, 1.5, 2.5};
     g.setBTCLocations(xLocations);
+
+    // Fine-scale transport solve (uses g’s spatial velocity field)
     TimeSeriesSet<double> BTCs_FineScaled;
     g.SolveTransport(10, std::min(dt_optimal, 0.5/10.0), "transport_", 50, output_dir, "C", &BTCs_FineScaled);
+
+    // Save final concentration
     g.writeNamedVTI_Auto("C", joinPath(output_dir, "C.vti"));
-    BTCs_FineScaled.write(joinPath(output_dir, "BTC_FileScaled.csv"));
+
+    // Save BTCs
+    BTCs_FineScaled.write(joinPath(output_dir, "BTC_FineScaled.csv"));
+
+    // Total timing checkpoint (NOTE: later you overwrite t_total1 again)
     PetscTime(&t_total1);
 
+    // --------------------------------------------------------------------
+    // Single particle tracking (diagnostic)
+    // --------------------------------------------------------------------
     Pathway path(0);
-    path.addParticle(0.0, 0.5, 0.0);  // Start at left boundary
+    path.addParticle(0.0, 0.5, 0.0);  // Start at left boundary (x=0, y=0.5)
 
-    // Track particle with dx_step = 0.01
+    // Track particle with dx_step = 0.01 (step size in x)
     path.trackParticle(&g, 0.01);
 
     // Check results
@@ -154,16 +272,19 @@ int main(int argc, char** argv) {
     std::cout << "Exit position: (" << path.last().x() << ", "
               << path.last().y() << ")" << std::endl;
 
-    // Save pathway
+    // Save pathway polyline / points
     path.writeVTK(joinPath(output_dir, "pathway.vtk"));
 
+    // --------------------------------------------------------------------
+    // Many particle tracking (PathwaySet) for statistics + correlation
+    // --------------------------------------------------------------------
     PathwaySet pathways;
 
-    // Initialize 1000 pathways with flux weighting
+    // Initialize 1000 pathways with flux weighting (inlet sampling weighted by flux)
     pathways.Initialize(1000, PathwaySet::Weighting::FluxWeighted, &g);
 
-    // Track all pathways
-    pathways.trackAllPathways(&g, 0.01);  // dx_step = 0.01
+    // Track all pathways with dx_step = 0.01
+    pathways.trackAllPathways(&g, 0.01);
 
     // ====================================================================
     // Compute velocity correlation as a function of separation distance
@@ -185,14 +306,16 @@ int main(int argc, char** argv) {
 
         try {
             // Sample particle pairs at this separation distance
+            // particle_pairs[0] contains particles at x
+            // particle_pairs[1] contains particles at x+Delta_x
+            // NOTE: this creates/returns a PathwaySet containing two "groups" (index 0 and 1) by your convention
             PathwaySet particle_pairs = pathways.sampleParticlePairs(Delta_x, num_samples_per_Delta_x);
 
             // Calculate correlation between qx values at x and x+Delta_x
-            // particle_pairs[0] contains particles at x
-            // particle_pairs[1] contains particles at x+Delta_x
+            // NOTE: calculateCorrelation(0,1,"qx") assumes both groups have matched pairing logic
             double correlation = particle_pairs.calculateCorrelation(0, 1, "qx");
 
-            // Store in TimeSeries
+            // Store in TimeSeries: (Delta_x, correlation)
             qx_correlation.append(Delta_x, correlation);
 
             std::cout << "  Delta_x = " << Delta_x
@@ -204,26 +327,31 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Save correlation function to file
+    // Save correlation function
     qx_correlation.writefile(joinPath(output_dir, "qx_correlation_vs_distance.txt"));
-    double advection_correlation_length_scale = qx_correlation.fitExponentialDecay();
 
+    // Fit exponential decay to estimate correlation length scale (used later conceptually)
+    double advection_correlation_length_scale = qx_correlation.fitExponentialDecay();
 
     std::cout << "Velocity correlation function saved with "
               << qx_correlation.size() << " points" << std::endl;
 
     std::cout << "Velocity correlation length scale = " << advection_correlation_length_scale << std::endl;
 
-    // Get statistics
+    // PathwaySet statistics
     std::cout << "Mean path length: " << pathways.meanPathLength() << std::endl;
     std::cout << "Mean travel time: " << pathways.meanTravelTime() << std::endl;
+
+    // NOTE: "Completed pathways" label, but function is countActive() — check semantics in your class.
     std::cout << "Completed pathways: " << pathways.countActive() << std::endl;
 
-    // Write output
+    // Write pathway summary and combined VTK
     pathways.writeToFile(joinPath(output_dir,"pathway_summary.txt"));
     pathways.writeCombinedVTK(joinPath(output_dir,"all_pathways.vtk"));
 
     // ----- Report -----
+    // NOTE: timing here uses t_total1 that was set earlier (after fine-scale transport).
+    // Later you call PetscTime(&t_total1) again at the end.
     int rank = 0;
     MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
     if (rank == 0) {
@@ -238,10 +366,16 @@ int main(int argc, char** argv) {
     // ====================================================================
     std::cout << "\n=== Computing velocity CDF from qx field ===" << std::endl;
 
+    // Extract inverse CDF (quantile function) from qx field with 100 bins/points
     TimeSeries<double> qx_inverse_cdf = g.extractFieldCDF("qx", Grid2D::ArrayKind::Fx, 100);
+
+    // Make uniform in probability axis at dp=0.01 (common for stable interpolation)
     qx_inverse_cdf = qx_inverse_cdf.make_uniform(0.01);
+
+    // Save inverse CDF
     qx_inverse_cdf.writefile(joinPath(output_dir, "qx_inverse_cdf.txt"));
 
+    // Print velocity range using quantiles p=0 and p=1
     std::cout << "qx inverse CDF extracted with " << qx_inverse_cdf.size() << " points" << std::endl;
     std::cout << "Velocity range: [" << qx_inverse_cdf.interpol(0.0)
               << ", " << qx_inverse_cdf.interpol(1.0) << "]" << std::endl;
@@ -251,6 +385,9 @@ int main(int argc, char** argv) {
     // ====================================================================
     std::cout << "\n=== Creating Mixing PDF Grid ===" << std::endl;
 
+    // IMPORTANT: This creates Grid2D(nx, ny, Lx, Ly).
+    // But your comment says (x,u) space and prints nx x nu below.
+    // That means ny is being used as the second dimension here, not nu.
     Grid2D g_u(nx, ny, Lx, Ly);
 
     std::cout << "Grid created: " << nx << " x " << nu
@@ -261,7 +398,9 @@ int main(int argc, char** argv) {
     // ====================================================================
     std::cout << "\n=== Initializing flux arrays ===" << std::endl;
 
-    // Calculate expected sizes for flux arrays
+    // Expected sizes for flux arrays for a staggered grid:
+    // Fx size ~ (nx+1)*nu ; Fy size ~ nx*(nu+1)
+    // NOTE: these sizes are computed with nu, but g_u was created with ny above.
     int qx_size = nu * (nx + 1);
     int qy_size = (nu + 1) * nx;
 
@@ -281,12 +420,13 @@ int main(int argc, char** argv) {
 
     // For each u-level, assign velocity from the inverse CDF
     for (int j = 0; j < nu; ++j) {
-        double u = static_cast<double>(j) / (nu - 1);
-        double v_at_u = qx_inverse_cdf.interpol(u);
+        double u = static_cast<double>(j) / (nu - 1);   // u in [0,1]
+        double v_at_u = qx_inverse_cdf.interpol(u);      // v(u) = quantile(u)
 
         // Set qx for all x-positions at this u-level
+        // NOTE: uses nx+1, which matches staggered Fx indexing in x direction
         for (int i = 0; i < nx + 1; ++i) {
-            int idx = j * (nx + 1) + i;
+            int idx = j * (nx + 1) + i; // NOTE: local var "idx" shadows function idx(...) above
             if (idx >= qx_size) {
                 std::cerr << "ERROR: qx index out of bounds: " << idx << " >= " << qx_size << std::endl;
                 return 1;
@@ -303,6 +443,7 @@ int main(int argc, char** argv) {
     // ====================================================================
     std::cout << "\n=== Writing initial fields for verification ===" << std::endl;
 
+    // Save velocity fields on (x,u) grid (as VTI + text)
     g_u.writeNamedVTI("qx", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx_u_initial.vti"));
     g_u.writeNamedVTI("qy", Grid2D::ArrayKind::Fy, joinPath(output_dir, "qy_u_initial.vti"));
     g_u.writeNamedMatrix("qx", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx_u_initial.txt"));
@@ -315,11 +456,14 @@ int main(int argc, char** argv) {
     // ====================================================================
     std::cout << "\n=== Setting mixing parameters ===" << std::endl;
 
-    double lc = 0.05;        // Correlation length scale
-    double lambda_x = 1; // Transverse dispersion length in x
-    double lambda_y = 0.1; // Transverse dispersion length in y
+    double lc = 0.05;        // Correlation length scale (NOTE: you computed one above too)
+    double lambda_x = 1;     // Transverse dispersion length in x
+    double lambda_y = 0.1;   // Transverse dispersion length in y
 
+    // Set mixing model parameters used by your upscaled PDE
     g_u.setMixingParams(lc, lambda_x, lambda_y);
+
+    // Molecular diffusion + porosity + inlet PDF/BC
     g_u.SetVal("diffusion", 0.01);  // Molecular diffusion
     g_u.SetVal("porosity", 1.0);
     g_u.SetVal("c_left", 1.0);       // Uniform PDF at inlet
@@ -330,17 +474,31 @@ int main(int argc, char** argv) {
     std::cout << "\n=== Solving Mixing PDF Equation ===" << std::endl;
 
     double t_end_pdf = 10;
-    double dt_pdf = dt_optimal;
+    double dt_pdf = dt_optimal;          // NOTE: dt_optimal came from fine-scale grid, reused here
     int output_interval_pdf = 50;
+
+    // Compute effective mixing diffusion coefficient (writes into "D_y" field by your convention)
     std::cout << "\n=== Computing effective D_y ===" << std::endl;
     g_u.computeMixingDiffusionCoefficient();
+
+    // Save D_y for verification
     std::cout << "\n=== Writing D_y into vti ===" << std::endl;
     g_u.writeNamedVTI("D_y", Grid2D::ArrayKind::Fy, joinPath(output_dir, "D_y.vti"));
+
+    // Solve transport on (x,u) grid
     std::cout << "\n=== Solving ===" << std::endl;
+
+    // Initialize scalar (NOTE: you later call SolveTransport(...,"Cu",...) not "C")
     g_u.assignConstant("C", Grid2D::ArrayKind::Cell, 0);
+
     TimeSeriesSet<double> BTCs_Upscaled;
     g_u.setBTCLocations(xLocations);
+
+    // IMPORTANT: last argument "Cu" is the field name passed to SolveTransport
+    // But above you initialized "C", and later you write "C". Ensure your Grid2D expects this.
     g_u.SolveTransport(t_end_pdf, dt_pdf, "transport_", output_interval_pdf, output_dir, "Cu",&BTCs_Upscaled);
+
+    // Save upscaled BTCs
     BTCs_Upscaled.write(joinPath(output_dir, "BTC_Upscaled.csv"));
 
     // ====================================================================
@@ -348,12 +506,14 @@ int main(int argc, char** argv) {
     // ====================================================================
     std::cout << "\n=== Saving final results ===" << std::endl;
 
+    // NOTE: filenames say Cu.*, but field written is "C"
     g_u.writeNamedVTI_Auto("C", joinPath(output_dir, "Cu.vti"));
     g_u.writeNamedMatrix("C", Grid2D::ArrayKind::Cell,
                          joinPath(output_dir, "Cu.txt"));
 
     std::cout << "\nMixing PDF simulation complete!" << std::endl;
 
+    // NOTE: overwrites t_total1 again (timing report earlier won’t reflect this)
     PetscTime(&t_total1);
     return 0;
 }
