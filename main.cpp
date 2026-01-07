@@ -457,8 +457,8 @@ int main(int argc, char** argv) {
     std::cout << "\n=== Setting mixing parameters ===" << std::endl;
 
     double lc = advection_correlation_length_scale;        // Correlation length scale (NOTE: you computed one above too) ~ 0.35
-    double lambda_x = lambda_x_emp;     // Transverse dispersion length in x direction ~ 1
-    double lambda_y = lambda_y_emp;   // Transverse dispersion length in y direction ~ 0.1
+    double lambda_x = lambda_x_emp;     // Transverse dispersion length in x direction ~ 1.0
+    double lambda_y = lambda_y_emp;   // Transverse dispersion length in y direction ~ 0.10
 
     // Set mixing model parameters used by your upscaled PDE
     g_u.setMixingParams(lc, lambda_x, lambda_y);
