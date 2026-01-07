@@ -87,6 +87,7 @@ int main(int argc, char** argv) {
     int ny = 100;    // Very coarse for debugging
     double Lx = 3.0;
     double Ly = 1.0;
+    double Diffusion_coefficient = 0;
 
     // Primary spatial grid (x,y)
     Grid2D g(nx, ny, Lx, Ly);
@@ -115,7 +116,7 @@ int main(int argc, char** argv) {
     PetscTime(&t_solve0);
 
     // Darcy solve using "K" (inputs/outputs depend on your Grid2D::DarcySolve signature)
-    g.DarcySolve(1, 0, "K", "K");
+    g.DarcySolve(Lx, 0, "K", "K");
     std::cout << "Darcy solved ... " << std::endl;
 
     // Save K field
@@ -236,7 +237,7 @@ int main(int argc, char** argv) {
     g.writeNamedMatrix("K", Grid2D::ArrayKind::Cell, joinPath(output_dir, "K.txt"));
 
     // Transport parameters
-    g.SetVal("diffusion", 0.01);
+    g.SetVal("diffusion", Diffusion_coefficient);
     g.SetVal("porosity", 1);
     g.SetVal("c_left", 1.0);
 
@@ -464,7 +465,7 @@ int main(int argc, char** argv) {
     g_u.setMixingParams(lc, lambda_x, lambda_y);
 
     // Molecular diffusion + porosity + inlet PDF/BC
-    g_u.SetVal("diffusion", 0.01);  // Molecular diffusion
+    g_u.SetVal("diffusion", Diffusion_coefficient);  // Molecular diffusion
     g_u.SetVal("porosity", 1.0);
     g_u.SetVal("c_left", 1.0);       // Uniform PDF at inlet
 
