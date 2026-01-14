@@ -87,6 +87,10 @@ int main(int argc, char** argv) {
     int ny = 100;    // Very coarse for debugging
     double Lx = 3.0;
     double Ly = 1.0;
+    double correlation_ls_x = 1;
+    double correlation_ls_y = 0.1;
+    double stdev = 1.0;
+    double g_mean = 0;
     double Diffusion_coefficient = 0;
 
     // Primary spatial grid (x,y)
@@ -96,7 +100,7 @@ int main(int argc, char** argv) {
     PetscLogDouble t_total0, t_total1, t_asm0, t_asm1, t_solve0, t_solve1;
 
     // Generate heterogeneous field: Gaussian random field via SGS in "normal score" space
-    g.makeGaussianFieldSGS("K_normal_score", 1, 0.1, 10);
+    g.makeGaussianFieldSGS("K_normal_score", correlation_ls_x, correlation_ls_y, 10);
 
     // Start timing (NOTE: order here makes assembly time include earlier work depending on what follows)
     PetscTime(&t_asm0);
@@ -107,7 +111,7 @@ int main(int argc, char** argv) {
     g.writeNamedVTI("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(output_dir, "NormalScore.vti"));
 
     // Transform normal score to exponential field "K"
-    g.createExponentialField("K_normal_score", 1, 0, "K");
+    g.createExponentialField("K_normal_score", stdev, g_mean, "K");
 
     // End "assembly" timer (name suggests assembly, but it currently covers field generation + writes too)
     PetscTime(&t_asm1);
@@ -254,6 +258,7 @@ int main(int argc, char** argv) {
 
     // Save BTCs
     BTCs_FineScaled.write(joinPath(output_dir, "BTC_FineScaled.csv"));
+    BTCs_FineScaled.derivative().write(joinPath(output_dir, "BTC_FineScaled_derivative.csv"));
 
     // Total timing checkpoint (NOTE: later you overwrite t_total1 again)
     PetscTime(&t_total1);
@@ -501,6 +506,7 @@ int main(int argc, char** argv) {
 
     // Save upscaled BTCs
     BTCs_Upscaled.write(joinPath(output_dir, "BTC_Upscaled.csv"));
+    BTCs_Upscaled.derivative().write(joinPath(output_dir, "BTC_Upscaled_derivative.csv"));
 
     // ====================================================================
     // STEP 8: Save final PDF distribution
