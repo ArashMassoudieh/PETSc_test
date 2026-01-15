@@ -380,7 +380,14 @@ public:
     double getPorosity() const { return porosity_; }
     double getLeftBC() const { return c_left_; }
 
-    void SolveTransport(const double& t_end, const double& dt, const char* ksp_prefix = nullptr, int output_interval = 1, const std::string& output_dir = "", const std::string& filename = "", TimeSeriesSet<double>* btc_data = nullptr);
+    void SolveTransport(const double& t_end,
+                        const double& dt,
+                        const char* ksp_prefix = nullptr,
+                        int output_interval = 1,
+                        const std::string& output_dir = "",
+                        const std::string& filename = "",
+                        TimeSeriesSet<double>* btc_data = nullptr,
+                        int realization = -1);
 
     void printSampleC(const std::vector<std::pair<int,int>>& pts) const;
 

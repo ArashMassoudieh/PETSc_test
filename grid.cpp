@@ -1463,13 +1463,39 @@ void Grid2D::SolveTransport(const double& t_end,
                             int output_interval,
                             const std::string& output_dir,
                             const std::string& filename,
-                            TimeSeriesSet<double>* btc_data)   // <-- new arg
+                            TimeSeriesSet<double>* btc_data,   // <-- existing
+                            int realization /* = -1 */)        // <-- NEW (optional)
 {
     if (t_end <= 0.0) throw std::runtime_error("SolveTransport: t_end must be positive");
     if (dt <= 0.0) throw std::runtime_error("SolveTransport: dt must be positive");
     if (dt > t_end) throw std::runtime_error("SolveTransport: dt cannot be larger than t_end");
     if (!hasFlux("qx") || !hasFlux("qy"))
         throw std::runtime_error("SolveTransport: must call DarcySolve() first");
+
+    const bool use_realization = (realization >= 0);
+
+    // Helper: format realization tag (e.g., r0003)
+    auto realizationTag = [&]() -> std::string {
+        if (!use_realization) return "";
+        std::ostringstream os;
+        os << "r" << std::setw(4) << std::setfill('0') << realization;
+        return os.str();
+    };
+
+    // Helper: build VTI filename for a given step (keeps old naming when realization is off)
+    auto makeVtiName = [&](const std::string& base, int step) -> std::string {
+        std::ostringstream os;
+
+        if (!use_realization) {
+            // OLD behavior: transport_C0000.vti
+            os << base << std::setw(3) << std::setfill('0') << step << ".vti";
+        } else {
+            // NEW behavior: transport_C_r0003_0000.vti
+            os << base << "_" << realizationTag() << "_"
+               << std::setw(4) << std::setfill('0') << step << ".vti";
+        }
+        return os.str();
+    };
 
     std::cout << "Transport parameters:\n"
               << "  c_left = " << c_left_ << "\n"
@@ -1479,12 +1505,14 @@ void Grid2D::SolveTransport(const double& t_end,
     // Initialize breakthrough curve recording if requested
     bool record_btc = (btc_data != nullptr && !BTCLocations_.empty());
     if (record_btc) {
-        // Resize TimeSeriesSet to match number of BTC locations
         btc_data->resize(BTCLocations_.size());
 
-        // Set names for each series based on x-location
+        // Set names for each series based on x-location (+ optional realization tag)
         for (size_t i = 0; i < BTCLocations_.size(); i++) {
             std::ostringstream name;
+            if (use_realization) {
+                name << realizationTag() << "_";
+            }
             name << "x=" << std::fixed << std::setprecision(2) << BTCLocations_[i];
             btc_data->setSeriesName(i, name.str());
         }
@@ -1517,7 +1545,7 @@ void Grid2D::SolveTransport(const double& t_end,
         filename_ = filename;
 
     // Write initial state
-    writeNamedVTI_Auto("C", output_dir + "/" + filename_ + "0000.vti");
+    writeNamedVTI_Auto("C", output_dir + "/" + makeVtiName(filename_, 0));
 
     // Record initial BTC values (t=0)
     if (record_btc) {
@@ -1528,7 +1556,6 @@ void Grid2D::SolveTransport(const double& t_end,
             double avg = getAverageAlongY("C", BTCLocations_[i]);
             btc_values.push_back(avg);
         }
-
         btc_data->append(current_time, btc_values);
     }
 
@@ -1549,7 +1576,6 @@ void Grid2D::SolveTransport(const double& t_end,
                     double avg = getAverageAlongY("C", BTCLocations_[i]);
                     btc_values.push_back(avg);
                 }
-
                 btc_data->append(current_time, btc_values);
             }
 
@@ -1565,10 +1591,7 @@ void Grid2D::SolveTransport(const double& t_end,
 
             // Write snapshots
             if (output_interval > 0 && step_count % output_interval == 0) {
-                std::ostringstream fname;
-                fname << filename_
-                      << std::setw(4) << std::setfill('0') << step_count << ".vti";
-                writeNamedVTI_Auto("C", output_dir+ "/" + fname.str());
+                writeNamedVTI_Auto("C", output_dir + "/" + makeVtiName(filename_, step_count));
             }
         } catch (const std::exception& e) {
             std::cerr << "Error in transport step " << step_count
@@ -1582,7 +1605,8 @@ void Grid2D::SolveTransport(const double& t_end,
               << "Total steps taken: " << step_count << "\n";
 
     if (record_btc) {
-        std::cout << "Recorded " << (*btc_data)[0].size() << " time points for breakthrough curves\n";
+        std::cout << "Recorded " << (*btc_data)[0].size()
+                  << " time points for breakthrough curves\n";
     }
 
     if (hasField("C")) {
@@ -1593,6 +1617,7 @@ void Grid2D::SolveTransport(const double& t_end,
                   << ", Std Dev: " << std_c << "\n";
     }
 }
+
 
 void Grid2D::printSampleC(const std::vector<std::pair<int,int>>& pts) const {
     if (!hasField("C")) return;

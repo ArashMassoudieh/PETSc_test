@@ -422,9 +422,15 @@ int main(int argc, char** argv) {
         g.setBTCLocations(xLocations);
 
         TimeSeriesSet<double> BTCs_FineScaled;
-        g.SolveTransport(10, std::min(dt_optimal, 0.5 / 10.0), "transport_", 50, fine_dir, "C", &BTCs_FineScaled);
+        g.SolveTransport(10,
+                         std::min(dt_optimal, 0.5 / 10.0),
+                         "transport_", 50,
+                         fine_dir,
+                         "C",
+                         &BTCs_FineScaled,
+                         r); // <-- realization
 
-        g.writeNamedVTI_Auto("C", joinPath(fine_dir, "C.vti"));
+        g.writeNamedVTI_Auto("C", joinPath(fine_dir, pfx + "C.vti"));
 
         // BTC file names with realization prefix
         const std::string btc_path       = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
@@ -648,7 +654,7 @@ int main(int argc, char** argv) {
     BTCs_Upscaled.write(up_btc_path);
     BTCs_Upscaled.derivative().write(up_btc_deriv_path);
 
-    g_u.writeNamedVTI_Auto("C", joinPath(up_dir, up_pfx + "Cu.vti"));
+    g_u.writeNamedVTI_Auto("C", joinPath(up_dir, "Cu.vti"));
     g_u.writeNamedMatrix("C", Grid2D::ArrayKind::Cell, joinPath(up_dir, up_pfx + "Cu.txt"));
 
     // =====================================================================
