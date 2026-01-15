@@ -93,7 +93,8 @@ SOURCES += \
     grid.cpp \
     petscmatrix.cpp \
     petscsolver.cpp \
-    petscvector.cpp
+    petscvector.cpp \
+    sim_helpers.cpp
 
 HEADERS += \
     Particle.h \
@@ -113,7 +114,8 @@ HEADERS += \
     petsc_init.h \
     petscmatrix.h \
     petscsolver.h \
-    petscvector.h
+    petscvector.h \
+    sim_helpers.h
 
 # ==== Armadillo / GSL ====
 DEFINES += ARMA_USE_LAPACK ARMA_USE_BLAS

@@ -2,16 +2,12 @@
 #include "petsc_init.h"
 #include "petscmatrix.h"
 #include "petscvector.h"
+
 #include <cmath>
 #include <iostream>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <errno.h>
 #include <string>
-#include <ctime>
 #include <sstream>
 #include <iomanip>
-#include <cstring>
 #include <mpi.h>
 #include <fstream>
 #include <vector>
@@ -20,13 +16,13 @@
 #include <cstdlib>
 #include <algorithm>
 
-// POSIX directory scan (Linux)
-#include <dirent.h>
-
 #include "grid.h"
 #include "TimeSeries.h"
 #include "Pathway.h"
 #include "PathwaySet.h"
+
+// NEW: moved helpers
+#include "sim_helpers.h"
 
 static inline PetscInt idx(PetscInt i, PetscInt j, PetscInt nx) { return j*nx + i; }
 
@@ -36,432 +32,44 @@ static inline bool on_bc(PetscInt i, PetscInt j, PetscInt nx, PetscInt ny,
     return (i==0) || (j==0) || (std::abs(x - Lx) < eps) || (std::abs(y - Ly) < eps);
 }
 
-// Helper: directory creation
-bool createDirectory(const std::string& path) {
-    struct stat info;
-    if (stat(path.c_str(), &info) == 0) {
-        if (info.st_mode & S_IFDIR) return true;
-        std::cerr << "Error: Path exists but is not a directory: " << path << "\n";
-        return false;
-    }
-#ifdef _WIN32
-    if (mkdir(path.c_str()) != 0) {
-#else
-    if (mkdir(path.c_str(), 0755) != 0) {
-#endif
-        if (errno != EEXIST) {
-            std::cerr << "Error creating directory " << path << ": " << strerror(errno) << "\n";
-            return false;
+// =====================================================================
+// NEW (local): accumulation helpers for FineMean from disk
+//   - ignore NaNs
+//   - works on resampled columns (same length as t_base)
+// =====================================================================
+static inline bool is_finite_number(double v) {
+    return std::isfinite(v);
+}
+
+static void accumulate_sum_count(
+    const std::vector<double>& x,
+    std::vector<double>& sum,
+    std::vector<int>& count
+) {
+    if (sum.empty())   sum.assign(x.size(), 0.0);
+    if (count.empty()) count.assign(x.size(), 0);
+    if (sum.size() != x.size() || count.size() != x.size()) return;
+
+    for (size_t i = 0; i < x.size(); ++i) {
+        const double v = x[i];
+        if (is_finite_number(v)) {
+            sum[i] += v;
+            count[i] += 1;
         }
     }
-    std::cout << "Created output directory: " << path << "\n";
-    return true;
 }
 
-static bool fileExists(const std::string& path) {
-    struct stat st;
-    return (stat(path.c_str(), &st) == 0) && (st.st_mode & S_IFREG);
-}
-
-static bool dirExists(const std::string& path) {
-    struct stat st;
-    return (stat(path.c_str(), &st) == 0) && (st.st_mode & S_IFDIR);
-}
-
-std::string joinPath(const std::string& dir, const std::string& filename) {
-    if (dir.empty()) return filename;
-    if (dir.back() == '/' || dir.back() == '\\') return dir + filename;
-    return dir + "/" + filename;
-}
-
-// Timestamp: YYYYMMDD_HHMMSS
-static std::string makeTimestamp() {
-    std::time_t now = std::time(nullptr);
-    std::tm tm_now;
-    localtime_r(&now, &tm_now);
-    std::ostringstream oss;
-    oss << std::put_time(&tm_now, "%Y%m%d_%H%M%S");
-    return oss.str();
-}
-
-// Realization label starting at 1: r0001, r0002, ...
-static std::string makeRealLabel(int r1) {
-    std::ostringstream oss;
-    oss << "r" << std::setw(4) << std::setfill('0') << r1;
-    return oss.str();
-}
-
-// For folder name: fine_r0001, ...
-static std::string makeFineFolder(int r1) {
-    return "fine_" + makeRealLabel(r1);
-}
-
-static double mean_of(const std::vector<double>& v) {
-    if (v.empty()) return 0.0;
-    double s = 0.0;
-    for (double x : v) s += x;
-    return s / (double)v.size();
-}
-
-// ===============================
-// Robust delimited-line splitting
-// ===============================
-static char detect_delim(const std::string& header) {
-    if (header.find(',')  != std::string::npos) return ',';
-    if (header.find('\t') != std::string::npos) return '\t';
-    if (header.find(';')  != std::string::npos) return ';';
-    return ' '; // fallback: whitespace
-}
-
-static std::vector<std::string> split_line_delim(const std::string& line, char delim) {
-    std::vector<std::string> out;
-
-    if (delim == ' ') {
-        std::istringstream iss(line);
-        std::string tok;
-        while (iss >> tok) out.push_back(tok);
-        return out;
-    }
-
-    std::string cur;
-    bool in_quotes = false;
-    for (size_t i = 0; i < line.size(); ++i) {
-        char c = line[i];
-        if (c == '"') { in_quotes = !in_quotes; continue; }
-        if (c == delim && !in_quotes) {
-            out.push_back(cur);
-            cur.clear();
-        } else {
-            cur.push_back(c);
-        }
-    }
-    out.push_back(cur);
-    return out;
-}
-
-static bool try_parse_double(const std::string& s, double& v) {
-    char* endp = nullptr;
-    v = std::strtod(s.c_str(), &endp);
-    return endp != s.c_str() && *endp == '\0';
-}
-
-// ================================================================
-// CSV utilities for aggregation (now delimiter-robust)
-// ================================================================
-// Reads table with header. Assumes first column is time (numeric).
-// Returns: times, column_names (excluding time), columns data
-static bool read_time_series_table_csv(
-    const std::string& path,
-    std::vector<double>& times,
-    std::vector<std::string>& colnames,
-    std::vector<std::vector<double>>& cols
+static std::vector<double> finalize_mean_vec(
+    const std::vector<double>& sum,
+    const std::vector<int>& count
 ) {
-    std::ifstream f(path);
-    if (!f) return false;
+    std::vector<double> m(sum.size(), std::numeric_limits<double>::quiet_NaN());
+    if (sum.size() != count.size()) return m;
 
-    std::string header;
-    if (!std::getline(f, header)) return false;
-
-    char delim = detect_delim(header);
-    auto h = split_line_delim(header, delim);
-    if (h.size() < 2) return false;
-
-    colnames.assign(h.begin() + 1, h.end());
-    cols.assign(colnames.size(), std::vector<double>{});
-    times.clear();
-
-    std::string line;
-    while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        auto parts = split_line_delim(line, delim);
-        if (parts.size() < 1) continue;
-
-        double t;
-        if (!try_parse_double(parts[0], t)) continue;
-        times.push_back(t);
-
-        for (size_t j = 0; j < colnames.size(); ++j) {
-            double val = std::numeric_limits<double>::quiet_NaN();
-            if (j + 1 < parts.size()) {
-                double tmp;
-                if (try_parse_double(parts[j + 1], tmp)) val = tmp;
-            }
-            cols[j].push_back(val);
-        }
+    for (size_t i = 0; i < sum.size(); ++i) {
+        if (count[i] > 0) m[i] = sum[i] / (double)count[i];
     }
-
-    for (auto& c : cols) if (c.size() != times.size()) return false;
-    return true;
-}
-
-static bool write_comparison_csv(
-    const std::string& out_path,
-    const std::vector<double>& base_time,
-    const std::vector<std::string>& out_colnames,
-    const std::vector<std::vector<double>>& out_cols
-) {
-    if (out_colnames.size() != out_cols.size()) return false;
-    for (auto& c : out_cols) if (c.size() != base_time.size()) return false;
-
-    std::ofstream f(out_path);
-    if (!f) return false;
-
-    f << "t";
-    for (auto& n : out_colnames) f << "," << n;
-    f << "\n";
-
-    for (size_t i = 0; i < base_time.size(); ++i) {
-        f << std::setprecision(12) << base_time[i];
-        for (size_t j = 0; j < out_cols.size(); ++j) {
-            f << "," << std::setprecision(12) << out_cols[j][i];
-        }
-        f << "\n";
-    }
-    return true;
-}
-
-// ================================================================
-// Resampling utilities (fixed uniform time grid for aggregation)
-// ================================================================
-static double lerp(double x0, double y0, double x1, double y1, double x) {
-    if (x1 == x0) return y0;
-    const double a = (x - x0) / (x1 - x0);
-    return y0 + a * (y1 - y0);
-}
-
-static std::vector<double> resample_col_linear(
-    const std::vector<double>& t_src,
-    const std::vector<double>& y_src,
-    const std::vector<double>& t_dst
-) {
-    std::vector<double> y_dst;
-    y_dst.reserve(t_dst.size());
-
-    if (t_src.empty() || y_src.size() != t_src.size()) {
-        y_dst.assign(t_dst.size(), std::numeric_limits<double>::quiet_NaN());
-        return y_dst;
-    }
-
-    size_t k = 0;
-    for (double td : t_dst) {
-        if (td <= t_src.front()) { y_dst.push_back(y_src.front()); continue; }
-        if (td >= t_src.back())  { y_dst.push_back(y_src.back());  continue; }
-
-        while (k + 1 < t_src.size() && t_src[k + 1] < td) ++k;
-        y_dst.push_back(lerp(t_src[k], y_src[k], t_src[k+1], y_src[k+1], td));
-    }
-    return y_dst;
-}
-
-static void resample_table_linear(
-    const std::vector<double>& t_src,
-    const std::vector<std::vector<double>>& cols_src,
-    const std::vector<double>& t_dst,
-    std::vector<std::vector<double>>& cols_dst
-) {
-    cols_dst.clear();
-    cols_dst.reserve(cols_src.size());
-    for (const auto& c : cols_src) {
-        cols_dst.push_back(resample_col_linear(t_src, c, t_dst));
-    }
-}
-
-// ================================================================
-// Resume/Up-scale-only readers
-// ================================================================
-static bool parse_keyval_file(const std::string& path, std::map<std::string, std::string>& kv) {
-    std::ifstream f(path);
-    if (!f) return false;
-    kv.clear();
-    std::string line;
-    while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        auto pos = line.find('=');
-        if (pos == std::string::npos) continue;
-        std::string k = line.substr(0, pos);
-        std::string v = line.substr(pos + 1);
-        kv[k] = v;
-    }
-    return !kv.empty();
-}
-
-static bool read_mean_params_txt(const std::string& path,
-                                 double& lc_mean, double& lx_mean, double& ly_mean, double& dt_mean)
-{
-    std::map<std::string, std::string> kv;
-    if (!parse_keyval_file(path, kv)) return false;
-
-    auto getd = [&](const std::string& k, double& out)->bool{
-        auto it = kv.find(k);
-        if (it == kv.end()) return false;
-        out = std::atof(it->second.c_str());
-        return true;
-    };
-
-    bool ok = true;
-    ok = ok && getd("lc_mean", lc_mean);
-    ok = ok && getd("lambda_x_mean", lx_mean);
-    ok = ok && getd("lambda_y_mean", ly_mean);
-    ok = ok && getd("dt_mean", dt_mean);
-    return ok;
-}
-
-// mean_qx_inverse_cdf.txt format you write: "u,v" header then csv lines
-static bool read_mean_inverse_cdf_csv(const std::string& path,
-                                      std::vector<double>& u, std::vector<double>& v)
-{
-    std::ifstream f(path);
-    if (!f) return false;
-
-    std::string header;
-    if (!std::getline(f, header)) return false;
-    char delim = detect_delim(header);
-
-    u.clear(); v.clear();
-    std::string line;
-    while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        auto parts = split_line_delim(line, delim);
-        if (parts.size() < 2) continue;
-
-        double uu, vv;
-        if (!try_parse_double(parts[0], uu)) continue;
-        if (!try_parse_double(parts[1], vv)) continue;
-        u.push_back(uu);
-        v.push_back(vv);
-    }
-    return !u.empty() && u.size() == v.size();
-}
-
-// Read 2-column numeric table with any delimiter (tab/space/comma), no strict header required.
-static bool read_xy_table(const std::string& path, std::vector<double>& x, std::vector<double>& y) {
-    std::ifstream f(path);
-    if (!f) return false;
-
-    x.clear(); y.clear();
-    std::string line;
-
-    // detect delimiter from first non-empty line
-    char delim = ' ';
-    std::streampos pos0 = f.tellg();
-    while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        delim = detect_delim(line);
-        break;
-    }
-    f.clear();
-    f.seekg(pos0);
-
-    while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        auto parts = split_line_delim(line, delim);
-        if (parts.size() < 2) continue;
-
-        double xx, yy;
-        if (!try_parse_double(parts[0], xx)) continue;
-        if (!try_parse_double(parts[1], yy)) continue;
-
-        x.push_back(xx);
-        y.push_back(yy);
-    }
-    return !x.empty() && x.size() == y.size();
-}
-
-static double interp1_linear(const std::vector<double>& x, const std::vector<double>& y, double xv) {
-    if (x.empty()) return std::numeric_limits<double>::quiet_NaN();
-    if (x.size() == 1) return y[0];
-
-    if (xv <= x.front()) return y.front();
-    if (xv >= x.back())  return y.back();
-
-    // find right interval (linear scan is fine for ~100 pts; you can bsearch if you like)
-    size_t k = 0;
-    while (k + 1 < x.size() && x[k + 1] < xv) ++k;
-    return lerp(x[k], y[k], x[k+1], y[k+1], xv);
-}
-
-// Try read lc/lx/ly/dt from fine_params_all.csv
-static bool read_fine_params_all_csv(const std::string& path,
-                                    std::vector<double>& lc, std::vector<double>& lx,
-                                    std::vector<double>& ly, std::vector<double>& dt)
-{
-    std::ifstream f(path);
-    if (!f) return false;
-
-    std::string header;
-    if (!std::getline(f, header)) return false;
-    char delim = detect_delim(header);
-
-    lc.clear(); lx.clear(); ly.clear(); dt.clear();
-
-    std::string line;
-    while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        auto p = split_line_delim(line, delim);
-        if (p.size() < 5) continue; // realization,lc,lambda_x,lambda_y,dt_opt
-        double v_lc, v_lx, v_ly, v_dt;
-        if (!try_parse_double(p[1], v_lc)) continue;
-        if (!try_parse_double(p[2], v_lx)) continue;
-        if (!try_parse_double(p[3], v_ly)) continue;
-        if (!try_parse_double(p[4], v_dt)) continue;
-        lc.push_back(v_lc);
-        lx.push_back(v_lx);
-        ly.push_back(v_ly);
-        dt.push_back(v_dt);
-    }
-    return !lc.empty();
-}
-
-// Scan run_dir for fine_* folders and return list of (realization_id, folder_full_path)
-static std::vector<std::pair<int,std::string>> list_fine_folders(const std::string& run_dir) {
-    std::vector<std::pair<int,std::string>> out;
-
-    DIR* d = opendir(run_dir.c_str());
-    if (!d) return out;
-
-    struct dirent* ent;
-    while ((ent = readdir(d)) != nullptr) {
-        std::string name = ent->d_name;
-        if (name == "." || name == "..") continue;
-        if (name.rfind("fine_r", 0) != 0) continue; // starts with "fine_r"
-
-        // parse integer after "fine_r"
-        // e.g., fine_r0001 -> 1
-        std::string s = name.substr(std::string("fine_r").size());
-        if (s.empty()) continue;
-        int rid = std::atoi(s.c_str());
-        if (rid <= 0) continue;
-
-        std::string full = joinPath(run_dir, name);
-        if (dirExists(full)) out.push_back({rid, full});
-    }
-    closedir(d);
-
-    std::sort(out.begin(), out.end(),
-              [](auto& a, auto& b){ return a.first < b.first; });
-    return out;
-}
-
-// Build per-realization qx_inverse_cdf filename in fine folder
-static std::string fine_qx_cdf_path(const std::string& fine_dir, int r) {
-    const std::string pfx = makeRealLabel(r) + "_";
-    return joinPath(fine_dir, pfx + "qx_inverse_cdf.txt");
-}
-
-// Read per-realization qx inverse cdf and accumulate onto du-grid
-static bool accumulate_inverse_cdf_on_grid(const std::string& fine_dir, int r,
-                                          double du, int nU,
-                                          std::vector<double>& invcdf_sum)
-{
-    std::string path = fine_qx_cdf_path(fine_dir, r);
-    std::vector<double> u, v;
-    if (!read_xy_table(path, u, v)) return false;
-
-    for (int k = 0; k < nU; ++k) {
-        double uk = k * du;
-        invcdf_sum[k] += interp1_linear(u, v, uk);
-    }
-    return true;
+    return m;
 }
 
 int main(int argc, char** argv) {
@@ -486,7 +94,7 @@ int main(int argc, char** argv) {
     // CLI options
     // -----------------------------
     bool upscale_only = false;          // read fine outputs and run only upscaled
-    std::string resume_run_dir = output_dir + "/run_20260115_132010";    // required for --upscale-only, add saved finescale realizations folder here
+    std::string resume_run_dir = output_dir + "/run_20260115_132010";    // required for --upscale-only
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -541,7 +149,7 @@ int main(int argc, char** argv) {
     double Diffusion_coefficient = 0;
 
     // -----------------------------
-    // Monte Carlo / realizations
+    // Realizations
     // -----------------------------
     const int nReal_default = 20; // used only in full mode; in upscale-only we detect from folders
     const double du = 0.01;
@@ -549,10 +157,6 @@ int main(int argc, char** argv) {
 
     std::vector<double> lc_all, lx_all, ly_all, dt_all;
     std::vector<double> invcdf_sum(nU, 0.0);
-
-    // file lists for end aggregation (BTC + derivative)
-    std::vector<std::string> fine_btc_files;
-    std::vector<std::string> fine_btc_deriv_files;
 
     std::string stats_csv = joinPath(run_dir, "fine_params_all.csv");
     if (!upscale_only && rank == 0) {
@@ -610,7 +214,6 @@ int main(int argc, char** argv) {
             TimeSeries<double> AllQxValues = g.exportFieldToTimeSeries("qx", Grid2D::ArrayKind::Fx);
             TimeSeries<double> QxNormalScores = AllQxValues.ConvertToNormalScore();
             g.assignFromTimeSeries(QxNormalScores, "qx_normal_score", Grid2D::ArrayKind::Fx);
-
             g.writeNamedVTI("qx_normal_score", Grid2D::ArrayKind::Fx, joinPath(fine_dir, pfx + "qx_normal_score.vti"));
 
             std::cout << "Sampling points for derivative ..." << std::endl;
@@ -681,13 +284,9 @@ int main(int argc, char** argv) {
 
             const std::string btc_path       = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
             const std::string btc_deriv_path = joinPath(fine_dir, pfx + "BTC_FineScaled_derivative.csv");
+
             BTCs_FineScaled.write(btc_path);
             BTCs_FineScaled.derivative().write(btc_deriv_path);
-
-            if (rank == 0) {
-                fine_btc_files.push_back(btc_path);
-                fine_btc_deriv_files.push_back(btc_deriv_path);
-            }
 
             PetscTime(&t_total1);
 
@@ -739,13 +338,13 @@ int main(int argc, char** argv) {
                 m << "seed=" << seed << "\n";
             }
 
+            // accumulate means
             if (rank == 0) {
                 lc_all.push_back(advection_correlation_length_scale);
                 lx_all.push_back(lambda_x_emp);
                 ly_all.push_back(lambda_y_emp);
                 dt_all.push_back(dt_optimal);
 
-                // accumulate inverse CDF mean (already on du grid)
                 for (int k = 0; k < nU; ++k) {
                     double u = k * du;
                     invcdf_sum[k] += qx_inverse_cdf.interpol(u);
@@ -764,13 +363,11 @@ int main(int argc, char** argv) {
             }
 
             MPI_Barrier(PETSC_COMM_WORLD);
-        } // end fine loop
-    } // end if !upscale_only
+        }
+    }
 
     // =====================================================================
     // MEAN PARAMS + UPSCALED RUN
-    //   - full mode: compute from in-memory fine results
-    //   - upscale-only: read from disk (mean_* if present, else reconstruct from fine folders)
     // =====================================================================
     double lc_mean = 0, lx_mean = 0, ly_mean = 0, dt_mean = 0;
     std::vector<double> invcdf_mean;
@@ -786,7 +383,6 @@ int main(int argc, char** argv) {
             invcdf_mean.resize(nU, 0.0);
             for (int k = 0; k < nU; ++k) invcdf_mean[k] = invcdf_sum[k] / (double)nReal;
 
-            // save means for resume
             {
                 std::ofstream f(joinPath(run_dir, "mean_params.txt"));
                 f << "nReal=" << nReal << "\n";
@@ -805,14 +401,16 @@ int main(int argc, char** argv) {
                 }
             }
         } else {
-            // 1) Fast path: if mean files exist, load them
+            // upscale-only: try load mean files, else reconstruct from fine folders
             const std::string mean_params_path = joinPath(run_dir, "mean_params.txt");
             const std::string mean_cdf_path    = joinPath(run_dir, "mean_qx_inverse_cdf.txt");
 
-            bool ok_params = fileExists(mean_params_path) && read_mean_params_txt(mean_params_path, lc_mean, lx_mean, ly_mean, dt_mean);
+            bool ok_params = fileExists(mean_params_path) &&
+                             read_mean_params_txt(mean_params_path, lc_mean, lx_mean, ly_mean, dt_mean);
 
             std::vector<double> uvec, vvec;
-            bool ok_cdf = fileExists(mean_cdf_path) && read_mean_inverse_cdf_csv(mean_cdf_path, uvec, vvec);
+            bool ok_cdf = fileExists(mean_cdf_path) &&
+                          read_mean_inverse_cdf_csv(mean_cdf_path, uvec, vvec);
 
             if (ok_params && ok_cdf) {
                 invcdf_mean.assign(nU, 0.0);
@@ -822,9 +420,6 @@ int main(int argc, char** argv) {
                 }
                 std::cout << "Loaded mean_params.txt and mean_qx_inverse_cdf.txt\n";
             } else {
-                // 2) Reconstruct from fine folders:
-                //    - params from fine_params_all.csv if it exists
-                //    - inverse CDF by averaging r####_qx_inverse_cdf.txt across fine folders
                 std::cout << "Mean files missing/incomplete; reconstructing from fine_* folders...\n";
 
                 auto fine_folders = list_fine_folders(run_dir);
@@ -834,9 +429,10 @@ int main(int argc, char** argv) {
                 }
                 nReal = (int)fine_folders.size();
 
-                // params: try fine_params_all.csv first
+                // params from fine_params_all.csv if exists
                 std::vector<double> lc_v, lx_v, ly_v, dt_v;
-                bool ok_fine_params = fileExists(stats_csv) && read_fine_params_all_csv(stats_csv, lc_v, lx_v, ly_v, dt_v);
+                bool ok_fine_params = fileExists(stats_csv) &&
+                                      read_fine_params_all_csv(stats_csv, lc_v, lx_v, ly_v, dt_v);
 
                 if (ok_fine_params) {
                     lc_mean = mean_of(lc_v);
@@ -845,13 +441,14 @@ int main(int argc, char** argv) {
                     dt_mean = mean_of(dt_v);
                     std::cout << "Loaded params from fine_params_all.csv\n";
                 } else {
-                    // fallback: read per-folder meta (expects r####_meta.txt)
+                    // fallback: read meta.txt per folder
                     lc_v.clear(); lx_v.clear(); ly_v.clear(); dt_v.clear();
                     for (auto& pr : fine_folders) {
-                        int r = pr.first;
+                        int rr = pr.first;
                         std::string fine_dir = pr.second;
-                        std::string pfx = makeRealLabel(r) + "_";
+                        std::string pfx = makeRealLabel(rr) + "_";
                         std::string meta = joinPath(fine_dir, pfx + "meta.txt");
+
                         std::map<std::string,std::string> kv;
                         if (!parse_keyval_file(meta, kv)) continue;
 
@@ -878,13 +475,13 @@ int main(int argc, char** argv) {
                     std::cout << "Loaded params from fine meta.txt files\n";
                 }
 
-                // inverse CDF average
+                // inverse CDF average from per-realization qx_inverse_cdf.txt
                 std::fill(invcdf_sum.begin(), invcdf_sum.end(), 0.0);
                 int used = 0;
                 for (auto& pr : fine_folders) {
-                    int r = pr.first;
+                    int rr = pr.first;
                     std::string fine_dir = pr.second;
-                    if (accumulate_inverse_cdf_on_grid(fine_dir, r, du, nU, invcdf_sum)) used++;
+                    if (accumulate_inverse_cdf_on_grid(fine_dir, rr, du, nU, invcdf_sum)) used++;
                 }
                 if (used == 0) {
                     std::cerr << "ERROR: No qx_inverse_cdf.txt files could be read.\n";
@@ -990,13 +587,13 @@ int main(int argc, char** argv) {
     // Mixing parameters (mean)
     g_u.setMixingParams(lc_mean, lx_mean, ly_mean);
 
-    g_u.SetVal("diffusion", Diffusion_coefficient);
-    g_u.SetVal("porosity", 1.0);
-    g_u.SetVal("c_left", 1.0);
-
     double t_end_pdf = 10;
     double dt_pdf = dt_mean;
     int output_interval_pdf = 50;
+
+    g_u.SetVal("diffusion", Diffusion_coefficient);
+    g_u.SetVal("porosity", 1.0);
+    g_u.SetVal("c_left", 1.0);
 
     g_u.computeMixingDiffusionCoefficient();
     g_u.writeNamedVTI("D_y", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "D_y.vti"));
@@ -1019,13 +616,15 @@ int main(int argc, char** argv) {
     g_u.writeNamedMatrix("C", Grid2D::ArrayKind::Cell, joinPath(up_dir, up_pfx + "Cu.txt"));
 
     // =====================================================================
-    // FINAL AGGREGATION CSVs for comparison / plotting (reads fine files from disk)
+    // FINAL AGGREGATION CSVs for comparison / plotting
+    //   Requested order:
+    //     r0001..r0020, FineMean, Upscaled
     // =====================================================================
     if (rank == 0) {
 
-        // fixed uniform time grid
         const double t_end_cmp = 10.0;
         const double dt_cmp    = 0.001;
+
         std::vector<double> t_base;
         t_base.reserve((size_t)std::ceil(t_end_cmp / dt_cmp) + 1);
         for (double tt = 0.0; tt <= t_end_cmp + 1e-12; tt += dt_cmp) t_base.push_back(tt);
@@ -1052,19 +651,74 @@ int main(int argc, char** argv) {
             return true;
         };
 
-        // ingest all fine BTCs by scanning folders (works in both modes)
+        // scan fine folders
         auto fine_folders = list_fine_folders(run_dir);
+
+        // ------------------------------------------------------------
+        // BTC comparison: r0001.., FineMean, Upscaled
+        // ------------------------------------------------------------
+
+        // 1) ingest all fine BTCs in order
         for (auto& pr : fine_folders) {
-            int r = pr.first;
+            int rr = pr.first;
             std::string fine_dir = pr.second;
             if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
 
-            std::string pfx = makeRealLabel(r) + "_";
+            std::string pfx = makeRealLabel(rr) + "_";
             std::string btc = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
-            ingest_one(btc, "Fine_" + makeRealLabel(r));
+            ingest_one(btc, "Fine_" + makeRealLabel(rr));
         }
 
-        // ingest upscaled
+        // 2) compute FineMean from disk (after all r####)
+        {
+            bool initialized = false;
+            std::vector<std::string> mean_names;
+            std::vector<std::vector<double>> sum_cols;
+            std::vector<std::vector<int>>    cnt_cols;
+            int used = 0;
+
+            for (auto& pr : fine_folders) {
+                int rr = pr.first;
+                std::string fine_dir = pr.second;
+                if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
+
+                std::string pfx = makeRealLabel(rr) + "_";
+                std::string btc = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
+
+                std::vector<double> t;
+                std::vector<std::string> names;
+                std::vector<std::vector<double>> cols;
+                if (!read_time_series_table_csv(btc, t, names, cols)) continue;
+
+                std::vector<std::vector<double>> cols_rs;
+                resample_table_linear(t, cols, t_base, cols_rs);
+
+                if (!initialized) {
+                    mean_names = names;
+                    sum_cols.assign(mean_names.size(), std::vector<double>{});
+                    cnt_cols.assign(mean_names.size(), std::vector<int>{});
+                    initialized = true;
+                }
+                if (names.size() != mean_names.size()) continue;
+
+                for (size_t j = 0; j < mean_names.size(); ++j) {
+                    accumulate_sum_count(cols_rs[j], sum_cols[j], cnt_cols[j]);
+                }
+                used++;
+            }
+
+            if (initialized && used > 0) {
+                for (size_t j = 0; j < mean_names.size(); ++j) {
+                    out_names.push_back(std::string("FineMean_") + mean_names[j]);
+                    out_cols.push_back(finalize_mean_vec(sum_cols[j], cnt_cols[j]));
+                }
+                std::cout << "Added FineMean (BTC) from " << used << " realizations.\n";
+            } else {
+                std::cerr << "WARNING: FineMean (BTC) not added (no readable fine BTC files).\n";
+            }
+        }
+
+        // 3) ingest upscaled last
         ingest_one(up_btc_path, "Upscaled_mean");
 
         const std::string out_cmp = joinPath(run_dir, "BTC_Compare_Fine_vs_Upscaled.csv");
@@ -1074,20 +728,73 @@ int main(int argc, char** argv) {
             std::cout << "Wrote comparison BTC CSV: " << out_cmp << "\n";
         }
 
-        // derivative comparison
+        // ------------------------------------------------------------
+        // Derivative comparison: r0001.., FineDerivMean, UpscaledDeriv
+        // ------------------------------------------------------------
         out_names.clear();
         out_cols.clear();
 
+        // 1) ingest all fine derivative BTCs
         for (auto& pr : fine_folders) {
-            int r = pr.first;
+            int rr = pr.first;
             std::string fine_dir = pr.second;
             if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
 
-            std::string pfx = makeRealLabel(r) + "_";
+            std::string pfx = makeRealLabel(rr) + "_";
             std::string btc = joinPath(fine_dir, pfx + "BTC_FineScaled_derivative.csv");
-            ingest_one(btc, "FineDeriv_" + makeRealLabel(r));
+            ingest_one(btc, "FineDeriv_" + makeRealLabel(rr));
         }
 
+        // 2) FineDerivMean from disk
+        {
+            bool initialized = false;
+            std::vector<std::string> mean_names;
+            std::vector<std::vector<double>> sum_cols;
+            std::vector<std::vector<int>>    cnt_cols;
+            int used = 0;
+
+            for (auto& pr : fine_folders) {
+                int rr = pr.first;
+                std::string fine_dir = pr.second;
+                if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
+
+                std::string pfx = makeRealLabel(rr) + "_";
+                std::string btc = joinPath(fine_dir, pfx + "BTC_FineScaled_derivative.csv");
+
+                std::vector<double> t;
+                std::vector<std::string> names;
+                std::vector<std::vector<double>> cols;
+                if (!read_time_series_table_csv(btc, t, names, cols)) continue;
+
+                std::vector<std::vector<double>> cols_rs;
+                resample_table_linear(t, cols, t_base, cols_rs);
+
+                if (!initialized) {
+                    mean_names = names;
+                    sum_cols.assign(mean_names.size(), std::vector<double>{});
+                    cnt_cols.assign(mean_names.size(), std::vector<int>{});
+                    initialized = true;
+                }
+                if (names.size() != mean_names.size()) continue;
+
+                for (size_t j = 0; j < mean_names.size(); ++j) {
+                    accumulate_sum_count(cols_rs[j], sum_cols[j], cnt_cols[j]);
+                }
+                used++;
+            }
+
+            if (initialized && used > 0) {
+                for (size_t j = 0; j < mean_names.size(); ++j) {
+                    out_names.push_back(std::string("FineDerivMean_") + mean_names[j]);
+                    out_cols.push_back(finalize_mean_vec(sum_cols[j], cnt_cols[j]));
+                }
+                std::cout << "Added FineDerivMean from " << used << " realizations.\n";
+            } else {
+                std::cerr << "WARNING: FineDerivMean not added (no readable fine derivative files).\n";
+            }
+        }
+
+        // 3) upscaled derivative last
         ingest_one(up_btc_deriv_path, "UpscaledDeriv_mean");
 
         const std::string out_cmp_d = joinPath(run_dir, "BTC_Compare_FineDerivative_vs_UpscaledDerivative.csv");
