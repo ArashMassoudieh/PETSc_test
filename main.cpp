@@ -169,7 +169,6 @@ static bool read_time_series_table_csv(
 }
 
 // Writes aggregated comparison CSV: time + many columns.
-// Assumes all series have same time vector length and values (within tolerance).
 static bool write_comparison_csv(
     const std::string& out_path,
     const std::vector<double>& base_time,
@@ -195,6 +194,55 @@ static bool write_comparison_csv(
     }
     return true;
 }
+
+// ================================================================
+// NEW: Resampling utilities (fixed uniform time grid for aggregation)
+// ================================================================
+static double lerp(double x0, double y0, double x1, double y1, double x) {
+    if (x1 == x0) return y0;
+    const double a = (x - x0) / (x1 - x0);
+    return y0 + a * (y1 - y0);
+}
+
+// Linear resample y(t_src) onto t_dst. Out-of-range clamped to endpoints.
+static std::vector<double> resample_col_linear(
+    const std::vector<double>& t_src,
+    const std::vector<double>& y_src,
+    const std::vector<double>& t_dst
+) {
+    std::vector<double> y_dst;
+    y_dst.reserve(t_dst.size());
+
+    if (t_src.empty() || y_src.size() != t_src.size()) {
+        y_dst.assign(t_dst.size(), std::numeric_limits<double>::quiet_NaN());
+        return y_dst;
+    }
+
+    size_t k = 0;
+    for (double td : t_dst) {
+        if (td <= t_src.front()) { y_dst.push_back(y_src.front()); continue; }
+        if (td >= t_src.back())  { y_dst.push_back(y_src.back());  continue; }
+
+        while (k + 1 < t_src.size() && t_src[k + 1] < td) ++k;
+
+        y_dst.push_back(lerp(t_src[k], y_src[k], t_src[k+1], y_src[k+1], td));
+    }
+    return y_dst;
+}
+
+static void resample_table_linear(
+    const std::vector<double>& t_src,
+    const std::vector<std::vector<double>>& cols_src,
+    const std::vector<double>& t_dst,
+    std::vector<std::vector<double>>& cols_dst
+) {
+    cols_dst.clear();
+    cols_dst.reserve(cols_src.size());
+    for (const auto& c : cols_src) {
+        cols_dst.push_back(resample_col_linear(t_src, c, t_dst));
+    }
+}
+// ================================================================
 
 int main(int argc, char** argv) {
     PETScInit petsc(argc, argv);
@@ -285,7 +333,9 @@ int main(int argc, char** argv) {
 
         PetscLogDouble t_total0, t_total1, t_asm0, t_asm1, t_solve0, t_solve1;
 
-        g.makeGaussianFieldSGS("K_normal_score", correlation_ls_x, correlation_ls_y, 10);
+        unsigned long run_seed = 20260115UL;  // pick any constant, or read from argv
+        unsigned long seed = run_seed + 1000UL*(unsigned long)r + (unsigned long)rank;
+        g.makeGaussianFieldSGS("K_normal_score", correlation_ls_x, correlation_ls_y, 10, seed);
 
         PetscTime(&t_asm0);
         PetscTime(&t_total0);
@@ -374,7 +424,7 @@ int main(int argc, char** argv) {
         TimeSeriesSet<double> BTCs_FineScaled;
         g.SolveTransport(10, std::min(dt_optimal, 0.5 / 10.0), "transport_", 50, fine_dir, "C", &BTCs_FineScaled);
 
-        g.writeNamedVTI_Auto("C", joinPath(fine_dir, pfx + "C.vti"));
+        g.writeNamedVTI_Auto("C", joinPath(fine_dir, "C.vti"));
 
         // BTC file names with realization prefix
         const std::string btc_path       = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
@@ -436,6 +486,7 @@ int main(int argc, char** argv) {
             m << "lambda_x=" << lambda_x_emp << "\n";
             m << "lambda_y=" << lambda_y_emp << "\n";
             m << "dt_opt=" << dt_optimal << "\n";
+            m << "seed=" << seed << "\n";
         }
 
         // accumulate means + save summary line
@@ -604,11 +655,21 @@ int main(int argc, char** argv) {
     // FINAL AGGREGATION CSVs for comparison / plotting
     // =====================================================================
     if (rank == 0) {
-        // 1) BTC comparison
+
+        // ------------------------------------------------------------
+        // FIXED UNIFORM TIME GRID (best for consistent plotting)
+        // ------------------------------------------------------------
+        const double t_end_cmp = 10.0;    // must match SolveTransport(t_end)
+        const double dt_cmp    = 0.001;   // plotting resolution you want
         std::vector<double> t_base;
+        t_base.reserve((size_t)std::ceil(t_end_cmp / dt_cmp) + 1);
+        for (double tt = 0.0; tt <= t_end_cmp + 1e-12; tt += dt_cmp) t_base.push_back(tt);
+
+        // 1) BTC comparison
         std::vector<std::string> out_names;
         std::vector<std::vector<double>> out_cols;
 
+        // Read any BTC CSV and RESAMPLE onto fixed time grid t_base
         auto ingest_one = [&](const std::string& path, const std::string& series_prefix) -> bool {
             std::vector<double> t;
             std::vector<std::string> names;
@@ -617,26 +678,13 @@ int main(int argc, char** argv) {
                 std::cerr << "WARNING: could not read CSV for aggregation: " << path << "\n";
                 return false;
             }
-            if (t_base.empty()) {
-                t_base = t;
-            } else {
-                // check time consistency (length + approximate equality)
-                if (t.size() != t_base.size()) {
-                    std::cerr << "WARNING: time length mismatch in " << path << "\n";
-                    return false;
-                }
-                for (size_t i = 0; i < t.size(); ++i) {
-                    if (std::abs(t[i] - t_base[i]) > 1e-8) {
-                        // not fatal, but warn
-                        std::cerr << "WARNING: time mismatch at row " << i << " in " << path << "\n";
-                        break;
-                    }
-                }
-            }
+
+            std::vector<std::vector<double>> cols_rs;
+            resample_table_linear(t, cols, t_base, cols_rs);
 
             for (size_t j = 0; j < names.size(); ++j) {
                 out_names.push_back(series_prefix + "_" + names[j]);
-                out_cols.push_back(cols[j]);
+                out_cols.push_back(std::move(cols_rs[j]));
             }
             return true;
         };
@@ -660,7 +708,6 @@ int main(int argc, char** argv) {
         }
 
         // 2) Derivative BTC comparison
-        t_base.clear();
         out_names.clear();
         out_cols.clear();
 
