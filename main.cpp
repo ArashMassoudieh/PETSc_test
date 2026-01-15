@@ -8,6 +8,11 @@
 #include <sys/types.h>
 #include <errno.h>
 #include <string>
+#include <ctime>
+#include <sstream>
+#include <iomanip>
+#include <cstring>
+#include <mpi.h>
 #include "grid.h"
 #include "TimeSeries.h"
 #include "Pathway.h"
@@ -63,6 +68,16 @@ std::string joinPath(const std::string& dir, const std::string& filename) {
     return dir + "/" + filename;
 }
 
+// Timestamp: YYYYMMDD_HHMMSS
+static std::string makeTimestamp() {
+    std::time_t now = std::time(nullptr);
+    std::tm tm_now;
+    localtime_r(&now, &tm_now);
+    std::ostringstream oss;
+    oss << std::put_time(&tm_now, "%Y%m%d_%H%M%S");
+    return oss.str();
+}
+
 int main(int argc, char** argv) {
     // PETSc + MPI init RAII wrapper (assumed)
     PETScInit petsc(argc, argv);
@@ -78,7 +93,35 @@ int main(int argc, char** argv) {
     std::string output_dir = "/home/behzad/Projects/PETSc_test/Results";
 #elif SligoCreek
     std::string output_dir = "/media/arash/E/Projects/PETSc_test/Results";
+#else
+    std::string output_dir = "./Results";
 #endif
+
+    // --------------------------------------------------------------------
+    // Create a run subfolder inside output_dir: output_dir/run_YYYYMMDD_HHMMSS/
+    // --------------------------------------------------------------------
+    int rank = 0;
+    MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
+
+    std::string run_dir;
+    if (rank == 0) {
+        createDirectory(output_dir);
+        run_dir = joinPath(output_dir, "run_" + makeTimestamp());
+        createDirectory(run_dir);
+        std::cout << "Run directory: " << run_dir << std::endl;
+    }
+
+    // Broadcast run_dir to all ranks so everyone writes to the same folder
+    int len = 0;
+    if (rank == 0) len = (int)run_dir.size();
+    MPI_Bcast(&len, 1, MPI_INT, 0, PETSC_COMM_WORLD);
+    run_dir.resize(len);
+    MPI_Bcast(run_dir.data(), len, MPI_CHAR, 0, PETSC_COMM_WORLD);
+
+    // Ensure it ends with '/'
+    if (!run_dir.empty() && run_dir.back() != '/' && run_dir.back() != '\\') run_dir += "/";
+
+    MPI_Barrier(PETSC_COMM_WORLD);
 
     // Domain / grid resolution for primary Darcy/transport solves
     // NOTE: comments say "very coarse for debugging" but nx=300 is not super coarse.
@@ -107,8 +150,8 @@ int main(int argc, char** argv) {
     PetscTime(&t_total0);
 
     // Write raw normal-score permeability field
-    g.writeNamedMatrix("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(output_dir, "K_normal_score.txt"));
-    g.writeNamedVTI("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(output_dir, "NormalScore.vti"));
+    g.writeNamedMatrix("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(run_dir, "K_normal_score.txt"));
+    g.writeNamedVTI("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(run_dir, "NormalScore.vti"));
 
     // Transform normal score to exponential field "K"
     g.createExponentialField("K_normal_score", stdev, g_mean, "K");
@@ -124,32 +167,32 @@ int main(int argc, char** argv) {
     std::cout << "Darcy solved ... " << std::endl;
 
     // Save K field
-    g.writeNamedVTI("K", Grid2D::ArrayKind::Cell, joinPath(output_dir, "K.vti"));
+    g.writeNamedVTI("K", Grid2D::ArrayKind::Cell, joinPath(run_dir, "K.vti"));
 
     // End solver timer
     PetscTime(&t_solve1);
 
     // Diagnostics: mass balance error field
     g.computeMassBalanceError("MassBalanceError");
-    g.writeNamedMatrix("MassBalanceError", Grid2D::ArrayKind::Cell, joinPath(output_dir, "error.txt"));
+    g.writeNamedMatrix("MassBalanceError", Grid2D::ArrayKind::Cell, joinPath(run_dir, "error.txt"));
 
     // Save head + flux fields
-    g.writeNamedVTI("head", Grid2D::ArrayKind::Cell, joinPath(output_dir, "Head.vti"));
-    g.writeNamedMatrix("head", Grid2D::ArrayKind::Cell, joinPath(output_dir, "Head.txt"));
-    g.writeNamedVTI("qx", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx.vti"));
-    g.writeNamedVTI("qy", Grid2D::ArrayKind::Fy, joinPath(output_dir, "qy.vti"));
+    g.writeNamedVTI("head", Grid2D::ArrayKind::Cell, joinPath(run_dir, "Head.vti"));
+    g.writeNamedMatrix("head", Grid2D::ArrayKind::Cell, joinPath(run_dir, "Head.txt"));
+    g.writeNamedVTI("qx", Grid2D::ArrayKind::Fx, joinPath(run_dir, "qx.vti"));
+    g.writeNamedVTI("qy", Grid2D::ArrayKind::Fy, joinPath(run_dir, "qy.vti"));
 
     // Export qx to TimeSeries then convert to normal-score for statistical derivative sampling
     TimeSeries<double> AllQxValues = g.exportFieldToTimeSeries("qx", Grid2D::ArrayKind::Fx);
     TimeSeries<double> QxNormalScores = AllQxValues.ConvertToNormalScore();
     g.assignFromTimeSeries(QxNormalScores, "qx_normal_score", Grid2D::ArrayKind::Fx);
 
-    g.writeNamedVTI("qx_normal_score", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx_normal_score.vti"));
+    g.writeNamedVTI("qx_normal_score", Grid2D::ArrayKind::Fx, joinPath(run_dir, "qx_normal_score.vti"));
 
     // Sample second derivative of qx_normal_score (curvature proxy) along X direction
     std::cout << "Sampling points for derivative ..." << std::endl;
     TimeSeries<double> curvture = g.sampleSecondDerivative("qx_normal_score", Grid2D::ArrayKind::Fx, Grid2D::DerivDir::X, 10000, 0.05);
-    curvture.writefile(joinPath(output_dir, "2nd_deriv.txt"));
+    curvture.writefile(joinPath(run_dir, "2nd_deriv.txt"));
 
     // =============================================================================
     // Velocity autocorrelation analysis via Gaussian perturbation sampling
@@ -181,7 +224,7 @@ int main(int argc, char** argv) {
             std::cerr << "Warning: Failed at delta = " << delta << ": " << e.what() << std::endl;
         }
     }
-    corr_radial.writefile(joinPath(output_dir, "velocity_correlation_radial.txt"));
+    corr_radial.writefile(joinPath(run_dir, "velocity_correlation_radial.txt"));
     double lambda_radial = corr_radial.fitExponentialDecay();
     std::cout << "Radial correlation length scale: " << lambda_radial << std::endl;
 
@@ -200,7 +243,7 @@ int main(int argc, char** argv) {
             std::cerr << "Warning: Failed at delta = " << delta << ": " << e.what() << std::endl;
         }
     }
-    corr_x.writefile(joinPath(output_dir, "velocity_correlation_x.txt"));
+    corr_x.writefile(joinPath(run_dir, "velocity_correlation_x.txt"));
     double lambda_x_emp = corr_x.fitExponentialDecay();
     std::cout << "X-direction correlation length scale: " << lambda_x_emp << std::endl;
 
@@ -219,7 +262,7 @@ int main(int argc, char** argv) {
             std::cerr << "Warning: Failed at delta = " << delta << ": " << e.what() << std::endl;
         }
     }
-    corr_y.writefile(joinPath(output_dir, "velocity_correlation_y.txt"));
+    corr_y.writefile(joinPath(run_dir, "velocity_correlation_y.txt"));
     double lambda_y_emp = corr_y.fitExponentialDecay();
     std::cout << "Y-direction correlation length scale: " << lambda_y_emp << std::endl;
 
@@ -236,9 +279,9 @@ int main(int argc, char** argv) {
     g.assignConstant("C", Grid2D::ArrayKind::Cell, 0);
 
     // Save raw fields as matrices (for debugging / external scripts)
-    g.writeNamedMatrix("qx", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx.txt"));
-    g.writeNamedMatrix("qy", Grid2D::ArrayKind::Fy, joinPath(output_dir, "qy.txt"));
-    g.writeNamedMatrix("K", Grid2D::ArrayKind::Cell, joinPath(output_dir, "K.txt"));
+    g.writeNamedMatrix("qx", Grid2D::ArrayKind::Fx, joinPath(run_dir, "qx.txt"));
+    g.writeNamedMatrix("qy", Grid2D::ArrayKind::Fy, joinPath(run_dir, "qy.txt"));
+    g.writeNamedMatrix("K", Grid2D::ArrayKind::Cell, joinPath(run_dir, "K.txt"));
 
     // Transport parameters
     g.SetVal("diffusion", Diffusion_coefficient);
@@ -251,14 +294,14 @@ int main(int argc, char** argv) {
 
     // Fine-scale transport solve (uses g’s spatial velocity field)
     TimeSeriesSet<double> BTCs_FineScaled;
-    g.SolveTransport(10, std::min(dt_optimal, 0.5/10.0), "transport_", 50, output_dir, "C", &BTCs_FineScaled);
+    g.SolveTransport(10, std::min(dt_optimal, 0.5/10.0), "transport_", 50, run_dir, "C", &BTCs_FineScaled);
 
     // Save final concentration
-    g.writeNamedVTI_Auto("C", joinPath(output_dir, "C.vti"));
+    g.writeNamedVTI_Auto("C", joinPath(run_dir, "C.vti"));
 
     // Save BTCs
-    BTCs_FineScaled.write(joinPath(output_dir, "BTC_FineScaled.csv"));
-    BTCs_FineScaled.derivative().write(joinPath(output_dir, "BTC_FineScaled_derivative.csv"));
+    BTCs_FineScaled.write(joinPath(run_dir, "BTC_FineScaled.csv"));
+    BTCs_FineScaled.derivative().write(joinPath(run_dir, "BTC_FineScaled_derivative.csv"));
 
     // Total timing checkpoint (NOTE: later you overwrite t_total1 again)
     PetscTime(&t_total1);
@@ -279,7 +322,7 @@ int main(int argc, char** argv) {
               << path.last().y() << ")" << std::endl;
 
     // Save pathway polyline / points
-    path.writeVTK(joinPath(output_dir, "pathway.vtk"));
+    path.writeVTK(joinPath(run_dir, "pathway.vtk"));
 
     // --------------------------------------------------------------------
     // Many particle tracking (PathwaySet) for statistics + correlation
@@ -334,7 +377,7 @@ int main(int argc, char** argv) {
     }
 
     // Save correlation function
-    qx_correlation.writefile(joinPath(output_dir, "qx_correlation_vs_distance.txt"));
+    qx_correlation.writefile(joinPath(run_dir, "qx_correlation_vs_distance.txt"));
 
     // Fit exponential decay to estimate correlation length scale (used later conceptually)
     double advection_correlation_length_scale = qx_correlation.fitExponentialDecay();
@@ -352,19 +395,19 @@ int main(int argc, char** argv) {
     std::cout << "Completed pathways: " << pathways.countActive() << std::endl;
 
     // Write pathway summary and combined VTK
-    pathways.writeToFile(joinPath(output_dir,"pathway_summary.txt"));
-    pathways.writeCombinedVTK(joinPath(output_dir,"all_pathways.vtk"));
+    pathways.writeToFile(joinPath(run_dir,"pathway_summary.txt"));
+    pathways.writeCombinedVTK(joinPath(run_dir,"all_pathways.vtk"));
 
     // ----- Report -----
     // NOTE: timing here uses t_total1 that was set earlier (after fine-scale transport).
     // Later you call PetscTime(&t_total1) again at the end.
-    int rank = 0;
+    // (rank already defined above; keep code as-is otherwise)
     MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
     if (rank == 0) {
         std::cout << "Assembly time: " << (t_asm1 - t_asm0) << " s\n";
         std::cout << "Solve time:    " << (t_solve1 - t_solve0) << " s\n";
         std::cout << "Total time:    " << (t_total1 - t_total0) << " s\n";
-        std::cout << "All outputs saved to: " << output_dir << std::endl;
+        std::cout << "All outputs saved to: " << run_dir << std::endl;
     }
 
     // ====================================================================
@@ -379,7 +422,7 @@ int main(int argc, char** argv) {
     qx_inverse_cdf = qx_inverse_cdf.make_uniform(0.01);
 
     // Save inverse CDF
-    qx_inverse_cdf.writefile(joinPath(output_dir, "qx_inverse_cdf.txt"));
+    qx_inverse_cdf.writefile(joinPath(run_dir, "qx_inverse_cdf.txt"));
 
     // Print velocity range using quantiles p=0 and p=1
     std::cout << "qx inverse CDF extracted with " << qx_inverse_cdf.size() << " points" << std::endl;
@@ -450,10 +493,10 @@ int main(int argc, char** argv) {
     std::cout << "\n=== Writing initial fields for verification ===" << std::endl;
 
     // Save velocity fields on (x,u) grid (as VTI + text)
-    g_u.writeNamedVTI("qx", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx_u_initial.vti"));
-    g_u.writeNamedVTI("qy", Grid2D::ArrayKind::Fy, joinPath(output_dir, "qy_u_initial.vti"));
-    g_u.writeNamedMatrix("qx", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx_u_initial.txt"));
-    g_u.writeNamedMatrix("qy", Grid2D::ArrayKind::Fy, joinPath(output_dir, "qy_u_initial.txt"));
+    g_u.writeNamedVTI("qx", Grid2D::ArrayKind::Fx, joinPath(run_dir, "qx_u_initial.vti"));
+    g_u.writeNamedVTI("qy", Grid2D::ArrayKind::Fy, joinPath(run_dir, "qy_u_initial.vti"));
+    g_u.writeNamedMatrix("qx", Grid2D::ArrayKind::Fx, joinPath(run_dir, "qx_u_initial.txt"));
+    g_u.writeNamedMatrix("qy", Grid2D::ArrayKind::Fy, joinPath(run_dir, "qy_u_initial.txt"));
 
     std::cout << "Initial velocity fields written" << std::endl;
 
@@ -489,7 +532,7 @@ int main(int argc, char** argv) {
 
     // Save D_y for verification
     std::cout << "\n=== Writing D_y into vti ===" << std::endl;
-    g_u.writeNamedVTI("D_y", Grid2D::ArrayKind::Fy, joinPath(output_dir, "D_y.vti"));
+    g_u.writeNamedVTI("D_y", Grid2D::ArrayKind::Fy, joinPath(run_dir, "D_y.vti"));
 
     // Solve transport on (x,u) grid
     std::cout << "\n=== Solving ===" << std::endl;
@@ -502,11 +545,11 @@ int main(int argc, char** argv) {
 
     // IMPORTANT: last argument "Cu" is the field name passed to SolveTransport
     // But above you initialized "C", and later you write "C". Ensure your Grid2D expects this.
-    g_u.SolveTransport(t_end_pdf, dt_pdf, "transport_", output_interval_pdf, output_dir, "Cu",&BTCs_Upscaled);
+    g_u.SolveTransport(t_end_pdf, dt_pdf, "transport_", output_interval_pdf, run_dir, "Cu",&BTCs_Upscaled);
 
     // Save upscaled BTCs
-    BTCs_Upscaled.write(joinPath(output_dir, "BTC_Upscaled.csv"));
-    BTCs_Upscaled.derivative().write(joinPath(output_dir, "BTC_Upscaled_derivative.csv"));
+    BTCs_Upscaled.write(joinPath(run_dir, "BTC_Upscaled.csv"));
+    BTCs_Upscaled.derivative().write(joinPath(run_dir, "BTC_Upscaled_derivative.csv"));
 
     // ====================================================================
     // STEP 8: Save final PDF distribution
@@ -514,9 +557,9 @@ int main(int argc, char** argv) {
     std::cout << "\n=== Saving final results ===" << std::endl;
 
     // NOTE: filenames say Cu.*, but field written is "C"
-    g_u.writeNamedVTI_Auto("C", joinPath(output_dir, "Cu.vti"));
+    g_u.writeNamedVTI_Auto("C", joinPath(run_dir, "Cu.vti"));
     g_u.writeNamedMatrix("C", Grid2D::ArrayKind::Cell,
-                         joinPath(output_dir, "Cu.txt"));
+                         joinPath(run_dir, "Cu.txt"));
 
     std::cout << "\nMixing PDF simulation complete!" << std::endl;
 
