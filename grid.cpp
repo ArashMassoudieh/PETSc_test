@@ -1488,7 +1488,7 @@ void Grid2D::SolveTransport(const double& t_end,
 
         if (!use_realization) {
             // OLD behavior: transport_C0000.vti
-            os << base << std::setw(3) << std::setfill('0') << step << ".vti";
+            os << base << std::setw(4) << std::setfill('0') << step << ".vti";
         } else {
             // NEW behavior: transport_C_r0003_0000.vti
             os << base << "_" << realizationTag() << "_"

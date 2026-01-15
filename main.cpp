@@ -72,7 +72,7 @@ static std::string makeTimestamp() {
 // Realization label starting at 1: r001, r002, ...
 static std::string makeRealLabel(int r1) {
     std::ostringstream oss;
-    oss << "r" << std::setw(3) << std::setfill('0') << r1;
+    oss << "r" << std::setw(4) << std::setfill('0') << r1;
     return oss.str();
 }
 
