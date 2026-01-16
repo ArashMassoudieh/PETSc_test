@@ -24,54 +24,6 @@
 // NEW: moved helpers
 #include "sim_helpers.h"
 
-static inline PetscInt idx(PetscInt i, PetscInt j, PetscInt nx) { return j*nx + i; }
-
-static inline bool on_bc(PetscInt i, PetscInt j, PetscInt nx, PetscInt ny,
-                         double x, double y, double Lx, double Ly) {
-    const double eps = 1e-14;
-    return (i==0) || (j==0) || (std::abs(x - Lx) < eps) || (std::abs(y - Ly) < eps);
-}
-
-// =====================================================================
-// NEW (local): accumulation helpers for FineMean from disk
-//   - ignore NaNs
-//   - works on resampled columns (same length as t_base)
-// =====================================================================
-static inline bool is_finite_number(double v) {
-    return std::isfinite(v);
-}
-
-static void accumulate_sum_count(
-    const std::vector<double>& x,
-    std::vector<double>& sum,
-    std::vector<int>& count
-) {
-    if (sum.empty())   sum.assign(x.size(), 0.0);
-    if (count.empty()) count.assign(x.size(), 0);
-    if (sum.size() != x.size() || count.size() != x.size()) return;
-
-    for (size_t i = 0; i < x.size(); ++i) {
-        const double v = x[i];
-        if (is_finite_number(v)) {
-            sum[i] += v;
-            count[i] += 1;
-        }
-    }
-}
-
-static std::vector<double> finalize_mean_vec(
-    const std::vector<double>& sum,
-    const std::vector<int>& count
-) {
-    std::vector<double> m(sum.size(), std::numeric_limits<double>::quiet_NaN());
-    if (sum.size() != count.size()) return m;
-
-    for (size_t i = 0; i < sum.size(); ++i) {
-        if (count[i] > 0) m[i] = sum[i] / (double)count[i];
-    }
-    return m;
-}
-
 int main(int argc, char** argv) {
     PETScInit petsc(argc, argv);
 

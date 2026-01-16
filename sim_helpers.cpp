@@ -87,6 +87,39 @@ double mean_of(const std::vector<double>& v) {
     return s / (double)v.size();
 }
 
+void accumulate_sum_count(
+    const std::vector<double>& x,
+    std::vector<double>& sum,
+    std::vector<int>& count
+) {
+    if (sum.empty())   sum.assign(x.size(), 0.0);
+    if (count.empty()) count.assign(x.size(), 0);
+
+    // If sizes don't match, fail fast (or you could throw/log).
+    if (sum.size() != x.size() || count.size() != x.size()) return;
+
+    for (size_t i = 0; i < x.size(); ++i) {
+        const double v = x[i];
+        if (is_finite_number(v)) {
+            sum[i]   += v;
+            count[i] += 1;
+        }
+    }
+}
+
+std::vector<double> finalize_mean_vec(
+    const std::vector<double>& sum,
+    const std::vector<int>& count
+) {
+    std::vector<double> m(sum.size(), std::numeric_limits<double>::quiet_NaN());
+    if (sum.size() != count.size()) return m;
+
+    for (size_t i = 0; i < sum.size(); ++i) {
+        if (count[i] > 0) m[i] = sum[i] / static_cast<double>(count[i]);
+    }
+    return m;
+}
+
 // --------------------
 // delimiter-robust parsing
 // --------------------

@@ -4,6 +4,9 @@
 #include <vector>
 #include <map>
 #include <utility>
+#include <cmath>
+#include <limits>
+#include <petscsys.h>   // for PetscInt
 
 // --------------------
 // FS / path helpers
@@ -21,6 +24,44 @@ std::string makeRealLabel(int r1);      // r0001, r0002, ...
 std::string makeFineFolder(int r1);     // fine_r0001, ...
 
 double mean_of(const std::vector<double>& v);
+
+// --------------------------------------------------
+// Grid indexing helpers
+// --------------------------------------------------
+inline PetscInt idx(PetscInt i, PetscInt j, PetscInt nx)
+{
+    return j * nx + i;
+}
+
+inline bool on_bc(PetscInt i, PetscInt j,
+                  PetscInt /*nx*/, PetscInt /*ny*/,
+                  double x, double y, double Lx, double Ly)
+{
+    const double eps = 1e-14;
+    return (i == 0) || (j == 0) ||
+           (std::abs(x - Lx) < eps) ||
+           (std::abs(y - Ly) < eps);
+}
+
+// --------------------------------------------------
+// NaN-safe accumulation helpers
+// --------------------------------------------------
+inline bool is_finite_number(double v)
+{
+    return std::isfinite(v);
+}
+
+// Non-inline: implemented in helpers.cpp
+void accumulate_sum_count(
+    const std::vector<double>& x,
+    std::vector<double>& sum,
+    std::vector<int>& count
+);
+
+std::vector<double> finalize_mean_vec(
+    const std::vector<double>& sum,
+    const std::vector<int>& count
+);
 
 // --------------------
 // delimiter-robust parsing
