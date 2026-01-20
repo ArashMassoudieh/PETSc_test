@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
     // -----------------------------
     // Realizations
     // -----------------------------
-    const int nReal_default = 20; // used only in full mode; in upscale-only we detect from folders
+    const int nReal_default = 1; // used only in full mode; in upscale-only we detect from folders
     const double du = 0.01;
     const int nU = (int)std::round(1.0 / du) + 1;
 
@@ -680,6 +680,39 @@ int main(int argc, char** argv) {
             std::cout << "Wrote comparison BTC CSV: " << out_cmp << "\n";
         }
 
+        /*
+        // python plot
+        const std::string py1 = joinPath(run_dir, "plot_BTC_compare.py");
+        if (write_btc_compare_plot_py(py1, out_cmp, "BTC_compare", "Concentration")) {
+            int rc = run_python_script(py1);
+            if (rc != 0) std::cerr << "WARNING: plotting script failed (rc=" << rc << "): " << py1 << "\n";
+        } else {
+            std::cerr << "WARNING: could not write plot script: " << py1 << "\n";
+        }
+
+        // gnuplot
+        const std::string gp1 = joinPath(run_dir, "plot_BTC_compare.gp");
+        if (write_btc_compare_plot_gnuplot(gp1, out_cmp, "BTC_compare", "Concentration")) {
+            int rc = run_gnuplot_script(gp1);
+            if (rc != 0)
+                std::cerr << "WARNING: gnuplot failed for BTC comparison\n";
+        }
+
+        // simple gnuplot
+        const std::string gp1 = joinPath(run_dir, "plot_BTC_compare.gp");
+        if (write_btc_compare_plot_gnuplot_simple(gp1, out_cmp, "BTC_compare", "Concentration")) {
+            int rc = run_gnuplot_script(gp1);
+            if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp1 << "\n";
+        }
+
+        */
+        // gnuplot by name
+        const std::string gp1 = joinPath(run_dir, "plot_BTC_compare.gp");
+        if (write_btc_compare_plot_gnuplot_by_basename(gp1, out_cmp, "BTC_compare", "Concentration")) {
+            int rc = run_gnuplot_script(gp1);
+            if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp1 << "\n";
+        }
+
         // ------------------------------------------------------------
         // Derivative comparison: r0001.., FineDerivMean, UpscaledDeriv
         // ------------------------------------------------------------
@@ -758,6 +791,40 @@ int main(int argc, char** argv) {
 
         std::cout << "\nMixing PDF simulation complete!\n";
         std::cout << "All outputs saved to: " << run_dir << "\n";
+
+        /*
+        // python plot
+        const std::string py2 = joinPath(run_dir, "plot_BTC_derivative_compare.py");
+        if (write_btc_compare_plot_py(py2, out_cmp_d, "BTC_deriv_compare", "dC/dt")) {
+            int rc = run_python_script(py2);
+            if (rc != 0) std::cerr << "WARNING: plotting script failed (rc=" << rc << "): " << py2 << "\n";
+        } else {
+            std::cerr << "WARNING: could not write plot script: " << py2 << "\n";
+        }
+
+        // gnuplot
+        const std::string gp2 = joinPath(run_dir, "plot_BTC_derivative_compare.gp");
+        if (write_btc_compare_plot_gnuplot(gp2, out_cmp_d, "BTC_deriv_compare", "dC/dt")) {
+            int rc = run_gnuplot_script(gp2);
+            if (rc != 0)
+                std::cerr << "WARNING: gnuplot failed for BTC derivative comparison\n";
+        }
+
+        // simple gnuplot
+        const std::string gp2 = joinPath(run_dir, "plot_BTC_derivative_compare.gp");
+        if (write_btc_compare_plot_gnuplot_simple(gp2, out_cmp_d, "BTC_deriv_compare", "dC/dt")) {
+            int rc = run_gnuplot_script(gp2);
+            if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp2 << "\n";
+        }
+
+        */
+        // gnuplot by name
+        const std::string gp2 = joinPath(run_dir, "plot_BTC_derivative_compare.gp");
+        if (write_btc_compare_plot_gnuplot_by_basename(gp2, out_cmp_d, "BTC_deriv_compare", "dC/dt")) {
+            int rc = run_gnuplot_script(gp2);
+            if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp2 << "\n";
+        }
+
     }
 
     MPI_Barrier(PETSC_COMM_WORLD);

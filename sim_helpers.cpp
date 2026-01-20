@@ -15,6 +15,8 @@
 #include <algorithm>
 #include <cmath>        // NEW: std::isfinite
 
+#include <set>        // <-- REQUIRED for std::set
+
 // POSIX directory scan (Linux)
 #include <dirent.h>
 
@@ -506,6 +508,538 @@ bool accumulate_inverse_cdf_on_grid(
     for (int k = 0; k < nU; ++k) {
         double uk = k * du;
         invcdf_sum[k] += interp1_linear(u, v, uk);
+    }
+    return true;
+}
+
+/*
+// python plot
+bool write_btc_compare_plot_py(const std::string& py_path,
+                              const std::string& csv_path,
+                              const std::string& fig_prefix,
+                              const std::string& y_label)
+{
+    std::ofstream f(py_path);
+    if (!f) {
+        std::cerr << "ERROR: cannot write python plot script: " << py_path << "\n";
+        return false;
+    }
+
+    // Notes:
+    // - your CSV layout is: first column "t", then many columns named like
+    //   Fine_r0001_series_0, ..., FineMean_series_0, Upscaled_mean_series_0, etc.
+    // - script groups by suffix after the last underscore: series_0, series_1, series_2, ...
+    // - for each group it draws: all Fine_r#### in gray, FineMean in black, Upscaled_mean in red dashed
+    f <<
+R"PY(
+import os
+import re
+import pandas as pd
+import matplotlib.pyplot as plt
+
+csv_path   = r")PY" << csv_path << R"PY("
+fig_prefix = r")PY" << fig_prefix << R"PY("
+y_label    = r")PY" << y_label << R"PY("
+
+df = pd.read_csv(csv_path)
+if "t" not in df.columns:
+    raise RuntimeError("CSV must have a 't' column as the first column.")
+
+t = df["t"].to_numpy()
+
+def group_key(col):
+    # everything after last '_' (e.g., 'series_0')
+    if col == "t":
+        return None
+    return col.split("_")[-2] + "_" + col.split("_")[-1] if col.count("_") >= 1 else col
+
+# Build groups (series_0, series_1, series_2, ...)
+groups = {}
+for c in df.columns:
+    if c == "t":
+        continue
+    k = group_key(c)
+    groups.setdefault(k, []).append(c)
+
+out_dir = os.path.dirname(csv_path)
+if out_dir == "":
+    out_dir = "."
+
+for k, cols in sorted(groups.items()):
+    fine_cols = [c for c in cols if c.startswith("Fine_r")]
+    fine_mean = [c for c in cols if c.startswith("FineMean_")]
+    up_mean   = [c for c in cols if c.startswith("Upscaled_mean") or c.startswith("UpscaledDeriv_mean") or c.startswith("Upscaled_mean_") or c.startswith("UpscaledDeriv_mean_")]
+
+    # If your Upscaled columns are named like "Upscaled_mean_series_0" (as you requested earlier),
+    # this will match "Upscaled_mean_..." already.
+    # For safety, also accept "Upscaled_meanseries_0" etc. by using a fallback:
+    if len(up_mean) == 0:
+        up_mean = [c for c in cols if c.startswith("Upscaled")]
+
+    plt.figure()
+    # Realizations in gray
+    for c in fine_cols:
+        plt.plot(t, df[c].to_numpy(), alpha=0.25, linewidth=1.0)
+
+    # FineMean (black)
+    for c in fine_mean:
+        plt.plot(t, df[c].to_numpy(), linewidth=2.5, label="FineMean")
+
+    # Upscaled mean (red dashed)
+    for c in up_mean:
+        plt.plot(t, df[c].to_numpy(), linestyle="--", linewidth=2.5, label="Upscaled mean")
+
+    plt.xlabel("Time")
+    plt.ylabel(y_label)
+    plt.title(k)
+    plt.grid(True, alpha=0.25)
+
+    # avoid duplicate legend entries
+    handles, labels = plt.gca().get_legend_handles_labels()
+    uniq = []
+    seen = set()
+    for h, lab in zip(handles, labels):
+        if lab not in seen:
+            uniq.append((h, lab))
+            seen.add(lab)
+    if uniq:
+        plt.legend([u[0] for u in uniq], [u[1] for u in uniq], loc="best")
+
+    out_png = os.path.join(out_dir, f"{fig_prefix}_{k}.png")
+    plt.tight_layout()
+    plt.savefig(out_png, dpi=200)
+    plt.close()
+
+print("Saved figures with prefix:", fig_prefix, "in", out_dir)
+)PY";
+
+    return true;
+}
+
+int run_python_script(const std::string& py_path)
+{
+    // best-effort: try python3 then python
+    std::string cmd1 = "python3 \"" + py_path + "\"";
+    int rc = std::system(cmd1.c_str());
+    if (rc == 0) return 0;
+
+    std::string cmd2 = "python \"" + py_path + "\"";
+    rc = std::system(cmd2.c_str());
+    return rc;
+}
+
+// gnuplot
+// ------------------------------------------------------------
+// Write gnuplot script for Fine vs Upscaled BTC comparison
+// ------------------------------------------------------------
+bool write_btc_compare_plot_gnuplot(const std::string& gp_path,
+                                    const std::string& csv_path,
+                                    const std::string& fig_prefix,
+                                    const std::string& y_label)
+{
+    std::ofstream f(gp_path);
+    if (!f) {
+        std::cerr << "ERROR: cannot write gnuplot script: " << gp_path << "\n";
+        return false;
+    }
+
+    f <<
+R"GP(
+# -------------------------------
+# Fine vs Upscaled BTC comparison
+# -------------------------------
+
+set datafile separator ","
+set key outside
+set grid
+set term pngcairo size 1200,800 enhanced font "Helvetica,14"
+
+csvfile = ")GP" << csv_path << R"GP("
+figpref = ")GP" << fig_prefix << R"GP("
+ylabel  = ")GP" << y_label << R"GP("
+
+# Read header
+stats csvfile using 1 nooutput
+ncols = STATS_columns
+
+# First column is time
+tcol = 1
+
+# Identify unique series names (series_0, series_1, ...)
+# We rely on column headers
+series_names = ""
+
+do for [c=2:ncols] {
+    header = system(sprintf("awk -F, 'NR==1{print $%d}' %s", c, csvfile))
+    # extract suffix after last underscore
+    if (strlen(header) > 0) {
+        n = words(header)
+    }
+}
+
+# Manually loop series indices until no match found
+# (robust for series_0, series_1, series_2 ...)
+do for [k=0:20] {
+
+    found = 0
+    set output sprintf("%s_series_%d.png", figpref, k)
+    set xlabel "Time"
+    set ylabel ylabel
+    set title sprintf("series_%d", k)
+
+    plot \
+)GP";
+
+    // We generate plotting commands dynamically using awk
+    // Gray lines: Fine_r####
+    // Black: FineMean
+    // Red dashed: Upscaled_mean
+    f <<
+R"GP(
+    for [c=2:ncols] \
+        ( system(sprintf("awk -F, 'NR==1 && $%d ~ /^Fine_r.*series_%d$/{print 1}' %s", c, k, csvfile)) \
+          ? csvfile using tcol:c with lines lc rgb "#aaaaaa" lw 1 notitle : 1/0 ), \
+    for [c=2:ncols] \
+        ( system(sprintf("awk -F, 'NR==1 && $%d ~ /^FineMean.*series_%d$/{print 1}' %s", c, k, csvfile)) \
+          ? csvfile using tcol:c with lines lc rgb "black" lw 3 title "Fine mean" : 1/0 ), \
+    for [c=2:ncols] \
+        ( system(sprintf("awk -F, 'NR==1 && $%d ~ /^Upscaled.*series_%d$/{print 1}' %s", c, k, csvfile)) \
+          ? csvfile using tcol:c with lines lc rgb "red" lw 3 dt 2 title "Upscaled mean" : 1/0 )
+
+    if (GPVAL_ERRNO == 0) {
+        found = 1
+    }
+
+    if (!found) {
+        unset output
+        break
+    }
+}
+
+print "Gnuplot BTC comparison figures written with prefix:", figpref
+)GP";
+
+    return true;
+}
+
+// ------------------------------------------------------------
+// Run gnuplot
+// ------------------------------------------------------------
+int run_gnuplot_script(const std::string& gp_path)
+{
+    std::string cmd = "gnuplot \"" + gp_path + "\"";
+    return std::system(cmd.c_str());
+}
+
+// simple gnuplot
+static inline bool read_csv_header(const std::string& csv_path, std::vector<std::string>& headers)
+{
+    std::ifstream f(csv_path);
+    if (!f) return false;
+    std::string line;
+    if (!std::getline(f, line)) return false;
+
+    headers.clear();
+    std::string cur;
+    std::stringstream ss(line);
+    while (std::getline(ss, cur, ',')) {
+        // trim quotes/spaces
+        cur.erase(cur.begin(), std::find_if(cur.begin(), cur.end(), [](unsigned char ch){ return !std::isspace(ch); }));
+        cur.erase(std::find_if(cur.rbegin(), cur.rend(), [](unsigned char ch){ return !std::isspace(ch); }).base(), cur.end());
+        if (!cur.empty() && cur.front()=='"' && cur.back()=='"' && cur.size()>=2) cur = cur.substr(1, cur.size()-2);
+        headers.push_back(cur);
+    }
+    return true;
+}
+
+static inline bool ends_with(const std::string& s, const std::string& suf)
+{
+    return s.size() >= suf.size() && s.compare(s.size()-suf.size(), suf.size(), suf) == 0;
+}
+
+int run_gnuplot_script(const std::string& gp_path)
+{
+    std::string cmd = "gnuplot \"" + gp_path + "\"";
+    return std::system(cmd.c_str());
+}
+
+bool write_btc_compare_plot_gnuplot_simple(const std::string& gp_path,
+                                           const std::string& csv_path,
+                                           const std::string& fig_prefix,
+                                           const std::string& y_label,
+                                           int max_series)
+{
+    std::vector<std::string> hdr;
+    if (!read_csv_header(csv_path, hdr) || hdr.size() < 2) {
+        std::cerr << "ERROR: cannot read CSV header: " << csv_path << "\n";
+        return false;
+    }
+    if (hdr[0] != "t") {
+        std::cerr << "WARNING: expected first column 't' but got '" << hdr[0] << "'. Using col 1 as x.\n";
+    }
+
+    std::ofstream gp(gp_path);
+    if (!gp) {
+        std::cerr << "ERROR: cannot write gnuplot script: " << gp_path << "\n";
+        return false;
+    }
+
+    gp << "set datafile separator \",\"\n";
+    gp << "set term pngcairo size 1200,800 enhanced font \"Helvetica,14\"\n";
+    gp << "set grid\n";
+    gp << "set key outside\n";
+    gp << "csvfile = \"" << csv_path << "\"\n";
+    gp << "ylabel  = \"" << y_label << "\"\n";
+    gp << "figpref = \"" << fig_prefix << "\"\n\n";
+
+    // For each series_k, gather columns:
+    //  - Fine_r????_series_k  (many)
+    //  - FineMean_series_k    (one)
+    //  - Upscaled_mean_series_k (one)
+    int made = 0;
+
+    for (int k = 0; k <= max_series; ++k) {
+        const std::string suf = "series_" + std::to_string(k);
+
+        std::vector<int> fine_cols;
+        int fineMean_col = -1;
+        int upMean_col   = -1;
+
+        for (int c = 1; c < (int)hdr.size(); ++c) { // c is 0-based index, but gnuplot uses 1-based
+            const std::string& name = hdr[c];
+            if (!ends_with(name, suf)) continue;
+
+            if (name.rfind("Fine_r", 0) == 0) {
+                fine_cols.push_back(c+1); // to 1-based
+            } else if (name.rfind("FineMean_", 0) == 0) {
+                fineMean_col = c+1;
+            } else if (name.rfind("Upscaled_mean", 0) == 0 || name.rfind("UpscaledDeriv_mean", 0) == 0 || name.rfind("Upscaled", 0) == 0) {
+                upMean_col = c+1;
+            }
+        }
+
+        if (fine_cols.empty() && fineMean_col < 0 && upMean_col < 0) {
+            // no such series => stop after we have made at least one
+            if (made > 0) break;
+            else continue;
+        }
+
+        gp << "set output sprintf(\"%s_" << suf << ".png\", figpref)\n";
+        gp << "set xlabel \"Time\"\n";
+        gp << "set ylabel ylabel\n";
+        gp << "set title \"" << suf << "\"\n";
+
+        gp << "plot \\\n";
+
+        bool first = true;
+
+        // fine realizations (gray, no title)
+        for (int col : fine_cols) {
+            if (!first) gp << ", \\\n";
+            first = false;
+            gp << "  csvfile using 1:" << col << " with lines lw 1 lc rgb \"#aaaaaa\" notitle";
+        }
+
+        // fine mean (black)
+        if (fineMean_col > 0) {
+            if (!first) gp << ", \\\n";
+            first = false;
+            gp << "  csvfile using 1:" << fineMean_col << " with lines lw 3 lc rgb \"black\" title \"Fine mean\"";
+        }
+
+        // upscaled mean (red dashed)
+        if (upMean_col > 0) {
+            if (!first) gp << ", \\\n";
+            first = false;
+            gp << "  csvfile using 1:" << upMean_col << " with lines lw 3 dt 2 lc rgb \"red\" title \"Upscaled mean\"";
+        }
+
+        gp << "\n\n";
+        made++;
+    }
+
+    gp << "unset output\n";
+    gp << "print \"Wrote " << fig_prefix << "_series_*.png\"\n";
+
+    if (made == 0) {
+        std::cerr << "WARNING: no series plots generated; check column names in: " << csv_path << "\n";
+    }
+
+    return true;
+}
+*/
+
+// gnuplot by name
+static inline bool read_csv_header(const std::string& csv_path, std::vector<std::string>& headers)
+{
+    std::ifstream f(csv_path);
+    if (!f) return false;
+    std::string line;
+    if (!std::getline(f, line)) return false;
+
+    headers.clear();
+    std::string cur;
+    std::stringstream ss(line);
+    while (std::getline(ss, cur, ',')) {
+        cur.erase(cur.begin(), std::find_if(cur.begin(), cur.end(),
+            [](unsigned char ch){ return !std::isspace(ch); }));
+        cur.erase(std::find_if(cur.rbegin(), cur.rend(),
+            [](unsigned char ch){ return !std::isspace(ch); }).base(), cur.end());
+        if (!cur.empty() && cur.front()=='"' && cur.back()=='"' && cur.size()>=2)
+            cur = cur.substr(1, cur.size()-2);
+        headers.push_back(cur);
+    }
+    return true;
+}
+
+static inline bool starts_with(const std::string& s, const std::string& p)
+{
+    return s.rfind(p, 0) == 0;
+}
+
+// Return safe filename token
+static inline std::string sanitize_token(std::string s)
+{
+    for (char& c : s) {
+        if (!(std::isalnum((unsigned char)c) || c=='_' || c=='-' )) c = '_';
+    }
+    // compress multiple underscores
+    std::string out;
+    out.reserve(s.size());
+    bool prev_us = false;
+    for (char c : s) {
+        if (c=='_') {
+            if (!prev_us) out.push_back(c);
+            prev_us = true;
+        } else {
+            out.push_back(c);
+            prev_us = false;
+        }
+    }
+    return out;
+}
+
+// Extract base name after known prefixes
+static inline std::string base_name_from_header(const std::string& h)
+{
+    // Fine realiz: Fine_r0001_<base>
+    if (starts_with(h, "Fine_r")) {
+        auto pos = h.find('_');                // after Fine
+        pos = h.find('_', pos+1);              // after r0001
+        if (pos != std::string::npos && pos+1 < h.size()) return h.substr(pos+1);
+        return "";
+    }
+    if (starts_with(h, "FineMean_")) return h.substr(std::string("FineMean_").size());
+    if (starts_with(h, "Upscaled_mean_")) return h.substr(std::string("Upscaled_mean_").size());
+    if (starts_with(h, "UpscaledDeriv_mean_")) return h.substr(std::string("UpscaledDeriv_mean_").size());
+    if (starts_with(h, "Upscaled_")) {
+        // fallback
+        auto pos = h.find('_');
+        if (pos != std::string::npos && pos+1 < h.size()) return h.substr(pos+1);
+        return "";
+    }
+    return "";
+}
+
+int run_gnuplot_script(const std::string& gp_path)
+{
+    std::string cmd = "gnuplot \"" + gp_path + "\"";
+    return std::system(cmd.c_str());
+}
+
+bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
+                                                const std::string& csv_path,
+                                                const std::string& fig_prefix,
+                                                const std::string& y_label)
+{
+    std::vector<std::string> hdr;
+    if (!read_csv_header(csv_path, hdr) || hdr.size() < 2) {
+        std::cerr << "ERROR: cannot read CSV header: " << csv_path << "\n";
+        return false;
+    }
+
+    // Collect unique base names
+    std::set<std::string> bases;
+    for (size_t i = 1; i < hdr.size(); ++i) {
+        std::string b = base_name_from_header(hdr[i]);
+        if (!b.empty()) bases.insert(b);
+    }
+
+    if (bases.empty()) {
+        std::cerr << "WARNING: no recognizable columns (Fine_r*/FineMean/Upscaled*) in: " << csv_path << "\n";
+        std::cerr << "First few headers:\n";
+        for (size_t i = 0; i < std::min<size_t>(hdr.size(), 12); ++i)
+            std::cerr << "  [" << i << "] " << hdr[i] << "\n";
+        return false;
+    }
+
+    std::ofstream gp(gp_path);
+    if (!gp) {
+        std::cerr << "ERROR: cannot write gnuplot script: " << gp_path << "\n";
+        return false;
+    }
+
+    gp << "set datafile separator \",\"\n";
+    gp << "set term pngcairo size 1200,800 enhanced font \"Helvetica,14\"\n";
+    gp << "set grid\n";
+    gp << "set key outside\n";
+    gp << "csvfile = \"" << csv_path << "\"\n";
+    gp << "ylabel  = \"" << y_label << "\"\n";
+    gp << "figpref = \"" << fig_prefix << "\"\n\n";
+
+    int made = 0;
+
+    for (const auto& base : bases) {
+        std::vector<int> fine_cols;
+        int fineMean_col = -1;
+        int upMean_col   = -1;
+
+        for (int c0 = 1; c0 < (int)hdr.size(); ++c0) { // 0-based index
+            const std::string& name = hdr[c0];
+            const int col = c0 + 1; // gnuplot 1-based
+
+            if (starts_with(name, "Fine_r") && base_name_from_header(name) == base) fine_cols.push_back(col);
+            else if (starts_with(name, "FineMean_") && base_name_from_header(name) == base) fineMean_col = col;
+            else if ((starts_with(name, "Upscaled_mean_") || starts_with(name, "UpscaledDeriv_mean_") || starts_with(name, "Upscaled_"))
+                      && base_name_from_header(name) == base) upMean_col = col;
+        }
+
+        if (fine_cols.empty() && fineMean_col < 0 && upMean_col < 0) continue;
+
+        std::string base_file = sanitize_token(base);
+
+        gp << "set output sprintf(\"%s_" << base_file << ".png\", figpref)\n";
+        gp << "set xlabel \"Time\"\n";
+        gp << "set ylabel ylabel\n";
+        gp << "set title \"" << base << "\"\n";
+        gp << "plot \\\n";
+
+        bool first = true;
+        for (int col : fine_cols) {
+            if (!first) gp << ", \\\n";
+            first = false;
+            gp << "  csvfile using 1:" << col << " with lines lw 1 lc rgb \"#aaaaaa\" notitle";
+        }
+        if (fineMean_col > 0) {
+            if (!first) gp << ", \\\n";
+            first = false;
+            gp << "  csvfile using 1:" << fineMean_col << " with lines lw 3 lc rgb \"black\" title \"Fine mean\"";
+        }
+        if (upMean_col > 0) {
+            if (!first) gp << ", \\\n";
+            first = false;
+            gp << "  csvfile using 1:" << upMean_col << " with lines lw 3 dt 2 lc rgb \"red\" title \"Upscaled mean\"";
+        }
+        gp << "\n\n";
+
+        made++;
+    }
+
+    gp << "unset output\n";
+    gp << "print \"Wrote " << fig_prefix << "_*.png\"\n";
+
+    if (made == 0) {
+        std::cerr << "WARNING: no plots generated (bases existed but no matching columns?) for: " << csv_path << "\n";
     }
     return true;
 }

@@ -167,3 +167,41 @@ bool accumulate_inverse_cdf_on_grid(
     double du, int nU,
     std::vector<double>& invcdf_sum
 );
+
+/*
+// Writes a python script that plots "Fine realizations (gray) + FineMean (black) + Upscaled_mean (red dashed)"
+// for each series column found in the comparison CSV.
+// Output: multiple PNGs saved next to the CSV.
+bool write_btc_compare_plot_py(const std::string& py_path,
+                              const std::string& csv_path,
+                              const std::string& fig_prefix,
+                              const std::string& y_label);
+
+// Optional: run python script (best-effort)
+int run_python_script(const std::string& py_path);
+
+// gnuplot
+bool write_btc_compare_plot_gnuplot(const std::string& gp_path,
+                                    const std::string& csv_path,
+                                    const std::string& fig_prefix,
+                                    const std::string& y_label);
+
+int run_gnuplot_script(const std::string& gp_path);
+
+// simple gnuplot
+bool write_btc_compare_plot_gnuplot_simple(const std::string& gp_path,
+                                           const std::string& csv_path,
+                                           const std::string& fig_prefix,
+                                           const std::string& y_label,
+                                           int max_series = 50);
+
+int run_gnuplot_script(const std::string& gp_path);
+*/
+
+// gnuplot by name
+bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
+                                                const std::string& csv_path,
+                                                const std::string& fig_prefix,
+                                                const std::string& y_label);
+
+int run_gnuplot_script(const std::string& gp_path);
