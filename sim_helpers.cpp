@@ -788,7 +788,15 @@ bool write_btc_compare_plot_gnuplot_simple(const std::string& gp_path,
     gp << "set term pngcairo size 1200,800 enhanced font \"Helvetica,14\"\n";
     gp << "set grid\n";
     gp << "set key outside\n";
+    // Extract directory of csv_path
+    std::string csv_dir = ".";
+    {
+        auto pos = csv_path.find_last_of("/\\");
+        if (pos != std::string::npos) csv_dir = csv_path.substr(0, pos);
+    }
+
     gp << "csvfile = \"" << csv_path << "\"\n";
+    gp << "outdir  = \"" << csv_dir << "\"\n";
     gp << "ylabel  = \"" << y_label << "\"\n";
     gp << "figpref = \"" << fig_prefix << "\"\n\n";
 
@@ -824,7 +832,7 @@ bool write_btc_compare_plot_gnuplot_simple(const std::string& gp_path,
             else continue;
         }
 
-        gp << "set output sprintf(\"%s_" << suf << ".png\", figpref)\n";
+        gp << "set output sprintf(\"%s/%s_" << base_file << ".png\", outdir, figpref)\n";
         gp << "set xlabel \"Time\"\n";
         gp << "set ylabel ylabel\n";
         gp << "set title \"" << suf << "\"\n";
@@ -983,7 +991,15 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
     gp << "set term pngcairo size 1200,800 enhanced font \"Helvetica,14\"\n";
     gp << "set grid\n";
     gp << "set key outside\n";
+    // Extract directory of csv_path
+    std::string csv_dir = ".";
+    {
+        auto pos = csv_path.find_last_of("/\\");
+        if (pos != std::string::npos) csv_dir = csv_path.substr(0, pos);
+    }
+
     gp << "csvfile = \"" << csv_path << "\"\n";
+    gp << "outdir  = \"" << csv_dir << "\"\n";
     gp << "ylabel  = \"" << y_label << "\"\n";
     gp << "figpref = \"" << fig_prefix << "\"\n\n";
 
@@ -1008,7 +1024,7 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
 
         std::string base_file = sanitize_token(base);
 
-        gp << "set output sprintf(\"%s_" << base_file << ".png\", figpref)\n";
+        gp << "set output sprintf(\"%s/%s_" << base_file << ".png\", outdir, figpref)\n";
         gp << "set xlabel \"Time\"\n";
         gp << "set ylabel ylabel\n";
         gp << "set title \"" << base << "\"\n";
