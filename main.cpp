@@ -48,9 +48,12 @@ int main(int argc, char** argv) {
     bool upscale_only = false;          // read fine outputs and run only upscaled
     std::string resume_run_dir = output_dir + "/run_20260115_132010";    // required for --upscale-only
 
+    bool use_timeseriesset_mean = true;   // NEW: compute FineMean / FineDerivMean using TimeSeriesSet::mean_ts
+
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--upscale-only") upscale_only = true;
+        else if (a == "--mean-ts") use_timeseriesset_mean = true;     // NEW
         else if (a.rfind("--run-dir=", 0) == 0) resume_run_dir = a.substr(std::string("--run-dir=").size());
     }
 
@@ -629,8 +632,9 @@ int main(int argc, char** argv) {
             ingest_one(btc, "Fine_" + makeRealLabel(rr));
         }
 
-        // 2) compute FineMean from disk (after all r####)
-        {
+        // 2) compute FineMean (BTC)
+        if (!use_timeseriesset_mean) {
+            // ---- OLD METHOD (keep) ----
             bool initialized = false;
             std::vector<std::string> mean_names;
             std::vector<std::vector<double>> sum_cols;
@@ -674,7 +678,72 @@ int main(int argc, char** argv) {
                 }
                 std::cout << "Added FineMean (BTC) from " << used << " realizations.\n";
             } else {
-                std::cerr << "WARNING: FineMean (BTC) not added (no readable fine BTC files).\n";
+                std::cerr << "WARNING: FineMean (BTC) not added.\n";
+            }
+        }
+        else {
+            // ---- NEW METHOD (TimeSeriesSet mean_ts) ----
+            bool initialized = false;
+            std::vector<std::string> mean_names;
+            std::vector<TimeSeriesSet<double>> stacks; // one stack per location
+            int used = 0;
+
+            for (auto& pr : fine_folders) {
+                int rr = pr.first;
+                std::string fine_dir = pr.second;
+                if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
+
+                std::string pfx = makeRealLabel(rr) + "_";
+                std::string btc = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
+
+                std::vector<double> t;
+                std::vector<std::string> names;
+                std::vector<std::vector<double>> cols;
+                if (!read_time_series_table_csv(btc, t, names, cols)) continue;
+
+                std::vector<std::vector<double>> cols_rs;
+                resample_table_linear(t, cols, t_base, cols_rs);
+
+                if (!initialized) {
+                    mean_names = names;
+                    stacks.assign(mean_names.size(), TimeSeriesSet<double>{});
+                    initialized = true;
+                }
+                if (names.size() != mean_names.size()) continue;
+
+                // push each location as a TimeSeries into its stack
+                for (size_t j = 0; j < mean_names.size(); ++j) {
+                    TimeSeries<double> ts;
+                    ts.setName(makeRealLabel(rr));
+                    ts.reserve(t_base.size());
+                    for (size_t i = 0; i < t_base.size(); ++i) {
+                        ts.append(t_base[i], cols_rs[j][i]);
+                    }
+                    stacks[j].append(ts, ts.name());
+                }
+
+                used++;
+            }
+
+            if (initialized && used > 0) {
+                for (size_t j = 0; j < mean_names.size(); ++j) {
+                    TimeSeries<double> m = stacks[j].mean_ts(0);
+                    // extract c-values to a column aligned with t_base
+                    std::vector<double> col;
+                    col.reserve(t_base.size());
+                    for (size_t i = 0; i < t_base.size(); ++i) {
+                        // m should match t_base length, but be defensive:
+                        col.push_back(i < m.size() ? m.getValue(i) : 0.0);
+                    }
+
+                    out_names.push_back(std::string("FineMean_") + mean_names[j]);
+                    out_cols.push_back(std::move(col));
+                }
+
+                std::cout << "Added FineMean (BTC) using TimeSeriesSet::mean_ts from "
+                          << used << " realizations.\n";
+            } else {
+                std::cerr << "WARNING: FineMean (BTC) not added.\n";
             }
         }
 
@@ -719,8 +788,9 @@ int main(int argc, char** argv) {
             ingest_one(btc, "FineDeriv_" + makeRealLabel(rr));
         }
 
-        // 2) FineDerivMean from disk
-        {
+        // 2) FineDerivMean (BTC)
+        if (!use_timeseriesset_mean) {
+            // ---- OLD METHOD (keep) ----
             bool initialized = false;
             std::vector<std::string> mean_names;
             std::vector<std::vector<double>> sum_cols;
@@ -763,6 +833,74 @@ int main(int argc, char** argv) {
                     out_cols.push_back(finalize_mean_vec(sum_cols[j], cnt_cols[j]));
                 }
                 std::cout << "Added FineDerivMean from " << used << " realizations.\n";
+            } else {
+                std::cerr << "WARNING: FineDerivMean not added (no readable fine derivative files).\n";
+            }
+        }
+        else {
+            // ---- NEW METHOD (TimeSeriesSet mean_ts) ----
+            bool initialized = false;
+            std::vector<std::string> mean_names;
+            std::vector<TimeSeriesSet<double>> stacks; // one stack per location/series
+            int used = 0;
+
+            for (auto& pr : fine_folders) {
+                int rr = pr.first;
+                std::string fine_dir = pr.second;
+                if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
+
+                std::string pfx = makeRealLabel(rr) + "_";
+                std::string btc = joinPath(fine_dir, pfx + "BTC_FineScaled_derivative.csv");
+
+                std::vector<double> t;
+                std::vector<std::string> names;
+                std::vector<std::vector<double>> cols;
+                if (!read_time_series_table_csv(btc, t, names, cols)) continue;
+
+                std::vector<std::vector<double>> cols_rs;
+                resample_table_linear(t, cols, t_base, cols_rs);
+
+                if (!initialized) {
+                    mean_names = names;
+                    stacks.assign(mean_names.size(), TimeSeriesSet<double>{});
+                    initialized = true;
+                }
+                if (names.size() != mean_names.size()) continue;
+
+                // Push each derivative series as a TimeSeries into its stack
+                for (size_t j = 0; j < mean_names.size(); ++j) {
+                    TimeSeries<double> ts;
+                    ts.setName(makeRealLabel(rr));
+                    ts.reserve(t_base.size());
+
+                    for (size_t i = 0; i < t_base.size(); ++i) {
+                        ts.append(t_base[i], cols_rs[j][i]);
+                    }
+
+                    stacks[j].append(ts, ts.name());
+                }
+
+                used++;
+            }
+
+            if (initialized && used > 0) {
+                for (size_t j = 0; j < mean_names.size(); ++j) {
+                    TimeSeries<double> m = stacks[j].mean_ts(0);
+
+                    std::vector<double> col;
+                    col.reserve(t_base.size());
+
+                    // m should align with t_base (same appended times), but be defensive
+                    for (size_t i = 0; i < t_base.size(); ++i) {
+                        col.push_back(i < m.size() ? m.getValue(i) : 0.0);
+                    }
+
+                    out_names.push_back(std::string("FineDerivMean_") + mean_names[j]);
+                    out_cols.push_back(std::move(col));
+                }
+
+                std::cout << "Added FineDerivMean using TimeSeriesSet::mean_ts from "
+                          << used << " realizations.\n";
             } else {
                 std::cerr << "WARNING: FineDerivMean not added (no readable fine derivative files).\n";
             }
