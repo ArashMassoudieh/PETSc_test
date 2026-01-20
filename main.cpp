@@ -705,12 +705,26 @@ int main(int argc, char** argv) {
             if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp1 << "\n";
         }
 
-        */
         // gnuplot by name
         const std::string gp1 = joinPath(run_dir, "plot_BTC_compare.gp");
         if (write_btc_compare_plot_gnuplot_by_basename(gp1, out_cmp, "BTC_compare", "Concentration")) {
             int rc = run_gnuplot_script(gp1);
             if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp1 << "\n";
+        }
+
+        */
+        // gnuplot by name (BTC)
+        {
+            const std::string gp1 = joinPath(run_dir, "plot_BTC_compare.gp");
+            if (write_btc_compare_plot_gnuplot_by_basename(gp1, out_cmp, "BTC_compare", "Concentration")) {
+                int rc = run_gnuplot_script(gp1);
+                if (rc != 0) {
+                    std::cerr << "WARNING: gnuplot failed (rc=" << rc << ") for: " << gp1
+                              << " (is gnuplot installed?)\n";
+                } else {
+                    std::cout << "Gnuplot BTC figures written next to CSV: " << out_cmp << "\n";
+                }
+            }
         }
 
         // ------------------------------------------------------------
@@ -817,12 +831,26 @@ int main(int argc, char** argv) {
             if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp2 << "\n";
         }
 
-        */
         // gnuplot by name
         const std::string gp2 = joinPath(run_dir, "plot_BTC_derivative_compare.gp");
         if (write_btc_compare_plot_gnuplot_by_basename(gp2, out_cmp_d, "BTC_deriv_compare", "dC/dt")) {
             int rc = run_gnuplot_script(gp2);
             if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp2 << "\n";
+        }
+
+        */
+        // gnuplot by name (Derivative BTC)
+        {
+            const std::string gp2 = joinPath(run_dir, "plot_BTC_derivative_compare.gp");
+            if (write_btc_compare_plot_gnuplot_by_basename(gp2, out_cmp_d, "BTC_deriv_compare", "dC/dt")) {
+                int rc = run_gnuplot_script(gp2);
+                if (rc != 0) {
+                    std::cerr << "WARNING: gnuplot failed (rc=" << rc << ") for: " << gp2
+                              << " (is gnuplot installed?)\n";
+                } else {
+                    std::cout << "Gnuplot derivative figures written next to CSV: " << out_cmp_d << "\n";
+                }
+            }
         }
 
     }

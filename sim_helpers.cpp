@@ -875,7 +875,6 @@ bool write_btc_compare_plot_gnuplot_simple(const std::string& gp_path,
 
     return true;
 }
-*/
 
 // gnuplot by name
 static inline bool read_csv_header(const std::string& csv_path, std::vector<std::string>& headers)
@@ -974,7 +973,7 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
     }
 
     if (bases.empty()) {
-        std::cerr << "WARNING: no recognizable columns (Fine_r*/FineMean/Upscaled*) in: " << csv_path << "\n";
+        std::cerr << "WARNING: no recognizable columns (Fine_r*//*_____________FineMean/Upscaled*) in: " << csv_path << "\n";
         std::cerr << "First few headers:\n";
         for (size_t i = 0; i < std::min<size_t>(hdr.size(), 12); ++i)
             std::cerr << "  [" << i << "] " << hdr[i] << "\n";
@@ -1057,5 +1056,254 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
     if (made == 0) {
         std::cerr << "WARNING: no plots generated (bases existed but no matching columns?) for: " << csv_path << "\n";
     }
+    return true;
+}
+*/
+
+// ============================================================
+// GNUPlot helpers + plot writer (Fine vs Upscaled)
+// ============================================================
+
+// ---- forward declarations (gnuplot helpers) ----
+static inline bool read_csv_header(const std::string& csv_path,
+                                   std::vector<std::string>& headers);
+
+static inline bool starts_with(const std::string& s,
+                               const std::string& p);
+
+static inline std::string sanitize_token(std::string s);
+
+static inline std::string base_name_from_header(const std::string& h);
+
+// ------------------------------------------------------------
+// Helper implementations
+// ------------------------------------------------------------
+static inline bool read_csv_header(const std::string& csv_path, std::vector<std::string>& headers)
+{
+    std::ifstream f(csv_path);
+    if (!f) return false;
+
+    std::string line;
+    if (!std::getline(f, line)) return false;
+
+    headers.clear();
+    std::string cur;
+    std::stringstream ss(line);
+
+    while (std::getline(ss, cur, ',')) {
+        // trim
+        cur.erase(cur.begin(), std::find_if(cur.begin(), cur.end(),
+            [](unsigned char ch){ return !std::isspace(ch); }));
+        cur.erase(std::find_if(cur.rbegin(), cur.rend(),
+            [](unsigned char ch){ return !std::isspace(ch); }).base(), cur.end());
+
+        // strip surrounding quotes
+        if (!cur.empty() && cur.front()=='"' && cur.back()=='"' && cur.size()>=2)
+            cur = cur.substr(1, cur.size()-2);
+
+        headers.push_back(cur);
+    }
+    return true;
+}
+
+static inline bool starts_with(const std::string& s, const std::string& p)
+{
+    return s.rfind(p, 0) == 0;
+}
+
+// Return safe filename token
+static inline std::string sanitize_token(std::string s)
+{
+    for (char& c : s) {
+        if (!(std::isalnum((unsigned char)c) || c=='_' || c=='-')) c = '_';
+    }
+
+    // compress multiple underscores
+    std::string out;
+    out.reserve(s.size());
+    bool prev_us = false;
+
+    for (char c : s) {
+        if (c == '_') {
+            if (!prev_us) out.push_back(c);
+            prev_us = true;
+        } else {
+            out.push_back(c);
+            prev_us = false;
+        }
+    }
+    return out;
+}
+
+// Extract base name after known prefixes
+static inline std::string base_name_from_header(const std::string& h)
+{
+    // Fine realiz: Fine_r0001_<base>
+    if (starts_with(h, "Fine_r")) {
+        auto pos = h.find('_');            // after Fine
+        pos = h.find('_', pos + 1);        // after r0001
+        if (pos != std::string::npos && pos + 1 < h.size()) return h.substr(pos + 1);
+        return "";
+    }
+    if (starts_with(h, "FineMean_")) return h.substr(std::string("FineMean_").size());
+    if (starts_with(h, "Upscaled_mean_")) return h.substr(std::string("Upscaled_mean_").size());
+    if (starts_with(h, "UpscaledDeriv_mean_")) return h.substr(std::string("UpscaledDeriv_mean_").size());
+
+    // fallback
+    if (starts_with(h, "Upscaled_")) {
+        auto pos = h.find('_');
+        if (pos != std::string::npos && pos + 1 < h.size()) return h.substr(pos + 1);
+        return "";
+    }
+    return "";
+}
+
+// ------------------------------------------------------------
+// Run gnuplot (linker needs this definition in some .cpp)
+// ------------------------------------------------------------
+int run_gnuplot_script(const std::string& gp_path)
+{
+    std::string cmd = "gnuplot \"" + gp_path + "\"";
+    return std::system(cmd.c_str());
+}
+
+// ------------------------------------------------------------
+// gnuplot by basename
+//   - Realizations: gray thin
+//   - FineMean: thick black
+//   - Upscaled mean: thick red dashed
+//   - Output PNGs saved next to CSV (run folder)
+// ------------------------------------------------------------
+bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
+                                                const std::string& csv_path,
+                                                const std::string& fig_prefix,
+                                                const std::string& y_label,
+                                                bool skip_base_t)
+{
+    std::vector<std::string> hdr;
+    if (!read_csv_header(csv_path, hdr) || hdr.size() < 2) {
+        std::cerr << "ERROR: cannot read CSV header: " << csv_path << "\n";
+        return false;
+    }
+
+    // Collect unique base names
+    std::set<std::string> bases;
+    for (size_t i = 1; i < hdr.size(); ++i) {
+        std::string b = base_name_from_header(hdr[i]);
+        if (!b.empty()) bases.insert(b);
+    }
+
+    if (bases.empty()) {
+        std::cerr << "WARNING: no recognizable columns (Fine_r*/FineMean/Upscaled*) in: " << csv_path << "\n";
+        std::cerr << "First few headers:\n";
+        for (size_t i = 0; i < std::min<size_t>(hdr.size(), 12); ++i)
+            std::cerr << "  [" << i << "] " << hdr[i] << "\n";
+        return false;
+    }
+
+    std::ofstream gp(gp_path);
+    if (!gp) {
+        std::cerr << "ERROR: cannot write gnuplot script: " << gp_path << "\n";
+        return false;
+    }
+
+    // Extract directory of csv_path (where we want PNGs)
+    std::string csv_dir = ".";
+    {
+        auto pos = csv_path.find_last_of("/\\");
+        if (pos != std::string::npos) csv_dir = csv_path.substr(0, pos);
+    }
+
+    gp << "set datafile separator \",\"\n";
+    gp << "set term pngcairo size 1400,900 enhanced font \"Helvetica,16\"\n";
+    gp << "set grid\n";
+    gp << "set border linewidth 1.2\n";
+    gp << "set tics out\n";
+    gp << "set key outside\n";
+    gp << "set key samplen 2 spacing 1.2\n";
+    gp << "csvfile = \"" << csv_path << "\"\n";
+    gp << "outdir  = \"" << csv_dir << "\"\n";
+    gp << "ylabel  = \"" << y_label << "\"\n";
+    gp << "figpref = \"" << fig_prefix << "\"\n\n";
+
+    int made = 0;
+
+    for (const auto& base : bases) {
+
+        // Skip plotting time-like bases if requested
+        if (skip_base_t && (base == "t" || base == "time" || base == "Time")) continue;
+
+        std::vector<int> fine_cols;
+        int fineMean_col = -1;
+        int upMean_col   = -1;
+
+        for (int c0 = 1; c0 < (int)hdr.size(); ++c0) { // 0-based index
+            const std::string& name = hdr[c0];
+            const int col = c0 + 1; // gnuplot 1-based
+
+            if (starts_with(name, "Fine_r") && base_name_from_header(name) == base) {
+                fine_cols.push_back(col);
+            }
+            else if (starts_with(name, "FineMean_") && base_name_from_header(name) == base) {
+                fineMean_col = col;
+            }
+            else if ((starts_with(name, "Upscaled_mean_") || starts_with(name, "UpscaledDeriv_mean_") || starts_with(name, "Upscaled_"))
+                      && base_name_from_header(name) == base) {
+                upMean_col = col;
+            }
+        }
+
+        if (fine_cols.empty() && fineMean_col < 0 && upMean_col < 0) continue;
+
+        std::string base_file = sanitize_token(base);
+
+        gp << "set output sprintf(\"%s/%s_" << base_file << ".png\", outdir, figpref)\n";
+        gp << "set xlabel \"Time\"\n";
+        gp << "set ylabel ylabel\n";
+        gp << "set title \"" << base << "\"\n";
+        gp << "plot \\\n";
+
+        bool first = true;
+
+        // If only 1 realization and FineMean exists, skip gray curve to avoid overlap/double thickness
+        bool draw_gray = !(fine_cols.size() == 1 && fineMean_col > 0);
+
+        // Fine realizations: gray thin
+        if (draw_gray) {
+            for (int col : fine_cols) {
+                if (!first) gp << ", \\\n";
+                first = false;
+                gp << "  csvfile using 1:" << col
+                   << " with lines lw 1 lc rgb \"#b0b0b0\" notitle";
+            }
+        }
+
+        // FineMean: thick black
+        if (fineMean_col > 0) {
+            if (!first) gp << ", \\\n";
+            first = false;
+            gp << "  csvfile using 1:" << fineMean_col
+               << " with lines lw 4 lc rgb \"black\" title \"FineMean\"";
+        }
+
+        // Upscaled mean: thick red dashed
+        if (upMean_col > 0) {
+            if (!first) gp << ", \\\n";
+            first = false;
+            gp << "  csvfile using 1:" << upMean_col
+               << " with lines lw 4 dt 2 lc rgb \"red\" title \"Upscaled mean\"";
+        }
+
+        gp << "\n\n";
+        made++;
+    }
+
+    gp << "unset output\n";
+    gp << "print \"Wrote " << fig_prefix << "_*.png\"\n";
+
+    if (made == 0) {
+        std::cerr << "WARNING: no plots generated for: " << csv_path << "\n";
+    }
+
     return true;
 }

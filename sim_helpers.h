@@ -196,12 +196,21 @@ bool write_btc_compare_plot_gnuplot_simple(const std::string& gp_path,
                                            int max_series = 50);
 
 int run_gnuplot_script(const std::string& gp_path);
-*/
 
 // gnuplot by name
 bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
                                                 const std::string& csv_path,
                                                 const std::string& fig_prefix,
                                                 const std::string& y_label);
+
+int run_gnuplot_script(const std::string& gp_path);
+*/
+
+// gnuplot by name (one figure per base series: x=0.50, x=1.50, ...)
+bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
+                                                const std::string& csv_path,
+                                                const std::string& fig_prefix,
+                                                const std::string& y_label,
+                                                bool skip_base_t = true);
 
 int run_gnuplot_script(const std::string& gp_path);
