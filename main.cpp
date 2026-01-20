@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
     // -----------------------------
     // Realizations
     // -----------------------------
-    const int nReal_default = 1; // used only in full mode; in upscale-only we detect from folders
+    const int nReal_default = 20; // used only in full mode; in upscale-only we detect from folders
     const double du = 0.01;
     const int nU = (int)std::round(1.0 / du) + 1;
 
