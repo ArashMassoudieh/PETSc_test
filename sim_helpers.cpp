@@ -1063,7 +1063,6 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
 // ============================================================
 // GNUPlot helpers + plot writer (Fine vs Upscaled)
 // ============================================================
-
 // ---- forward declarations (gnuplot helpers) ----
 static inline bool read_csv_header(const std::string& csv_path,
                                    std::vector<std::string>& headers);
@@ -1138,14 +1137,27 @@ static inline std::string sanitize_token(std::string s)
 // Extract base name after known prefixes
 static inline std::string base_name_from_header(const std::string& h)
 {
-    // Fine realiz: Fine_r0001_<base>
+    // Fine BTC realizations: Fine_r0001_<base>
     if (starts_with(h, "Fine_r")) {
         auto pos = h.find('_');            // after Fine
         pos = h.find('_', pos + 1);        // after r0001
         if (pos != std::string::npos && pos + 1 < h.size()) return h.substr(pos + 1);
         return "";
     }
+
+    // ✅ Fine derivative realizations: FineDeriv_r0001_<base>
+    if (starts_with(h, "FineDeriv_r")) {
+        auto pos = h.find('_');            // after FineDeriv
+        pos = h.find('_', pos + 1);        // after r0001
+        if (pos != std::string::npos && pos + 1 < h.size()) return h.substr(pos + 1);
+        return "";
+    }
+
     if (starts_with(h, "FineMean_")) return h.substr(std::string("FineMean_").size());
+
+    // ✅ Fine derivative mean: FineDerivMean_<base>
+    if (starts_with(h, "FineDerivMean_")) return h.substr(std::string("FineDerivMean_").size());
+
     if (starts_with(h, "Upscaled_mean_")) return h.substr(std::string("Upscaled_mean_").size());
     if (starts_with(h, "UpscaledDeriv_mean_")) return h.substr(std::string("UpscaledDeriv_mean_").size());
 
@@ -1170,7 +1182,7 @@ int run_gnuplot_script(const std::string& gp_path)
 // ------------------------------------------------------------
 // gnuplot by basename
 //   - Realizations: gray thin
-//   - FineMean: thick black
+//   - FineMean / FineDerivMean: thick black
 //   - Upscaled mean: thick red dashed
 //   - Output PNGs saved next to CSV (run folder)
 // ------------------------------------------------------------
@@ -1194,7 +1206,7 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
     }
 
     if (bases.empty()) {
-        std::cerr << "WARNING: no recognizable columns (Fine_r*/FineMean/Upscaled*) in: " << csv_path << "\n";
+        std::cerr << "WARNING: no recognizable columns (Fine*/FineMean*/Upscaled*) in: " << csv_path << "\n";
         std::cerr << "First few headers:\n";
         for (size_t i = 0; i < std::min<size_t>(hdr.size(), 12); ++i)
             std::cerr << "  [" << i << "] " << hdr[i] << "\n";
@@ -1235,7 +1247,7 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
         if (starts_with(b, "series_")) has_series = true;
     }
 
-    // Prefer x= (BTC), otherwise series_ (derivative), otherwise plot everything
+    // Prefer x= (BTC + derivative when you name series x=...), otherwise series_
     std::string must_prefix = "";
     if (has_x) must_prefix = "x=";
     else if (has_series) must_prefix = "series_";
@@ -1256,14 +1268,19 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
             const std::string& name = hdr[c0];
             const int col = c0 + 1; // gnuplot 1-based
 
-            if (starts_with(name, "Fine_r") && base_name_from_header(name) == base) {
+            // ✅ Realizations: Fine_r####_* OR FineDeriv_r####_*
+            if ((starts_with(name, "Fine_r") || starts_with(name, "FineDeriv_r"))
+                && base_name_from_header(name) == base) {
                 fine_cols.push_back(col);
             }
-            else if (starts_with(name, "FineMean_") && base_name_from_header(name) == base) {
+            // ✅ Mean: FineMean_* OR FineDerivMean_*
+            else if ((starts_with(name, "FineMean_") || starts_with(name, "FineDerivMean_"))
+                     && base_name_from_header(name) == base) {
                 fineMean_col = col;
             }
+            // Upscaled (BTC or derivative)
             else if ((starts_with(name, "Upscaled_mean_") || starts_with(name, "UpscaledDeriv_mean_") || starts_with(name, "Upscaled_"))
-                      && base_name_from_header(name) == base) {
+                     && base_name_from_header(name) == base) {
                 upMean_col = col;
             }
         }
@@ -1280,7 +1297,7 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
 
         bool first = true;
 
-        // If only 1 realization and FineMean exists, skip gray curve to avoid overlap/double thickness
+        // If only 1 realization and mean exists, skip gray curve to avoid overlap/double thickness
         bool draw_gray = !(fine_cols.size() == 1 && fineMean_col > 0);
 
         // Fine realizations: gray thin
@@ -1293,7 +1310,7 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
             }
         }
 
-        // FineMean: thick black
+        // FineMean / FineDerivMean: thick black
         if (fineMean_col > 0) {
             if (!first) gp << ", \\\n";
             first = false;
