@@ -1228,10 +1228,25 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
 
     int made = 0;
 
+    // Decide which bases are "locations" for this CSV
+    bool has_x = false, has_series = false;
+    for (const auto& b : bases) {
+        if (starts_with(b, "x=")) has_x = true;
+        if (starts_with(b, "series_")) has_series = true;
+    }
+
+    // Prefer x= (BTC), otherwise series_ (derivative), otherwise plot everything
+    std::string must_prefix = "";
+    if (has_x) must_prefix = "x=";
+    else if (has_series) must_prefix = "series_";
+
     for (const auto& base : bases) {
 
         // Skip plotting time-like bases if requested
         if (skip_base_t && (base == "t" || base == "time" || base == "Time")) continue;
+
+        // If we detected a location prefix, only plot those locations
+        if (!must_prefix.empty() && !starts_with(base, must_prefix)) continue;
 
         std::vector<int> fine_cols;
         int fineMean_col = -1;
