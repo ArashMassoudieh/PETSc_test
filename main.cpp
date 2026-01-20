@@ -232,7 +232,10 @@ int main(int argc, char** argv) {
                              &BTCs_FineScaled,
                              r);
 
-            g.writeNamedVTI_Auto("C", joinPath(fine_dir, pfx + "C.vti"));
+            // ✅ Set series names: x=0.50, x=1.50, x=2.50
+            for (int i = 0; i < (int)xLocations.size() && i < (int)BTCs_FineScaled.size(); ++i) {
+                BTCs_FineScaled.setSeriesName(i, fmt_x(xLocations[i]));
+            }
 
             const std::string btc_path       = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
             const std::string btc_deriv_path = joinPath(fine_dir, pfx + "BTC_FineScaled_derivative.csv");
@@ -557,6 +560,11 @@ int main(int argc, char** argv) {
 
     TimeSeriesSet<double> BTCs_Upscaled;
     g_u.SolveTransport(t_end_pdf, dt_pdf, "transport_", output_interval_pdf, up_dir, "Cu", &BTCs_Upscaled);
+
+    // ✅ Set series names: x=0.50, x=1.50, x=2.50
+    for (int i = 0; i < (int)xLocations.size() && i < (int)BTCs_Upscaled.size(); ++i) {
+        BTCs_Upscaled.setSeriesName(i, fmt_x(xLocations[i]));
+    }
 
     const std::string up_btc_path       = joinPath(up_dir, up_pfx + "BTC_Upscaled.csv");
     const std::string up_btc_deriv_path = joinPath(up_dir, up_pfx + "BTC_Upscaled_derivative.csv");

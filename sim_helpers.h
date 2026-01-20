@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <petscsys.h>   // for PetscInt
+#include <iomanip>
 
 // --------------------
 // FS / path helpers
@@ -214,3 +215,9 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
                                                 bool skip_base_t = true);
 
 int run_gnuplot_script(const std::string& gp_path);
+
+inline std::string fmt_x(double x) {
+    std::ostringstream ss;
+    ss << "x=" << std::fixed << std::setprecision(2) << x;
+    return ss.str();
+}
