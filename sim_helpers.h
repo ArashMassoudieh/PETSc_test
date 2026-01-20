@@ -169,6 +169,22 @@ bool accumulate_inverse_cdf_on_grid(
     std::vector<double>& invcdf_sum
 );
 
+// gnuplot by name (one figure per base series: x=0.50, x=1.50, ...)
+bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
+                                                const std::string& csv_path,
+                                                const std::string& fig_prefix,
+                                                const std::string& y_label,
+                                                bool skip_base_t = true);
+
+int run_gnuplot_script(const std::string& gp_path);
+
+inline std::string fmt_x(double x) {
+    std::ostringstream ss;
+    ss << "x=" << std::fixed << std::setprecision(2) << x;
+    return ss.str();
+}
+
+
 /*
 // Writes a python script that plots "Fine realizations (gray) + FineMean (black) + Upscaled_mean (red dashed)"
 // for each series column found in the comparison CSV.
@@ -206,18 +222,3 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
 
 int run_gnuplot_script(const std::string& gp_path);
 */
-
-// gnuplot by name (one figure per base series: x=0.50, x=1.50, ...)
-bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
-                                                const std::string& csv_path,
-                                                const std::string& fig_prefix,
-                                                const std::string& y_label,
-                                                bool skip_base_t = true);
-
-int run_gnuplot_script(const std::string& gp_path);
-
-inline std::string fmt_x(double x) {
-    std::ostringstream ss;
-    ss << "x=" << std::fixed << std::setprecision(2) << x;
-    return ss.str();
-}

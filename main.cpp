@@ -688,39 +688,6 @@ int main(int argc, char** argv) {
             std::cout << "Wrote comparison BTC CSV: " << out_cmp << "\n";
         }
 
-        /*
-        // python plot
-        const std::string py1 = joinPath(run_dir, "plot_BTC_compare.py");
-        if (write_btc_compare_plot_py(py1, out_cmp, "BTC_compare", "Concentration")) {
-            int rc = run_python_script(py1);
-            if (rc != 0) std::cerr << "WARNING: plotting script failed (rc=" << rc << "): " << py1 << "\n";
-        } else {
-            std::cerr << "WARNING: could not write plot script: " << py1 << "\n";
-        }
-
-        // gnuplot
-        const std::string gp1 = joinPath(run_dir, "plot_BTC_compare.gp");
-        if (write_btc_compare_plot_gnuplot(gp1, out_cmp, "BTC_compare", "Concentration")) {
-            int rc = run_gnuplot_script(gp1);
-            if (rc != 0)
-                std::cerr << "WARNING: gnuplot failed for BTC comparison\n";
-        }
-
-        // simple gnuplot
-        const std::string gp1 = joinPath(run_dir, "plot_BTC_compare.gp");
-        if (write_btc_compare_plot_gnuplot_simple(gp1, out_cmp, "BTC_compare", "Concentration")) {
-            int rc = run_gnuplot_script(gp1);
-            if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp1 << "\n";
-        }
-
-        // gnuplot by name
-        const std::string gp1 = joinPath(run_dir, "plot_BTC_compare.gp");
-        if (write_btc_compare_plot_gnuplot_by_basename(gp1, out_cmp, "BTC_compare", "Concentration")) {
-            int rc = run_gnuplot_script(gp1);
-            if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp1 << "\n";
-        }
-
-        */
         // gnuplot by name (BTC)
         {
             const std::string gp1 = joinPath(run_dir, "plot_BTC_compare.gp");
@@ -814,39 +781,6 @@ int main(int argc, char** argv) {
         std::cout << "\nMixing PDF simulation complete!\n";
         std::cout << "All outputs saved to: " << run_dir << "\n";
 
-        /*
-        // python plot
-        const std::string py2 = joinPath(run_dir, "plot_BTC_derivative_compare.py");
-        if (write_btc_compare_plot_py(py2, out_cmp_d, "BTC_deriv_compare", "dC/dt")) {
-            int rc = run_python_script(py2);
-            if (rc != 0) std::cerr << "WARNING: plotting script failed (rc=" << rc << "): " << py2 << "\n";
-        } else {
-            std::cerr << "WARNING: could not write plot script: " << py2 << "\n";
-        }
-
-        // gnuplot
-        const std::string gp2 = joinPath(run_dir, "plot_BTC_derivative_compare.gp");
-        if (write_btc_compare_plot_gnuplot(gp2, out_cmp_d, "BTC_deriv_compare", "dC/dt")) {
-            int rc = run_gnuplot_script(gp2);
-            if (rc != 0)
-                std::cerr << "WARNING: gnuplot failed for BTC derivative comparison\n";
-        }
-
-        // simple gnuplot
-        const std::string gp2 = joinPath(run_dir, "plot_BTC_derivative_compare.gp");
-        if (write_btc_compare_plot_gnuplot_simple(gp2, out_cmp_d, "BTC_deriv_compare", "dC/dt")) {
-            int rc = run_gnuplot_script(gp2);
-            if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp2 << "\n";
-        }
-
-        // gnuplot by name
-        const std::string gp2 = joinPath(run_dir, "plot_BTC_derivative_compare.gp");
-        if (write_btc_compare_plot_gnuplot_by_basename(gp2, out_cmp_d, "BTC_deriv_compare", "dC/dt")) {
-            int rc = run_gnuplot_script(gp2);
-            if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp2 << "\n";
-        }
-
-        */
         // gnuplot by name (Derivative BTC)
         {
             const std::string gp2 = joinPath(run_dir, "plot_BTC_derivative_compare.gp");
@@ -866,3 +800,71 @@ int main(int argc, char** argv) {
     MPI_Barrier(PETSC_COMM_WORLD);
     return 0;
 }
+
+
+/*
+// python plot
+const std::string py1 = joinPath(run_dir, "plot_BTC_compare.py");
+if (write_btc_compare_plot_py(py1, out_cmp, "BTC_compare", "Concentration")) {
+    int rc = run_python_script(py1);
+    if (rc != 0) std::cerr << "WARNING: plotting script failed (rc=" << rc << "): " << py1 << "\n";
+} else {
+    std::cerr << "WARNING: could not write plot script: " << py1 << "\n";
+}
+
+// gnuplot
+const std::string gp1 = joinPath(run_dir, "plot_BTC_compare.gp");
+if (write_btc_compare_plot_gnuplot(gp1, out_cmp, "BTC_compare", "Concentration")) {
+    int rc = run_gnuplot_script(gp1);
+    if (rc != 0)
+        std::cerr << "WARNING: gnuplot failed for BTC comparison\n";
+}
+
+// simple gnuplot
+const std::string gp1 = joinPath(run_dir, "plot_BTC_compare.gp");
+if (write_btc_compare_plot_gnuplot_simple(gp1, out_cmp, "BTC_compare", "Concentration")) {
+    int rc = run_gnuplot_script(gp1);
+    if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp1 << "\n";
+}
+
+// gnuplot by name
+const std::string gp1 = joinPath(run_dir, "plot_BTC_compare.gp");
+if (write_btc_compare_plot_gnuplot_by_basename(gp1, out_cmp, "BTC_compare", "Concentration")) {
+    int rc = run_gnuplot_script(gp1);
+    if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp1 << "\n";
+}
+*/
+
+
+/*
+// python plot
+const std::string py2 = joinPath(run_dir, "plot_BTC_derivative_compare.py");
+if (write_btc_compare_plot_py(py2, out_cmp_d, "BTC_deriv_compare", "dC/dt")) {
+    int rc = run_python_script(py2);
+    if (rc != 0) std::cerr << "WARNING: plotting script failed (rc=" << rc << "): " << py2 << "\n";
+} else {
+    std::cerr << "WARNING: could not write plot script: " << py2 << "\n";
+}
+
+// gnuplot
+const std::string gp2 = joinPath(run_dir, "plot_BTC_derivative_compare.gp");
+if (write_btc_compare_plot_gnuplot(gp2, out_cmp_d, "BTC_deriv_compare", "dC/dt")) {
+    int rc = run_gnuplot_script(gp2);
+    if (rc != 0)
+        std::cerr << "WARNING: gnuplot failed for BTC derivative comparison\n";
+}
+
+// simple gnuplot
+const std::string gp2 = joinPath(run_dir, "plot_BTC_derivative_compare.gp");
+if (write_btc_compare_plot_gnuplot_simple(gp2, out_cmp_d, "BTC_deriv_compare", "dC/dt")) {
+    int rc = run_gnuplot_script(gp2);
+    if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp2 << "\n";
+}
+
+// gnuplot by name
+const std::string gp2 = joinPath(run_dir, "plot_BTC_derivative_compare.gp");
+if (write_btc_compare_plot_gnuplot_by_basename(gp2, out_cmp_d, "BTC_deriv_compare", "dC/dt")) {
+    int rc = run_gnuplot_script(gp2);
+    if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << "): " << gp2 << "\n";
+}
+*/
