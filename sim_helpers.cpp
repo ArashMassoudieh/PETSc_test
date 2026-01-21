@@ -635,7 +635,7 @@ int run_gnuplot_script(const std::string& gp_path)
 // gnuplot by basename
 //   - Realizations: gray thin
 //   - FineMean / FineDerivMean: thick black
-//   - Upscaled mean: thick red dashed
+//   - Upscaled mean: thick red
 //   - Output PNGs saved next to CSV (run folder)
 // ------------------------------------------------------------
 bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
@@ -770,12 +770,12 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
                << " with lines lw 4 lc rgb \"black\" title \"FineMean\"";
         }
 
-        // Upscaled mean: thick red dashed
+        // Upscaled mean: thick red
         if (upMean_col > 0) {
             if (!first) gp << ", \\\n";
             first = false;
             gp << "  csvfile using 1:" << upMean_col
-               << " with lines lw 4 dt 2 lc rgb \"red\" title \"Upscaled mean\"";
+               << " with lines lw 4 lc rgb \"red\" title \"Upscaled mean\"";
         }
 
         gp << "\n\n";
