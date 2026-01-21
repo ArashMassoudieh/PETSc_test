@@ -595,10 +595,18 @@ int main(int argc, char** argv) {
         std::vector<std::string> out_names;
         std::vector<std::vector<double>> out_cols;
 
+        // NEW: store FineMean and FineDerivMean separately too
+        std::vector<std::string> finemean_names;
+        std::vector<std::vector<double>> finemean_cols;
+
+        std::vector<std::string> finederivmean_names;
+        std::vector<std::vector<double>> finederivmean_cols;
+
         auto ingest_one = [&](const std::string& path, const std::string& series_prefix) -> bool {
             std::vector<double> t;
             std::vector<std::string> names;
             std::vector<std::vector<double>> cols;
+
             if (!read_time_series_table_csv(path, t, names, cols)) {
                 std::cerr << "WARNING: could not read CSV for aggregation: " << path << "\n";
                 return false;
@@ -614,7 +622,7 @@ int main(int argc, char** argv) {
             return true;
         };
 
-        // scan fine folders
+        // scan fine folders (ordered)
         auto fine_folders = list_fine_folders(run_dir);
 
         // ------------------------------------------------------------
@@ -632,9 +640,9 @@ int main(int argc, char** argv) {
             ingest_one(btc, "Fine_" + makeRealLabel(rr));
         }
 
-        // 2) compute FineMean (BTC)
+        // 2) compute FineMean () and ALSO save it later
         if (!use_timeseriesset_mean) {
-            // ---- OLD METHOD (keep) ----
+            // ---- OLD METHOD (sum/count) ----
             bool initialized = false;
             std::vector<std::string> mean_names;
             std::vector<std::vector<double>> sum_cols;
@@ -673,8 +681,15 @@ int main(int argc, char** argv) {
 
             if (initialized && used > 0) {
                 for (size_t j = 0; j < mean_names.size(); ++j) {
+                    std::vector<double> col_mean = finalize_mean_vec(sum_cols[j], cnt_cols[j]);
+
+                    // for comparison CSV
                     out_names.push_back(std::string("FineMean_") + mean_names[j]);
-                    out_cols.push_back(finalize_mean_vec(sum_cols[j], cnt_cols[j]));
+                    out_cols.push_back(col_mean);
+
+                    // for FineMean-only CSV
+                    finemean_names.push_back(mean_names[j]);
+                    finemean_cols.push_back(std::move(col_mean));
                 }
                 std::cout << "Added FineMean (BTC) from " << used << " realizations.\n";
             } else {
@@ -682,7 +697,7 @@ int main(int argc, char** argv) {
             }
         }
         else {
-            // ---- NEW METHOD (TimeSeriesSet mean_ts) ----
+            // ---- NEW METHOD (TimeSeriesSet::mean_ts stacking) ----
             bool initialized = false;
             std::vector<std::string> mean_names;
             std::vector<TimeSeriesSet<double>> stacks; // one stack per location
@@ -711,7 +726,6 @@ int main(int argc, char** argv) {
                 }
                 if (names.size() != mean_names.size()) continue;
 
-                // push each location as a TimeSeries into its stack
                 for (size_t j = 0; j < mean_names.size(); ++j) {
                     TimeSeries<double> ts;
                     ts.setName(makeRealLabel(rr));
@@ -721,23 +735,26 @@ int main(int argc, char** argv) {
                     }
                     stacks[j].append(ts, ts.name());
                 }
-
                 used++;
             }
 
             if (initialized && used > 0) {
                 for (size_t j = 0; j < mean_names.size(); ++j) {
                     TimeSeries<double> m = stacks[j].mean_ts(0);
-                    // extract c-values to a column aligned with t_base
+
                     std::vector<double> col;
                     col.reserve(t_base.size());
                     for (size_t i = 0; i < t_base.size(); ++i) {
-                        // m should match t_base length, but be defensive:
                         col.push_back(i < m.size() ? m.getValue(i) : 0.0);
                     }
 
+                    // for comparison CSV
                     out_names.push_back(std::string("FineMean_") + mean_names[j]);
-                    out_cols.push_back(std::move(col));
+                    out_cols.push_back(col);
+
+                    // for FineMean-only CSV
+                    finemean_names.push_back(mean_names[j]);
+                    finemean_cols.push_back(std::move(col));
                 }
 
                 std::cout << "Added FineMean (BTC) using TimeSeriesSet::mean_ts from "
@@ -755,6 +772,20 @@ int main(int argc, char** argv) {
             std::cerr << "WARNING: failed to write " << out_cmp << "\n";
         } else {
             std::cout << "Wrote comparison BTC CSV: " << out_cmp << "\n";
+        }
+
+        // NEW: write FineMean-only CSV
+        {
+            const std::string fm_csv = joinPath(run_dir, "BTC_FineMean.csv");
+            if (!finemean_cols.empty()) {
+                if (!write_comparison_csv(fm_csv, t_base, finemean_names, finemean_cols)) {
+                    std::cerr << "WARNING: failed to write " << fm_csv << "\n";
+                } else {
+                    std::cout << "Wrote FineMean BTC CSV: " << fm_csv << "\n";
+                }
+            } else {
+                std::cerr << "WARNING: BTC_FineMean.csv not written (empty)\n";
+            }
         }
 
         // gnuplot by name (BTC)
@@ -788,9 +819,9 @@ int main(int argc, char** argv) {
             ingest_one(btc, "FineDeriv_" + makeRealLabel(rr));
         }
 
-        // 2) FineDerivMean (BTC)
+        // 2) FineDerivMean and ALSO save it later
         if (!use_timeseriesset_mean) {
-            // ---- OLD METHOD (keep) ----
+            // ---- OLD METHOD (sum/count) ----
             bool initialized = false;
             std::vector<std::string> mean_names;
             std::vector<std::vector<double>> sum_cols;
@@ -829,8 +860,15 @@ int main(int argc, char** argv) {
 
             if (initialized && used > 0) {
                 for (size_t j = 0; j < mean_names.size(); ++j) {
+                    std::vector<double> col_mean = finalize_mean_vec(sum_cols[j], cnt_cols[j]);
+
+                    // for comparison CSV
                     out_names.push_back(std::string("FineDerivMean_") + mean_names[j]);
-                    out_cols.push_back(finalize_mean_vec(sum_cols[j], cnt_cols[j]));
+                    out_cols.push_back(col_mean);
+
+                    // for FineDerivMean-only CSV
+                    finederivmean_names.push_back(mean_names[j]);
+                    finederivmean_cols.push_back(std::move(col_mean));
                 }
                 std::cout << "Added FineDerivMean from " << used << " realizations.\n";
             } else {
@@ -838,7 +876,7 @@ int main(int argc, char** argv) {
             }
         }
         else {
-            // ---- NEW METHOD (TimeSeriesSet mean_ts) ----
+            // ---- NEW METHOD (TimeSeriesSet::mean_ts stacking) ----
             bool initialized = false;
             std::vector<std::string> mean_names;
             std::vector<TimeSeriesSet<double>> stacks; // one stack per location/series
@@ -867,19 +905,15 @@ int main(int argc, char** argv) {
                 }
                 if (names.size() != mean_names.size()) continue;
 
-                // Push each derivative series as a TimeSeries into its stack
                 for (size_t j = 0; j < mean_names.size(); ++j) {
                     TimeSeries<double> ts;
                     ts.setName(makeRealLabel(rr));
                     ts.reserve(t_base.size());
-
                     for (size_t i = 0; i < t_base.size(); ++i) {
                         ts.append(t_base[i], cols_rs[j][i]);
                     }
-
                     stacks[j].append(ts, ts.name());
                 }
-
                 used++;
             }
 
@@ -889,14 +923,17 @@ int main(int argc, char** argv) {
 
                     std::vector<double> col;
                     col.reserve(t_base.size());
-
-                    // m should align with t_base (same appended times), but be defensive
                     for (size_t i = 0; i < t_base.size(); ++i) {
                         col.push_back(i < m.size() ? m.getValue(i) : 0.0);
                     }
 
+                    // for comparison CSV
                     out_names.push_back(std::string("FineDerivMean_") + mean_names[j]);
-                    out_cols.push_back(std::move(col));
+                    out_cols.push_back(col);
+
+                    // for FineDerivMean-only CSV
+                    finederivmean_names.push_back(mean_names[j]);
+                    finederivmean_cols.push_back(std::move(col));
                 }
 
                 std::cout << "Added FineDerivMean using TimeSeriesSet::mean_ts from "
@@ -916,6 +953,20 @@ int main(int argc, char** argv) {
             std::cout << "Wrote comparison BTC-derivative CSV: " << out_cmp_d << "\n";
         }
 
+        // NEW: write FineDerivMean-only CSV
+        {
+            const std::string fdm_csv = joinPath(run_dir, "BTC_FineDerivMean.csv");
+            if (!finederivmean_cols.empty()) {
+                if (!write_comparison_csv(fdm_csv, t_base, finederivmean_names, finederivmean_cols)) {
+                    std::cerr << "WARNING: failed to write " << fdm_csv << "\n";
+                } else {
+                    std::cout << "Wrote FineDerivMean BTC CSV: " << fdm_csv << "\n";
+                }
+            } else {
+                std::cerr << "WARNING: BTC_FineDerivMean.csv not written (empty)\n";
+            }
+        }
+
         std::cout << "\nMixing PDF simulation complete!\n";
         std::cout << "All outputs saved to: " << run_dir << "\n";
 
@@ -932,8 +983,8 @@ int main(int argc, char** argv) {
                 }
             }
         }
-
     }
+
 
     MPI_Barrier(PETSC_COMM_WORLD);
     return 0;
