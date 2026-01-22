@@ -1,4 +1,4 @@
-// main.cpp
+// main.cpp  (FULL, updated with t-switches + proper plot output dir + styles)
 #include "petsc_init.h"
 #include "petscmatrix.h"
 #include "petscvector.h"
@@ -21,8 +21,24 @@
 #include "Pathway.h"
 #include "PathwaySet.h"
 
-// NEW: moved helpers
 #include "sim_helpers.h"
+
+// -------------------------------------------------------------
+// Compare-time switches
+// -------------------------------------------------------------
+enum class TBaseMode { Fixed, FromUpscaled, FromFirstFine };
+enum class AlignMode { Resample, MakeUniform };
+
+static inline bool load_csv_time_only(const std::string& path, std::vector<double>& t_out)
+{
+    std::vector<double> t;
+    std::vector<std::string> names;
+    std::vector<std::vector<double>> cols;
+    if (!read_time_series_table_csv(path, t, names, cols)) return false;
+    if (t.empty()) return false;
+    t_out = std::move(t);
+    return true;
+}
 
 int main(int argc, char** argv) {
     PETScInit petsc(argc, argv);
@@ -45,13 +61,14 @@ int main(int argc, char** argv) {
     // -----------------------------
     // CLI options
     // -----------------------------
-    bool upscale_only = false;        // read fine outputs and run only upscaled
-    std::string resume_run_dir = output_dir + "/run_20260115_132010"; // required for --upscale-only
+    bool upscale_only = false;
+    std::string resume_run_dir = output_dir + "/run_20260115_132010";
 
-    // NEW:
-    //   - compute FineMean/FineDerivMean using TimeSeriesSet::mean_ts (default ON)
-    //   - build Compare CSVs using TimeSeriesSet::append() to enforce correct order (no duplicated t columns)
     bool use_timeseriesset_mean = true;
+
+    // NEW: compare switches
+    TBaseMode tbase_mode = TBaseMode::Fixed;     // --tbase (default), --t-upscaled, --t-fine
+    AlignMode align_mode = AlignMode::Resample;  // --resample (default), --make-uniform
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -59,6 +76,13 @@ int main(int argc, char** argv) {
         else if (a == "--mean-ts") use_timeseriesset_mean = true;
         else if (a == "--no-mean-ts") use_timeseriesset_mean = false;
         else if (a.rfind("--run-dir=", 0) == 0) resume_run_dir = a.substr(std::string("--run-dir=").size());
+
+        else if (a == "--tbase")      tbase_mode = TBaseMode::Fixed;
+        else if (a == "--t-upscaled") tbase_mode = TBaseMode::FromUpscaled;
+        else if (a == "--t-fine")     tbase_mode = TBaseMode::FromFirstFine;
+
+        else if (a == "--resample")     align_mode = AlignMode::Resample;
+        else if (a == "--make-uniform") align_mode = AlignMode::MakeUniform;
     }
 
     std::string run_dir;
@@ -110,7 +134,7 @@ int main(int argc, char** argv) {
     // -----------------------------
     // Realizations
     // -----------------------------
-    const int nReal_default = 20; // used only in full mode; in upscale-only we detect from folders
+    const int nReal_default = 20;
     const double du = 0.01;
     const int nU = (int)std::round(1.0 / du) + 1;
 
@@ -239,7 +263,6 @@ int main(int argc, char** argv) {
                              &BTCs_FineScaled,
                              r);
 
-            // ✅ Set series names: x=0.50, x=1.50, x=2.50
             for (int i = 0; i < (int)xLocations.size() && i < (int)BTCs_FineScaled.size(); ++i) {
                 BTCs_FineScaled.setSeriesName(i, fmt_x(xLocations[i]));
             }
@@ -363,7 +386,6 @@ int main(int argc, char** argv) {
                 }
             }
         } else {
-            // upscale-only: try load mean files, else reconstruct from fine folders
             const std::string mean_params_path = joinPath(run_dir, "mean_params.txt");
             const std::string mean_cdf_path    = joinPath(run_dir, "mean_qx_inverse_cdf.txt");
 
@@ -391,7 +413,6 @@ int main(int argc, char** argv) {
                 }
                 nReal = (int)fine_folders.size();
 
-                // params from fine_params_all.csv if exists
                 std::vector<double> lc_v, lx_v, ly_v, dt_v;
                 bool ok_fine_params = fileExists(stats_csv) &&
                                       read_fine_params_all_csv(stats_csv, lc_v, lx_v, ly_v, dt_v);
@@ -403,7 +424,6 @@ int main(int argc, char** argv) {
                     dt_mean = mean_of(dt_v);
                     std::cout << "Loaded params from fine_params_all.csv\n";
                 } else {
-                    // fallback: read meta.txt per folder
                     lc_v.clear(); lx_v.clear(); ly_v.clear(); dt_v.clear();
                     for (auto& pr : fine_folders) {
                         int rr = pr.first;
@@ -437,7 +457,6 @@ int main(int argc, char** argv) {
                     std::cout << "Loaded params from fine meta.txt files\n";
                 }
 
-                // inverse CDF average from per-realization qx_inverse_cdf.txt
                 std::fill(invcdf_sum.begin(), invcdf_sum.end(), 0.0);
                 int used = 0;
                 for (auto& pr : fine_folders) {
@@ -453,7 +472,6 @@ int main(int argc, char** argv) {
                 invcdf_mean.resize(nU, 0.0);
                 for (int k = 0; k < nU; ++k) invcdf_mean[k] = invcdf_sum[k] / (double)used;
 
-                // save reconstructed means for next resume
                 {
                     std::ofstream f(joinPath(run_dir, "mean_params.txt"));
                     f << "nReal=" << used << "\n";
@@ -477,20 +495,17 @@ int main(int argc, char** argv) {
         }
     }
 
-    // broadcast scalar means
     MPI_Bcast(&lc_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
     MPI_Bcast(&lx_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
     MPI_Bcast(&ly_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
     MPI_Bcast(&dt_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
 
-    // broadcast mean inverse cdf vector
     int nU_b = 0;
     if (rank == 0) nU_b = (int)invcdf_mean.size();
     MPI_Bcast(&nU_b, 1, MPI_INT, 0, PETSC_COMM_WORLD);
     if (rank != 0) invcdf_mean.resize(nU_b);
     MPI_Bcast(invcdf_mean.data(), nU_b, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
 
-    // build mean inverse CDF TimeSeries
     TimeSeries<double> qx_inverse_cdf_mean;
     for (int k = 0; k < nU; ++k) {
         double u = k * du;
@@ -514,7 +529,6 @@ int main(int argc, char** argv) {
         std::cout << "upscaled output: " << up_dir << "\n";
     }
 
-    // Mixing PDF grid
     Grid2D g_u(nx, ny, Lx, Ly);
 
     int qx_size = nu * (nx + 1);
@@ -526,7 +540,6 @@ int main(int argc, char** argv) {
     qx_u.resize(qx_size, 0.0);
     qy_u.resize(qy_size, 0.0);
 
-    // Assign v(u) from mean inverse CDF
     for (int j = 0; j < nu; ++j) {
         double u = static_cast<double>(j) / (nu - 1);
         double v_at_u = qx_inverse_cdf_mean.interpol(u);
@@ -540,13 +553,11 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Save initial fields with prefix
     g_u.writeNamedVTI("qx", Grid2D::ArrayKind::Fx, joinPath(up_dir, up_pfx + "qx_u_initial.vti"));
     g_u.writeNamedVTI("qy", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "qy_u_initial.vti"));
     g_u.writeNamedMatrix("qx", Grid2D::ArrayKind::Fx, joinPath(up_dir, up_pfx + "qx_u_initial.txt"));
     g_u.writeNamedMatrix("qy", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "qy_u_initial.txt"));
 
-    // Mixing parameters (mean)
     g_u.setMixingParams(lc_mean, lx_mean, ly_mean);
 
     double t_end_pdf = 10;
@@ -568,7 +579,6 @@ int main(int argc, char** argv) {
     TimeSeriesSet<double> BTCs_Upscaled;
     g_u.SolveTransport(t_end_pdf, dt_pdf, "transport_", output_interval_pdf, up_dir, "Cu", &BTCs_Upscaled);
 
-    // ✅ Set series names: x=0.50, x=1.50, x=2.50
     for (int i = 0; i < (int)xLocations.size() && i < (int)BTCs_Upscaled.size(); ++i) {
         BTCs_Upscaled.setSeriesName(i, fmt_x(xLocations[i]));
     }
@@ -583,26 +593,55 @@ int main(int argc, char** argv) {
     g_u.writeNamedMatrix("C", Grid2D::ArrayKind::Cell, joinPath(up_dir, up_pfx + "Cu.txt"));
 
     // =====================================================================
-    // FINAL AGGREGATION CSVs for comparison / plotting (ORDERED + CLEAN)
-    //   - Compare BTC:       Fine_r####..., FineMean..., Upscaled...
-    //   - Compare derivative: FineDeriv_r####..., FineDerivMean..., UpscaledDeriv...
-    //   - Also write: BTC_FineMean.csv, BTC_FineDerivMean.csv
+    // FINAL AGGREGATION CSVs for comparison / plotting
     // =====================================================================
     if (rank == 0) {
         const double t_end_cmp = 10.0;
         const double dt_cmp    = 0.001;
 
-        std::vector<double> t_base;
-        t_base.reserve((size_t)std::ceil(t_end_cmp / dt_cmp) + 1);
-        for (double tt = 0.0; tt <= t_end_cmp + 1e-12; tt += dt_cmp) t_base.push_back(tt);
-
-        // ordered fine folders
         auto fine_folders = list_fine_folders(run_dir);
 
-        // ------------------------------------------------------------
-        // helper: load CSV and append each series to a TimeSeriesSet
-        //         (skips duplicated "t" column if present in header)
-        // ------------------------------------------------------------
+        // -----------------------
+        // choose t_base
+        // -----------------------
+        std::vector<double> t_base;
+
+        auto build_fixed = [&](){
+            t_base.clear();
+            t_base.reserve((size_t)std::ceil(t_end_cmp / dt_cmp) + 1);
+            for (double tt = 0.0; tt <= t_end_cmp + 1e-12; tt += dt_cmp) t_base.push_back(tt);
+        };
+
+        if (tbase_mode == TBaseMode::Fixed) {
+            build_fixed();
+        } else if (tbase_mode == TBaseMode::FromUpscaled) {
+            if (!load_csv_time_only(up_btc_path, t_base)) {
+                std::cerr << "WARNING: --t-upscaled failed; using fixed t_base\n";
+                build_fixed();
+            }
+        } else {
+            bool ok = false;
+            for (auto& pr : fine_folders) {
+                int rr = pr.first;
+                std::string fine_dir = pr.second;
+                if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
+                std::string pfx  = makeRealLabel(rr) + "_";
+                std::string path = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
+                ok = load_csv_time_only(path, t_base);
+                if (ok) break;
+            }
+            if (!ok) {
+                std::cerr << "WARNING: --t-fine failed; using fixed t_base\n";
+                build_fixed();
+            }
+        }
+
+        // -----------------------
+        // helper: load CSV -> append to TimeSeriesSet on chosen t_base
+        // alignment behavior:
+        //   Resample: direct interpolation onto t_base
+        //   MakeUniform: first uniformize on dt_cmp, then interpolate onto t_base (still ends on t_base)
+        // -----------------------
         auto load_csv_as_tsset = [&](const std::string& path,
                                      const std::string& prefix,
                                      TimeSeriesSet<double>& out) -> bool
@@ -616,20 +655,38 @@ int main(int argc, char** argv) {
                 return false;
             }
 
-            std::vector<std::vector<double>> cols_rs;
-            resample_table_linear(t, cols, t_base, cols_rs);
-
             bool any = false;
+
             for (size_t j = 0; j < names.size(); ++j) {
-                // defensive: ignore any "t" column that sneaks in
                 if (names[j] == "t" || names[j] == "T" || names[j] == "time") continue;
+
+                std::vector<double> y_aligned;
+
+                if (align_mode == AlignMode::Resample) {
+                    y_aligned = resample_col_linear(t, cols[j], t_base);
+                } else {
+                    // make_uniform step (meaningful), then final interpolate to t_base
+                    TimeSeries<double> ts0;
+                    ts0.reserve(t.size());
+                    for (size_t i = 0; i < t.size(); ++i) ts0.append(t[i], cols[j][i]);
+
+                    TimeSeries<double> tsu = ts0.make_uniform(dt_cmp, false);
+
+                    std::vector<double> tu, yu;
+                    tu.reserve(tsu.size());
+                    yu.reserve(tsu.size());
+                    for (size_t i = 0; i < tsu.size(); ++i) {
+                        tu.push_back(tsu.getTime(i));
+                        yu.push_back(tsu.getValue(i));
+                    }
+
+                    y_aligned = resample_col_linear(tu, yu, t_base);
+                }
 
                 TimeSeries<double> ts;
                 ts.setName(prefix + "_" + names[j]);
                 ts.reserve(t_base.size());
-                for (size_t i = 0; i < t_base.size(); ++i) {
-                    ts.append(t_base[i], cols_rs[j][i]);
-                }
+                for (size_t i = 0; i < t_base.size(); ++i) ts.append(t_base[i], y_aligned[i]);
 
                 if (!out.append(ts, ts.name())) {
                     std::cerr << "WARNING: duplicate series skipped: " << ts.name() << "\n";
@@ -637,16 +694,16 @@ int main(int argc, char** argv) {
                     any = true;
                 }
             }
+
             return any;
         };
 
         // ============================================================
-        // BTC Compare (Fine..., FineMean..., Upscaled...)
+        // BTC Compare
         // ============================================================
         TimeSeriesSet<double> BTC_compare;
         TimeSeriesSet<double> BTC_fineMean_only;
 
-        // 1) fine realizations (strict order)
         for (auto& pr : fine_folders) {
             int rr = pr.first;
             std::string fine_dir = pr.second;
@@ -658,13 +715,11 @@ int main(int argc, char** argv) {
             load_csv_as_tsset(path, "Fine_" + makeRealLabel(rr), BTC_compare);
         }
 
-        // 2) FineMean computed from fine BTCs (two methods)
         {
             bool initialized = false;
             std::vector<std::string> mean_names;
 
             if (!use_timeseriesset_mean) {
-                // ---- OLD METHOD: sum/count on resampled columns ----
                 std::vector<std::vector<double>> sum_cols;
                 std::vector<std::vector<int>>    cnt_cols;
                 int used = 0;
@@ -682,8 +737,23 @@ int main(int argc, char** argv) {
                     std::vector<std::vector<double>> cols;
                     if (!read_time_series_table_csv(path, t, names, cols)) continue;
 
-                    std::vector<std::vector<double>> cols_rs;
-                    resample_table_linear(t, cols, t_base, cols_rs);
+                    // align each column to t_base using same alignment mode
+                    std::vector<std::vector<double>> cols_aligned(cols.size());
+                    for (size_t j = 0; j < cols.size(); ++j) {
+                        if (align_mode == AlignMode::Resample) {
+                            cols_aligned[j] = resample_col_linear(t, cols[j], t_base);
+                        } else {
+                            TimeSeries<double> ts0;
+                            ts0.reserve(t.size());
+                            for (size_t i = 0; i < t.size(); ++i) ts0.append(t[i], cols[j][i]);
+                            TimeSeries<double> tsu = ts0.make_uniform(dt_cmp, false);
+
+                            std::vector<double> tu, yu;
+                            tu.reserve(tsu.size()); yu.reserve(tsu.size());
+                            for (size_t i = 0; i < tsu.size(); ++i) { tu.push_back(tsu.getTime(i)); yu.push_back(tsu.getValue(i)); }
+                            cols_aligned[j] = resample_col_linear(tu, yu, t_base);
+                        }
+                    }
 
                     if (!initialized) {
                         mean_names = names;
@@ -695,7 +765,7 @@ int main(int argc, char** argv) {
 
                     for (size_t j = 0; j < mean_names.size(); ++j) {
                         if (mean_names[j] == "t" || mean_names[j] == "T" || mean_names[j] == "time") continue;
-                        accumulate_sum_count(cols_rs[j], sum_cols[j], cnt_cols[j]);
+                        accumulate_sum_count(cols_aligned[j], sum_cols[j], cnt_cols[j]);
                     }
                     used++;
                 }
@@ -720,7 +790,6 @@ int main(int argc, char** argv) {
                 }
 
             } else {
-                // ---- NEW METHOD: stack TimeSeriesSet per series + mean_ts ----
                 std::vector<TimeSeriesSet<double>> stacks;
                 int used = 0;
 
@@ -737,8 +806,22 @@ int main(int argc, char** argv) {
                     std::vector<std::vector<double>> cols;
                     if (!read_time_series_table_csv(path, t, names, cols)) continue;
 
-                    std::vector<std::vector<double>> cols_rs;
-                    resample_table_linear(t, cols, t_base, cols_rs);
+                    std::vector<std::vector<double>> cols_aligned(cols.size());
+                    for (size_t j = 0; j < cols.size(); ++j) {
+                        if (align_mode == AlignMode::Resample) {
+                            cols_aligned[j] = resample_col_linear(t, cols[j], t_base);
+                        } else {
+                            TimeSeries<double> ts0;
+                            ts0.reserve(t.size());
+                            for (size_t i = 0; i < t.size(); ++i) ts0.append(t[i], cols[j][i]);
+                            TimeSeries<double> tsu = ts0.make_uniform(dt_cmp, false);
+
+                            std::vector<double> tu, yu;
+                            tu.reserve(tsu.size()); yu.reserve(tsu.size());
+                            for (size_t i = 0; i < tsu.size(); ++i) { tu.push_back(tsu.getTime(i)); yu.push_back(tsu.getValue(i)); }
+                            cols_aligned[j] = resample_col_linear(tu, yu, t_base);
+                        }
+                    }
 
                     if (!initialized) {
                         mean_names = names;
@@ -753,9 +836,7 @@ int main(int argc, char** argv) {
                         TimeSeries<double> ts;
                         ts.setName(makeRealLabel(rr));
                         ts.reserve(t_base.size());
-                        for (size_t i = 0; i < t_base.size(); ++i) {
-                            ts.append(t_base[i], cols_rs[j][i]);
-                        }
+                        for (size_t i = 0; i < t_base.size(); ++i) ts.append(t_base[i], cols_aligned[j][i]);
                         stacks[j].append(ts, ts.name());
                     }
 
@@ -787,43 +868,31 @@ int main(int argc, char** argv) {
             }
         }
 
-        // 3) Upscaled last
         load_csv_as_tsset(up_btc_path, "Upscaled", BTC_compare);
 
-        // Write compare + FineMean-only
-        const std::string out_cmp = joinPath(run_dir, "BTC_Compare_Fine_vs_Upscaled.csv");
+        const std::string out_cmp = joinPath(run_dir, "BTC_Compare.csv");
         BTC_compare.write(out_cmp);
-        std::cout << "Wrote BTC comparison CSV (ordered/clean): " << out_cmp << "\n";
+        std::cout << "Wrote BTC WIDE comparison CSV (t_base): " << out_cmp << "\n";
 
         const std::string fm_csv = joinPath(run_dir, "BTC_FineMean.csv");
-        if (BTC_fineMean_only.size() > 0) {
-            BTC_fineMean_only.write(fm_csv);
-            std::cout << "Wrote FineMean BTC CSV: " << fm_csv << "\n";
-        } else {
-            std::cerr << "WARNING: BTC_FineMean.csv not written (empty)\n";
-        }
+        if (BTC_fineMean_only.size() > 0) BTC_fineMean_only.write(fm_csv);
 
-        // gnuplot by name (BTC)
+        // GNUPLOT (outputs forced into run_dir by passing absolute fig_prefix)
         {
             const std::string gp1 = joinPath(run_dir, "plot_BTC_compare.gp");
-            if (write_btc_compare_plot_gnuplot_by_basename(gp1, out_cmp, "BTC_compare", "Concentration")) {
+            const std::string fig_prefix = joinPath(run_dir, "BTC_compare");
+            if (write_btc_compare_plot_gnuplot_by_basename(gp1, out_cmp, fig_prefix, "Concentration")) {
                 int rc = run_gnuplot_script(gp1);
-                if (rc != 0) {
-                    std::cerr << "WARNING: gnuplot failed (rc=" << rc << ") for: " << gp1
-                              << " (is gnuplot installed?)\n";
-                } else {
-                    std::cout << "Gnuplot BTC figures written next to CSV: " << out_cmp << "\n";
-                }
+                if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << ") for: " << gp1 << "\n";
             }
         }
 
         // ============================================================
-        // Derivative Compare (FineDeriv..., FineDerivMean..., UpscaledDeriv...)
+        // Derivative Compare
         // ============================================================
         TimeSeriesSet<double> BTCd_compare;
         TimeSeriesSet<double> BTCd_fineMean_only;
 
-        // 1) fine derivative realizations
         for (auto& pr : fine_folders) {
             int rr = pr.first;
             std::string fine_dir = pr.second;
@@ -835,13 +904,12 @@ int main(int argc, char** argv) {
             load_csv_as_tsset(path, "FineDeriv_" + makeRealLabel(rr), BTCd_compare);
         }
 
-        // 2) FineDerivMean from fine derivative BTCs
+        // FineDerivMean
         {
             bool initialized = false;
             std::vector<std::string> mean_names;
 
             if (!use_timeseriesset_mean) {
-                // ---- OLD METHOD ----
                 std::vector<std::vector<double>> sum_cols;
                 std::vector<std::vector<int>>    cnt_cols;
                 int used = 0;
@@ -859,8 +927,22 @@ int main(int argc, char** argv) {
                     std::vector<std::vector<double>> cols;
                     if (!read_time_series_table_csv(path, t, names, cols)) continue;
 
-                    std::vector<std::vector<double>> cols_rs;
-                    resample_table_linear(t, cols, t_base, cols_rs);
+                    std::vector<std::vector<double>> cols_aligned(cols.size());
+                    for (size_t j = 0; j < cols.size(); ++j) {
+                        if (align_mode == AlignMode::Resample) {
+                            cols_aligned[j] = resample_col_linear(t, cols[j], t_base);
+                        } else {
+                            TimeSeries<double> ts0;
+                            ts0.reserve(t.size());
+                            for (size_t i = 0; i < t.size(); ++i) ts0.append(t[i], cols[j][i]);
+                            TimeSeries<double> tsu = ts0.make_uniform(dt_cmp, false);
+
+                            std::vector<double> tu, yu;
+                            tu.reserve(tsu.size()); yu.reserve(tsu.size());
+                            for (size_t i = 0; i < tsu.size(); ++i) { tu.push_back(tsu.getTime(i)); yu.push_back(tsu.getValue(i)); }
+                            cols_aligned[j] = resample_col_linear(tu, yu, t_base);
+                        }
+                    }
 
                     if (!initialized) {
                         mean_names = names;
@@ -872,7 +954,7 @@ int main(int argc, char** argv) {
 
                     for (size_t j = 0; j < mean_names.size(); ++j) {
                         if (mean_names[j] == "t" || mean_names[j] == "T" || mean_names[j] == "time") continue;
-                        accumulate_sum_count(cols_rs[j], sum_cols[j], cnt_cols[j]);
+                        accumulate_sum_count(cols_aligned[j], sum_cols[j], cnt_cols[j]);
                     }
                     used++;
                 }
@@ -897,7 +979,6 @@ int main(int argc, char** argv) {
                 }
 
             } else {
-                // ---- NEW METHOD ----
                 std::vector<TimeSeriesSet<double>> stacks;
                 int used = 0;
 
@@ -914,8 +995,22 @@ int main(int argc, char** argv) {
                     std::vector<std::vector<double>> cols;
                     if (!read_time_series_table_csv(path, t, names, cols)) continue;
 
-                    std::vector<std::vector<double>> cols_rs;
-                    resample_table_linear(t, cols, t_base, cols_rs);
+                    std::vector<std::vector<double>> cols_aligned(cols.size());
+                    for (size_t j = 0; j < cols.size(); ++j) {
+                        if (align_mode == AlignMode::Resample) {
+                            cols_aligned[j] = resample_col_linear(t, cols[j], t_base);
+                        } else {
+                            TimeSeries<double> ts0;
+                            ts0.reserve(t.size());
+                            for (size_t i = 0; i < t.size(); ++i) ts0.append(t[i], cols[j][i]);
+                            TimeSeries<double> tsu = ts0.make_uniform(dt_cmp, false);
+
+                            std::vector<double> tu, yu;
+                            tu.reserve(tsu.size()); yu.reserve(tsu.size());
+                            for (size_t i = 0; i < tsu.size(); ++i) { tu.push_back(tsu.getTime(i)); yu.push_back(tsu.getValue(i)); }
+                            cols_aligned[j] = resample_col_linear(tu, yu, t_base);
+                        }
+                    }
 
                     if (!initialized) {
                         mean_names = names;
@@ -930,9 +1025,7 @@ int main(int argc, char** argv) {
                         TimeSeries<double> ts;
                         ts.setName(makeRealLabel(rr));
                         ts.reserve(t_base.size());
-                        for (size_t i = 0; i < t_base.size(); ++i) {
-                            ts.append(t_base[i], cols_rs[j][i]);
-                        }
+                        for (size_t i = 0; i < t_base.size(); ++i) ts.append(t_base[i], cols_aligned[j][i]);
                         stacks[j].append(ts, ts.name());
                     }
 
@@ -964,33 +1057,21 @@ int main(int argc, char** argv) {
             }
         }
 
-        // 3) Upscaled derivative last
         load_csv_as_tsset(up_btc_deriv_path, "UpscaledDeriv", BTCd_compare);
 
-        // Write compare + FineDerivMean-only
-        const std::string out_cmp_d = joinPath(run_dir, "BTC_Compare_FineDerivative_vs_UpscaledDerivative.csv");
+        const std::string out_cmp_d = joinPath(run_dir, "BTC_Derivative_Compare.csv");
         BTCd_compare.write(out_cmp_d);
-        std::cout << "Wrote derivative comparison CSV (ordered/clean): " << out_cmp_d << "\n";
+        std::cout << "Wrote derivative WIDE comparison CSV (t_base): " << out_cmp_d << "\n";
 
         const std::string fdm_csv = joinPath(run_dir, "BTC_FineDerivMean.csv");
-        if (BTCd_fineMean_only.size() > 0) {
-            BTCd_fineMean_only.write(fdm_csv);
-            std::cout << "Wrote FineDerivMean BTC CSV: " << fdm_csv << "\n";
-        } else {
-            std::cerr << "WARNING: BTC_FineDerivMean.csv not written (empty)\n";
-        }
+        if (BTCd_fineMean_only.size() > 0) BTCd_fineMean_only.write(fdm_csv);
 
-        // gnuplot by name (Derivative BTC)
         {
             const std::string gp2 = joinPath(run_dir, "plot_BTC_derivative_compare.gp");
-            if (write_btc_compare_plot_gnuplot_by_basename(gp2, out_cmp_d, "BTC_deriv_compare", "dC/dt")) {
+            const std::string fig_prefix = joinPath(run_dir, "BTC_derivative_compare");
+            if (write_btc_compare_plot_gnuplot_by_basename(gp2, out_cmp_d, fig_prefix, "dC/dt")) {
                 int rc = run_gnuplot_script(gp2);
-                if (rc != 0) {
-                    std::cerr << "WARNING: gnuplot failed (rc=" << rc << ") for: " << gp2
-                              << " (is gnuplot installed?)\n";
-                } else {
-                    std::cout << "Gnuplot derivative figures written next to CSV: " << out_cmp_d << "\n";
-                }
+                if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << ") for: " << gp2 << "\n";
             }
         }
 

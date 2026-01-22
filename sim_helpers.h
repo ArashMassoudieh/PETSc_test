@@ -1,3 +1,4 @@
+// sim_helpers.h
 #pragma once
 
 #include <string>
@@ -8,6 +9,7 @@
 #include <limits>
 #include <iomanip>
 #include <sstream>
+#include <ctime>
 
 #include <petscsys.h>   // PetscInt
 
@@ -108,7 +110,7 @@ void resample_table_linear(
 );
 
 // --------------------
-// FineMean utilities (mean of what is on disk; no std)
+// FineMean utilities (legacy)
 // --------------------
 void accumulate_sum(
     const std::vector<double>& x,

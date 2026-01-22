@@ -1,231 +1,87 @@
+// sim_helpers.cpp
 #include "sim_helpers.h"
 
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
-#include <cstring>
-
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <iomanip>
-#include <ctime>
-#include <limits>
-#include <cstdlib>
-#include <algorithm>
-#include <cmath>
-#include <cctype>
-#include <set>
 
 #include <dirent.h>
 
-// ============================================================
-// Internal helpers (only in this .cpp)
-// ============================================================
-
-static inline bool starts_with(const std::string& s, const std::string& p)
-{
-    return s.rfind(p, 0) == 0;
-}
-
-static inline std::string trim_copy(std::string s)
-{
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(),
-        [](unsigned char ch){ return !std::isspace(ch); }));
-    s.erase(std::find_if(s.rbegin(), s.rend(),
-        [](unsigned char ch){ return !std::isspace(ch); }).base(), s.end());
-    return s;
-}
-
-// IMPORTANT: remove ALL whitespace inside header tokens.
-// This fixes: "FineDeriv_r0001_ x=0.50" -> "FineDeriv_r0001_x=0.50"
-static inline std::string remove_all_whitespace(std::string s)
-{
-    s.erase(std::remove_if(s.begin(), s.end(),
-                           [](unsigned char ch){ return std::isspace(ch); }),
-            s.end());
-    return s;
-}
-
-// strip surrounding quotes if present
-static inline std::string strip_quotes(std::string s)
-{
-    if (!s.empty() && s.front()=='"' && s.back()=='"' && s.size() >= 2)
-        return s.substr(1, s.size()-2);
-    return s;
-}
-
-static inline std::string normalize_header_token(std::string s)
-{
-    s = trim_copy(std::move(s));
-    s = strip_quotes(std::move(s));
-    s = trim_copy(std::move(s));
-    s = remove_all_whitespace(std::move(s)); // <-- the big fix
-    return s;
-}
-
-// Return safe filename token
-static inline std::string sanitize_token(std::string s)
-{
-    for (char& c : s) {
-        if (!(std::isalnum((unsigned char)c) || c=='_' || c=='-')) c = '_';
-    }
-
-    // compress multiple underscores
-    std::string out;
-    out.reserve(s.size());
-    bool prev_us = false;
-
-    for (char c : s) {
-        if (c == '_') {
-            if (!prev_us) out.push_back(c);
-            prev_us = true;
-        } else {
-            out.push_back(c);
-            prev_us = false;
-        }
-    }
-    return out;
-}
-
-// Extract base name after known prefixes
-static inline std::string base_name_from_header(const std::string& h_in)
-{
-    // normalize first (removes embedded spaces!)
-    const std::string h = normalize_header_token(h_in);
-
-    // Fine BTC realizations: Fine_r0001_<base>
-    if (starts_with(h, "Fine_r")) {
-        auto pos = h.find('_');            // after Fine
-        pos = h.find('_', pos + 1);        // after r0001
-        if (pos != std::string::npos && pos + 1 < h.size()) return h.substr(pos + 1);
-        return "";
-    }
-
-    // Fine derivative realizations: FineDeriv_r0001_<base>
-    if (starts_with(h, "FineDeriv_r")) {
-        auto pos = h.find('_');            // after FineDeriv
-        pos = h.find('_', pos + 1);        // after r0001
-        if (pos != std::string::npos && pos + 1 < h.size()) return h.substr(pos + 1);
-        return "";
-    }
-
-    // Fine mean
-    if (starts_with(h, "FineMean_"))
-        return h.substr(std::string("FineMean_").size());
-
-    // Fine derivative mean
-    if (starts_with(h, "FineDerivMean_"))
-        return h.substr(std::string("FineDerivMean_").size());
-
-    // Upscaled BTC mean
-    if (starts_with(h, "Upscaled_mean_"))
-        return h.substr(std::string("Upscaled_mean_").size());
-
-    // Upscaled derivative mean
-    if (starts_with(h, "UpscaledDeriv_mean_"))
-        return h.substr(std::string("UpscaledDeriv_mean_").size());
-
-    // fallback
-    if (starts_with(h, "Upscaled_")) {
-        auto pos = h.find('_');
-        if (pos != std::string::npos && pos + 1 < h.size()) return h.substr(pos + 1);
-        return "";
-    }
-
-    if (starts_with(h, "UpscaledDeriv_")) {
-        auto pos = h.find('_');
-        if (pos != std::string::npos && pos + 1 < h.size()) return h.substr(pos + 1);
-        return "";
-    }
-
-    return "";
-}
-
-static inline bool read_csv_header(const std::string& csv_path,
-                                  std::vector<std::string>& headers)
-{
-    std::ifstream f(csv_path);
-    if (!f) return false;
-
-    std::string line;
-    if (!std::getline(f, line)) return false;
-
-    headers.clear();
-    std::string cur;
-    std::stringstream ss(line);
-
-    while (std::getline(ss, cur, ',')) {
-        headers.push_back(normalize_header_token(cur));
-    }
-    return true;
-}
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <iomanip>
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
 
 // ============================================================
 // FS / path helpers
 // ============================================================
-
-bool createDirectory(const std::string& path) {
-    struct stat info;
-    if (stat(path.c_str(), &info) == 0) {
-        if (info.st_mode & S_IFDIR) return true;
-        std::cerr << "Error: Path exists but is not a directory: " << path << "\n";
-        return false;
-    }
-#ifdef _WIN32
-    if (mkdir(path.c_str()) != 0) {
+bool createDirectory(const std::string& path)
+{
+#if defined(_WIN32)
+    int status = _mkdir(path.c_str());
 #else
-    if (mkdir(path.c_str(), 0755) != 0) {
+    int status = mkdir(path.c_str(), 0755);
 #endif
-        if (errno != EEXIST) {
-            std::cerr << "Error creating directory " << path << ": " << std::strerror(errno) << "\n";
-            return false;
-        }
-    }
-    std::cout << "Created output directory: " << path << "\n";
-    return true;
+    if (status == 0) return true;
+    if (errno == EEXIST) return true;
+    return false;
 }
 
-bool fileExists(const std::string& path) {
-    struct stat st;
-    return (stat(path.c_str(), &st) == 0) && (st.st_mode & S_IFREG);
+bool fileExists(const std::string& path)
+{
+    std::ifstream f(path.c_str());
+    return (bool)f;
 }
 
-bool dirExists(const std::string& path) {
-    struct stat st;
-    return (stat(path.c_str(), &st) == 0) && (st.st_mode & S_IFDIR);
+bool dirExists(const std::string& path)
+{
+    struct stat info;
+    if (stat(path.c_str(), &info) != 0) return false;
+    return (info.st_mode & S_IFDIR) != 0;
 }
 
-std::string joinPath(const std::string& dir, const std::string& filename) {
+std::string joinPath(const std::string& dir, const std::string& filename)
+{
     if (dir.empty()) return filename;
-    if (dir.back() == '/' || dir.back() == '\\') return dir + filename;
+    char last = dir.back();
+    if (last == '/' || last == '\\') return dir + filename;
     return dir + "/" + filename;
 }
 
 // ============================================================
 // naming helpers
 // ============================================================
-
-std::string makeTimestamp() {
-    std::time_t now = std::time(nullptr);
-    std::tm tm_now;
-    localtime_r(&now, &tm_now);
-    std::ostringstream oss;
-    oss << std::put_time(&tm_now, "%Y%m%d_%H%M%S");
-    return oss.str();
+std::string makeTimestamp()
+{
+    std::time_t t = std::time(nullptr);
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    std::ostringstream ss;
+    ss << std::put_time(&tm, "%Y%m%d_%H%M%S");
+    return ss.str();
 }
 
-std::string makeRealLabel(int r1) {
-    std::ostringstream oss;
-    oss << "r" << std::setw(4) << std::setfill('0') << r1;
-    return oss.str();
+std::string makeRealLabel(int r1)
+{
+    std::ostringstream ss;
+    ss << "r" << std::setw(4) << std::setfill('0') << r1;
+    return ss.str();
 }
 
-std::string makeFineFolder(int r1) {
-    return "fine_" + makeRealLabel(r1);
+std::string makeFineFolder(int r1)
+{
+    return std::string("fine_") + makeRealLabel(r1);
 }
 
-double mean_of(const std::vector<double>& v) {
+double mean_of(const std::vector<double>& v)
+{
     if (v.empty()) return 0.0;
     double s = 0.0;
     for (double x : v) s += x;
@@ -235,93 +91,88 @@ double mean_of(const std::vector<double>& v) {
 // ============================================================
 // NaN-safe accumulation helpers
 // ============================================================
-
-void accumulate_sum_count(
-    const std::vector<double>& x,
-    std::vector<double>& sum,
-    std::vector<int>& count
-) {
-    if (sum.empty())   sum.assign(x.size(), 0.0);
-    if (count.empty()) count.assign(x.size(), 0);
-
-    if (sum.size() != x.size() || count.size() != x.size()) return;
+void accumulate_sum_count(const std::vector<double>& x,
+                          std::vector<double>& sum,
+                          std::vector<int>& count)
+{
+    if (sum.empty()) {
+        sum.assign(x.size(), 0.0);
+        count.assign(x.size(), 0);
+    }
+    if (x.size() != sum.size()) return;
 
     for (size_t i = 0; i < x.size(); ++i) {
-        const double v = x[i];
-        if (is_finite_number(v)) {
-            sum[i]   += v;
+        double v = x[i];
+        if (std::isfinite(v)) {
+            sum[i] += v;
             count[i] += 1;
         }
     }
 }
 
-std::vector<double> finalize_mean_vec(
-    const std::vector<double>& sum,
-    const std::vector<int>& count
-) {
-    std::vector<double> m(sum.size(), std::numeric_limits<double>::quiet_NaN());
-    if (sum.size() != count.size()) return m;
+std::vector<double> finalize_mean_vec(const std::vector<double>& sum,
+                                      const std::vector<int>& count)
+{
+    std::vector<double> out(sum.size(), std::numeric_limits<double>::quiet_NaN());
+    if (sum.size() != count.size()) return out;
 
     for (size_t i = 0; i < sum.size(); ++i) {
-        if (count[i] > 0) m[i] = sum[i] / static_cast<double>(count[i]);
+        if (count[i] > 0) out[i] = sum[i] / (double)count[i];
     }
-    return m;
+    return out;
 }
 
 // ============================================================
 // delimiter-robust parsing
 // ============================================================
-
-char detect_delim(const std::string& header) {
-    if (header.find(',')  != std::string::npos) return ',';
-    if (header.find('\t') != std::string::npos) return '\t';
-    if (header.find(';')  != std::string::npos) return ';';
-    return ' ';
+static inline std::string trim_copy(std::string s)
+{
+    auto notsp = [](unsigned char c){ return !std::isspace(c); };
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), notsp));
+    s.erase(std::find_if(s.rbegin(), s.rend(), notsp).base(), s.end());
+    return s;
 }
 
-std::vector<std::string> split_line_delim(const std::string& line, char delim) {
+char detect_delim(const std::string& header)
+{
+    // choose the most frequent among [',', '\t', ';']
+    size_t c1 = std::count(header.begin(), header.end(), ',');
+    size_t c2 = std::count(header.begin(), header.end(), '\t');
+    size_t c3 = std::count(header.begin(), header.end(), ';');
+
+    if (c2 >= c1 && c2 >= c3) return '\t';
+    if (c3 >= c1 && c3 >= c2) return ';';
+    return ',';
+}
+
+std::vector<std::string> split_line_delim(const std::string& line, char delim)
+{
     std::vector<std::string> out;
-
-    if (delim == ' ') {
-        std::istringstream iss(line);
-        std::string tok;
-        while (iss >> tok) out.push_back(tok);
-        return out;
-    }
-
     std::string cur;
-    bool in_quotes = false;
-    for (size_t i = 0; i < line.size(); ++i) {
-        char c = line[i];
-        if (c == '"') { in_quotes = !in_quotes; continue; }
-        if (c == delim && !in_quotes) {
-            out.push_back(cur);
-            cur.clear();
-        } else {
-            cur.push_back(c);
-        }
-    }
-    out.push_back(cur);
+    std::stringstream ss(line);
+    while (std::getline(ss, cur, delim)) out.push_back(trim_copy(cur));
     return out;
 }
 
-bool try_parse_double(const std::string& s, double& v) {
+bool try_parse_double(const std::string& s, double& v)
+{
+    std::string t = trim_copy(s);
+    if (t.empty()) return false;
     char* endp = nullptr;
-    v = std::strtod(s.c_str(), &endp);
-    return endp != s.c_str() && *endp == '\0';
+    v = std::strtod(t.c_str(), &endp);
+    if (endp == t.c_str()) return false;
+    return true;
 }
 
 // ============================================================
-// CSV utilities
+// CSV utilities: read a "t + columns" table
 // ============================================================
-
-bool read_time_series_table_csv(
-    const std::string& path,
-    std::vector<double>& times,
-    std::vector<std::string>& colnames,
-    std::vector<std::vector<double>>& cols
-) {
-    std::ifstream f(path);
+bool read_time_series_table_csv(const std::string& path,
+                                std::vector<double>& times,
+                                std::vector<std::string>& colnames,
+                                std::vector<std::vector<double>>& cols)
+{
+    std::ifstream f(path.c_str());
     if (!f) return false;
 
     std::string header;
@@ -331,57 +182,67 @@ bool read_time_series_table_csv(
     auto h = split_line_delim(header, delim);
     if (h.size() < 2) return false;
 
-    // normalize headers (removes embedded spaces)
-    for (auto& s : h) s = normalize_header_token(s);
+    // First column assumed time
+    colnames.clear();
+    cols.clear();
 
-    colnames.assign(h.begin() + 1, h.end());
+    // keep only non-time columns
+    for (size_t j = 1; j < h.size(); ++j) colnames.push_back(h[j]);
     cols.assign(colnames.size(), std::vector<double>{});
     times.clear();
 
     std::string line;
     while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        auto parts = split_line_delim(line, delim);
-        if (parts.size() < 1) continue;
+        if (trim_copy(line).empty()) continue;
+        auto a = split_line_delim(line, delim);
+        if (a.size() < 2) continue;
 
         double t;
-        if (!try_parse_double(parts[0], t)) continue;
+        if (!try_parse_double(a[0], t)) continue;
+
         times.push_back(t);
 
-        for (size_t j = 0; j < colnames.size(); ++j) {
-            double val = std::numeric_limits<double>::quiet_NaN();
-            if (j + 1 < parts.size()) {
-                double tmp;
-                if (try_parse_double(parts[j + 1], tmp)) val = tmp;
-            }
-            cols[j].push_back(val);
+        for (size_t j = 1; j < a.size() && (j-1) < cols.size(); ++j) {
+            double v = std::numeric_limits<double>::quiet_NaN();
+            try_parse_double(a[j], v); // if fails, v stays NaN
+            cols[j-1].push_back(v);
+        }
+
+        // if short row, pad NaNs
+        for (size_t j = a.size(); j < h.size(); ++j) {
+            cols[j-1].push_back(std::numeric_limits<double>::quiet_NaN());
         }
     }
 
-    for (auto& c : cols) if (c.size() != times.size()) return false;
+    // sanity: all columns same length
+    for (auto& c : cols) {
+        if (c.size() != times.size()) return false;
+    }
     return true;
 }
 
-bool write_comparison_csv(
-    const std::string& out_path,
-    const std::vector<double>& base_time,
-    const std::vector<std::string>& out_colnames,
-    const std::vector<std::vector<double>>& out_cols
-) {
+bool write_comparison_csv(const std::string& out_path,
+                          const std::vector<double>& base_time,
+                          const std::vector<std::string>& out_colnames,
+                          const std::vector<std::vector<double>>& out_cols)
+{
     if (out_colnames.size() != out_cols.size()) return false;
     for (auto& c : out_cols) if (c.size() != base_time.size()) return false;
 
-    std::ofstream f(out_path);
+    std::ofstream f(out_path.c_str());
     if (!f) return false;
 
     f << "t";
     for (auto& n : out_colnames) f << "," << n;
     f << "\n";
 
+    f << std::setprecision(15);
     for (size_t i = 0; i < base_time.size(); ++i) {
-        f << std::setprecision(12) << base_time[i];
+        f << base_time[i];
         for (size_t j = 0; j < out_cols.size(); ++j) {
-            f << "," << std::setprecision(12) << out_cols[j][i];
+            double v = out_cols[j][i];
+            if (std::isfinite(v)) f << "," << v;
+            else f << ",";
         }
         f << "\n";
     }
@@ -391,106 +252,104 @@ bool write_comparison_csv(
 // ============================================================
 // resampling
 // ============================================================
-
-double lerp(double x0, double y0, double x1, double y1, double x) {
+double lerp(double x0, double y0, double x1, double y1, double x)
+{
     if (x1 == x0) return y0;
-    const double a = (x - x0) / (x1 - x0);
+    double a = (x - x0) / (x1 - x0);
     return y0 + a * (y1 - y0);
 }
 
-std::vector<double> resample_col_linear(
-    const std::vector<double>& t_src,
-    const std::vector<double>& y_src,
-    const std::vector<double>& t_dst
-) {
-    std::vector<double> y_dst;
-    y_dst.reserve(t_dst.size());
+std::vector<double> resample_col_linear(const std::vector<double>& t_src,
+                                        const std::vector<double>& y_src,
+                                        const std::vector<double>& t_dst)
+{
+    std::vector<double> out(t_dst.size(), std::numeric_limits<double>::quiet_NaN());
+    if (t_src.empty() || y_src.empty() || t_src.size() != y_src.size()) return out;
 
-    if (t_src.empty() || y_src.size() != t_src.size()) {
-        y_dst.assign(t_dst.size(), std::numeric_limits<double>::quiet_NaN());
-        return y_dst;
-    }
-
+    // assume t_src is increasing (as produced by your solver)
     size_t k = 0;
-    for (double td : t_dst) {
-        if (td <= t_src.front()) { y_dst.push_back(y_src.front()); continue; }
-        if (td >= t_src.back())  { y_dst.push_back(y_src.back());  continue; }
+    for (size_t i = 0; i < t_dst.size(); ++i) {
+        double td = t_dst[i];
 
-        while (k + 1 < t_src.size() && t_src[k + 1] < td) ++k;
-        y_dst.push_back(lerp(t_src[k], y_src[k], t_src[k+1], y_src[k+1], td));
-    }
-    return y_dst;
-}
+        while (k + 1 < t_src.size() && t_src[k+1] < td) k++;
 
-void resample_table_linear(
-    const std::vector<double>& t_src,
-    const std::vector<std::vector<double>>& cols_src,
-    const std::vector<double>& t_dst,
-    std::vector<std::vector<double>>& cols_dst
-) {
-    cols_dst.clear();
-    cols_dst.reserve(cols_src.size());
-    for (const auto& c : cols_src) cols_dst.push_back(resample_col_linear(t_src, c, t_dst));
-}
-
-// ============================================================
-// FineMean utilities
-// ============================================================
-
-void accumulate_sum(
-    const std::vector<double>& x,
-    std::vector<double>& sum,
-    std::vector<int>& n
-) {
-    if (sum.empty()) sum.assign(x.size(), 0.0);
-    if (n.empty())   n.assign(x.size(), 0);
-
-    if (sum.size() != x.size()) sum.assign(x.size(), 0.0);
-    if (n.size()   != x.size()) n.assign(x.size(), 0);
-
-    for (size_t i = 0; i < x.size(); ++i) {
-        if (std::isfinite(x[i])) {
-            sum[i] += x[i];
-            n[i]   += 1;
+        if (td < t_src.front() || td > t_src.back()) {
+            out[i] = std::numeric_limits<double>::quiet_NaN();
+            continue;
         }
-    }
-}
 
-std::vector<double> finalize_mean(
-    const std::vector<double>& sum,
-    const std::vector<int>& n
-) {
-    std::vector<double> out(sum.size(), std::numeric_limits<double>::quiet_NaN());
-    for (size_t i = 0; i < sum.size(); ++i) {
-        if (i < n.size() && n[i] > 0) out[i] = sum[i] / (double)n[i];
+        if (k + 1 >= t_src.size()) {
+            out[i] = y_src.back();
+            continue;
+        }
+
+        double t0 = t_src[k], t1 = t_src[k+1];
+        double y0 = y_src[k], y1 = y_src[k+1];
+
+        // if endpoints NaN, keep NaN (simple & safe)
+        if (!std::isfinite(y0) || !std::isfinite(y1)) {
+            out[i] = std::numeric_limits<double>::quiet_NaN();
+            continue;
+        }
+
+        out[i] = lerp(t0, y0, t1, y1, td);
     }
     return out;
+}
+
+void resample_table_linear(const std::vector<double>& t_src,
+                           const std::vector<std::vector<double>>& cols_src,
+                           const std::vector<double>& t_dst,
+                           std::vector<std::vector<double>>& cols_dst)
+{
+    cols_dst.clear();
+    cols_dst.reserve(cols_src.size());
+    for (auto& c : cols_src) cols_dst.push_back(resample_col_linear(t_src, c, t_dst));
+}
+
+// ============================================================
+// FineMean utilities (legacy)
+// ============================================================
+void accumulate_sum(const std::vector<double>& x,
+                    std::vector<double>& sum,
+                    std::vector<int>& n)
+{
+    accumulate_sum_count(x, sum, n);
+}
+
+std::vector<double> finalize_mean(const std::vector<double>& sum,
+                                  const std::vector<int>& n)
+{
+    return finalize_mean_vec(sum, n);
 }
 
 // ============================================================
 // resume/upscale-only readers
 // ============================================================
-
-bool parse_keyval_file(const std::string& path, std::map<std::string, std::string>& kv) {
-    std::ifstream f(path);
+bool parse_keyval_file(const std::string& path,
+                       std::map<std::string, std::string>& kv)
+{
+    kv.clear();
+    std::ifstream f(path.c_str());
     if (!f) return false;
 
-    kv.clear();
     std::string line;
     while (std::getline(f, line)) {
+        line = trim_copy(line);
         if (line.empty()) continue;
-        auto pos = line.find('=');
-        if (pos == std::string::npos) continue;
-        kv[line.substr(0, pos)] = line.substr(pos + 1);
+        auto p = line.find('=');
+        if (p == std::string::npos) continue;
+        std::string k = trim_copy(line.substr(0, p));
+        std::string v = trim_copy(line.substr(p + 1));
+        if (!k.empty()) kv[k] = v;
     }
     return !kv.empty();
 }
 
-bool read_mean_params_txt(
-    const std::string& path,
-    double& lc_mean, double& lx_mean, double& ly_mean, double& dt_mean
-) {
-    std::map<std::string, std::string> kv;
+bool read_mean_params_txt(const std::string& path,
+                          double& lc_mean, double& lx_mean, double& ly_mean, double& dt_mean)
+{
+    std::map<std::string,std::string> kv;
     if (!parse_keyval_file(path, kv)) return false;
 
     auto getd = [&](const std::string& k, double& out)->bool{
@@ -500,182 +359,225 @@ bool read_mean_params_txt(
         return true;
     };
 
-    bool ok = true;
-    ok = ok && getd("lc_mean", lc_mean);
-    ok = ok && getd("lambda_x_mean", lx_mean);
-    ok = ok && getd("lambda_y_mean", ly_mean);
-    ok = ok && getd("dt_mean", dt_mean);
+    bool ok =
+        getd("lc_mean", lc_mean) &&
+        getd("lambda_x_mean", lx_mean) &&
+        getd("lambda_y_mean", ly_mean) &&
+        getd("dt_mean", dt_mean);
+
     return ok;
 }
 
 bool read_mean_inverse_cdf_csv(const std::string& path,
-                               std::vector<double>& u, std::vector<double>& v)
+                               std::vector<double>& u,
+                               std::vector<double>& v)
 {
-    std::ifstream f(path);
+    u.clear(); v.clear();
+    std::ifstream f(path.c_str());
     if (!f) return false;
 
     std::string header;
     if (!std::getline(f, header)) return false;
+
     char delim = detect_delim(header);
 
-    u.clear(); v.clear();
     std::string line;
     while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        auto parts = split_line_delim(line, delim);
-        if (parts.size() < 2) continue;
-
+        if (trim_copy(line).empty()) continue;
+        auto a = split_line_delim(line, delim);
+        if (a.size() < 2) continue;
         double uu, vv;
-        if (!try_parse_double(parts[0], uu)) continue;
-        if (!try_parse_double(parts[1], vv)) continue;
+        if (!try_parse_double(a[0], uu)) continue;
+        if (!try_parse_double(a[1], vv)) continue;
         u.push_back(uu);
         v.push_back(vv);
     }
-    return !u.empty() && u.size() == v.size();
+    return !u.empty();
 }
 
-bool read_xy_table(const std::string& path, std::vector<double>& x, std::vector<double>& y) {
-    std::ifstream f(path);
+bool read_xy_table(const std::string& path, std::vector<double>& x, std::vector<double>& y)
+{
+    x.clear(); y.clear();
+    std::ifstream f(path.c_str());
     if (!f) return false;
 
-    x.clear(); y.clear();
     std::string line;
-
-    char delim = ' ';
-    std::streampos pos0 = f.tellg();
     while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        delim = detect_delim(line);
-        break;
-    }
-    f.clear();
-    f.seekg(pos0);
+        if (trim_copy(line).empty()) continue;
+        // tolerate commas/tabs/spaces
+        char delim = ',';
+        if (line.find('\t') != std::string::npos) delim = '\t';
+        else if (line.find(',') != std::string::npos) delim = ',';
+        else delim = ' ';
 
-    while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        auto parts = split_line_delim(line, delim);
-        if (parts.size() < 2) continue;
+        auto a = split_line_delim(line, delim);
+        if (a.size() < 2) continue;
 
         double xx, yy;
-        if (!try_parse_double(parts[0], xx)) continue;
-        if (!try_parse_double(parts[1], yy)) continue;
-
+        if (!try_parse_double(a[0], xx)) continue;
+        if (!try_parse_double(a[1], yy)) continue;
         x.push_back(xx);
         y.push_back(yy);
     }
-    return !x.empty() && x.size() == y.size();
+    return !x.empty();
 }
 
-double interp1_linear(const std::vector<double>& x, const std::vector<double>& y, double xv) {
-    if (x.empty()) return std::numeric_limits<double>::quiet_NaN();
-    if (x.size() == 1) return y[0];
-
+double interp1_linear(const std::vector<double>& x,
+                      const std::vector<double>& y,
+                      double xv)
+{
+    if (x.empty() || y.empty() || x.size() != y.size()) return 0.0;
     if (xv <= x.front()) return y.front();
-    if (xv >= x.back())  return y.back();
+    if (xv >= x.back()) return y.back();
 
     size_t k = 0;
-    while (k + 1 < x.size() && x[k + 1] < xv) ++k;
+    while (k + 1 < x.size() && x[k+1] < xv) k++;
+    if (k + 1 >= x.size()) return y.back();
+
     return lerp(x[k], y[k], x[k+1], y[k+1], xv);
 }
 
-bool read_fine_params_all_csv(
-    const std::string& path,
-    std::vector<double>& lc,
-    std::vector<double>& lx,
-    std::vector<double>& ly,
-    std::vector<double>& dt
-) {
-    std::ifstream f(path);
+bool read_fine_params_all_csv(const std::string& path,
+                              std::vector<double>& lc,
+                              std::vector<double>& lx,
+                              std::vector<double>& ly,
+                              std::vector<double>& dt)
+{
+    lc.clear(); lx.clear(); ly.clear(); dt.clear();
+    std::ifstream f(path.c_str());
     if (!f) return false;
 
     std::string header;
     if (!std::getline(f, header)) return false;
-    char delim = detect_delim(header);
-
-    lc.clear(); lx.clear(); ly.clear(); dt.clear();
 
     std::string line;
     while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        auto p = split_line_delim(line, delim);
-        if (p.size() < 5) continue;
+        if (trim_copy(line).empty()) continue;
+        auto a = split_line_delim(line, ',');
+        if (a.size() < 5) continue;
 
-        double v_lc, v_lx, v_ly, v_dt;
-        if (!try_parse_double(p[1], v_lc)) continue;
-        if (!try_parse_double(p[2], v_lx)) continue;
-        if (!try_parse_double(p[3], v_ly)) continue;
-        if (!try_parse_double(p[4], v_dt)) continue;
+        // a[0] realization (ignored)
+        double v1,v2,v3,v4;
+        if (!try_parse_double(a[1], v1)) continue;
+        if (!try_parse_double(a[2], v2)) continue;
+        if (!try_parse_double(a[3], v3)) continue;
+        if (!try_parse_double(a[4], v4)) continue;
 
-        lc.push_back(v_lc);
-        lx.push_back(v_lx);
-        ly.push_back(v_ly);
-        dt.push_back(v_dt);
+        lc.push_back(v1);
+        lx.push_back(v2);
+        ly.push_back(v3);
+        dt.push_back(v4);
     }
+
     return !lc.empty();
 }
 
-std::vector<std::pair<int,std::string>> list_fine_folders(const std::string& run_dir) {
+std::vector<std::pair<int,std::string>> list_fine_folders(const std::string& run_dir)
+{
     std::vector<std::pair<int,std::string>> out;
 
     DIR* d = opendir(run_dir.c_str());
     if (!d) return out;
 
-    struct dirent* ent;
+    struct dirent* ent = nullptr;
     while ((ent = readdir(d)) != nullptr) {
         std::string name = ent->d_name;
         if (name == "." || name == "..") continue;
+
+        // expecting fine_r0001, fine_r0002, ...
         if (name.rfind("fine_r", 0) != 0) continue;
 
-        std::string s = name.substr(std::string("fine_r").size());
-        if (s.empty()) continue;
+        // parse r#### part
+        if (name.size() < 10) continue; // "fine_r" + 4 digits
+        std::string digits = name.substr(std::string("fine_r").size(), 5); // like "0001" or "0001/"? (safe)
+        digits.erase(std::remove_if(digits.begin(), digits.end(),
+                                    [](unsigned char c){ return !std::isdigit(c); }),
+                     digits.end());
+        if (digits.empty()) continue;
 
-        int rid = std::atoi(s.c_str());
-        if (rid <= 0) continue;
-
+        int r = std::atoi(digits.c_str());
         std::string full = joinPath(run_dir, name);
-        if (dirExists(full)) out.push_back({rid, full});
+        if (dirExists(full)) out.push_back({r, full});
     }
     closedir(d);
 
-    std::sort(out.begin(), out.end(),
-              [](const auto& a, const auto& b){ return a.first < b.first; });
+    std::sort(out.begin(), out.end(), [](auto& a, auto& b){ return a.first < b.first; });
     return out;
 }
 
-std::string fine_qx_cdf_path(const std::string& fine_dir, int r) {
-    const std::string pfx = makeRealLabel(r) + "_";
-    return joinPath(fine_dir, pfx + "qx_inverse_cdf.txt");
+std::string fine_qx_cdf_path(const std::string& fine_dir, int r)
+{
+    std::string fd = fine_dir;
+    if (!fd.empty() && fd.back() != '/' && fd.back() != '\\') fd += "/";
+    std::string pfx = makeRealLabel(r) + "_";
+    return joinPath(fd, pfx + "qx_inverse_cdf.txt");
 }
 
-bool accumulate_inverse_cdf_on_grid(
-    const std::string& fine_dir, int r,
-    double du, int nU,
-    std::vector<double>& invcdf_sum
-) {
+bool accumulate_inverse_cdf_on_grid(const std::string& fine_dir, int r,
+                                    double du, int nU,
+                                    std::vector<double>& invcdf_sum)
+{
+    std::vector<double> x, y;
     std::string path = fine_qx_cdf_path(fine_dir, r);
-    std::vector<double> u, v;
-    if (!read_xy_table(path, u, v)) return false;
+    if (!fileExists(path)) return false;
+    if (!read_xy_table(path, x, y)) return false;
+
+    if ((int)invcdf_sum.size() != nU) invcdf_sum.assign(nU, 0.0);
 
     for (int k = 0; k < nU; ++k) {
-        double uk = k * du;
-        invcdf_sum[k] += interp1_linear(u, v, uk);
+        double u = k * du;
+        invcdf_sum[k] += interp1_linear(x, y, u);
     }
     return true;
 }
 
 // ============================================================
-// gnuplot runner
+// Gnuplot helpers
 // ============================================================
-
-int run_gnuplot_script(const std::string& gp_path)
+static inline bool read_csv_header(const std::string& csv_path,
+                                  std::vector<std::string>& headers)
 {
-    std::string cmd = "gnuplot \"" + gp_path + "\"";
-    return std::system(cmd.c_str());
+    std::ifstream f(csv_path.c_str());
+    if (!f) return false;
+
+    std::string line;
+    if (!std::getline(f, line)) return false;
+
+    char delim = detect_delim(line);
+    headers = split_line_delim(line, delim);
+    return headers.size() >= 2;
 }
 
-// ============================================================
-// gnuplot by basename
-// ============================================================
+static inline bool starts_with(const std::string& s, const std::string& p)
+{
+    return s.size() >= p.size() && s.compare(0, p.size(), p) == 0;
+}
+
+static inline std::string sanitize_token(std::string s)
+{
+    for (char& c : s) {
+        if (std::isalnum((unsigned char)c)) continue;
+        if (c == '_' || c == '-' ) continue;
+        c = '_';
+    }
+    return s;
+}
+
+static inline std::string base_name_from_header(const std::string& h)
+{
+    // expected: Prefix_"x=0.50"
+    // base is everything after last underscore
+    auto pos = h.rfind('_');
+    if (pos == std::string::npos) return h;
+    return h.substr(pos + 1);
+}
+
+static inline std::string dirname_of(const std::string& path)
+{
+    size_t p = path.find_last_of("/\\");
+    if (p == std::string::npos) return ".";
+    return path.substr(0, p);
+}
 
 bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
                                                 const std::string& csv_path,
@@ -683,143 +585,87 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
                                                 const std::string& y_label,
                                                 bool skip_base_t)
 {
-    std::vector<std::string> hdr;
-    if (!read_csv_header(csv_path, hdr) || hdr.size() < 2) {
-        std::cerr << "ERROR: cannot read CSV header: " << csv_path << "\n";
-        return false;
-    }
+    std::vector<std::string> headers;
+    if (!read_csv_header(csv_path, headers)) return false;
 
-    // Collect unique base names
-    std::set<std::string> bases;
-    for (size_t i = 1; i < hdr.size(); ++i) {
-        std::string b = base_name_from_header(hdr[i]);
-        if (!b.empty()) bases.insert(b);
-    }
+    // map base -> list of (colIndex, headerName)
+    std::map<std::string, std::vector<std::pair<int,std::string>>> groups;
 
-    if (bases.empty()) {
-        std::cerr << "WARNING: no recognizable columns (Fine*/FineMean*/Upscaled*) in: " << csv_path << "\n";
-        std::cerr << "First few headers:\n";
-        for (size_t i = 0; i < std::min<size_t>(hdr.size(), 12); ++i)
-            std::cerr << "  [" << i << "] " << hdr[i] << "\n";
-        return false;
-    }
+    // columns are 1-based in gnuplot using "using 1:col"
+    for (int c = 2; c <= (int)headers.size(); ++c) {
+        const std::string& h = headers[c-1];
 
-    std::ofstream gp(gp_path);
-    if (!gp) {
-        std::cerr << "ERROR: cannot write gnuplot script: " << gp_path << "\n";
-        return false;
-    }
-
-    // Extract directory of csv_path (where we want PNGs)
-    std::string csv_dir = ".";
-    {
-        auto pos = csv_path.find_last_of("/\\");
-        if (pos != std::string::npos) csv_dir = csv_path.substr(0, pos);
-    }
-
-    gp << "set datafile separator \",\"\n";
-    gp << "set term pngcairo size 1400,900 enhanced font \"Helvetica,16\"\n";
-    gp << "set grid\n";
-    gp << "set border linewidth 1.2\n";
-    gp << "set tics out\n";
-    gp << "set key outside\n";
-    gp << "set key samplen 2 spacing 1.2\n";
-    gp << "csvfile = \"" << csv_path << "\"\n";
-    gp << "outdir  = \"" << csv_dir << "\"\n";
-    gp << "ylabel  = \"" << y_label << "\"\n";
-    gp << "figpref = \"" << fig_prefix << "\"\n\n";
-
-    int made = 0;
-
-    // Decide which bases are "locations" for this CSV
-    bool has_x = false, has_series = false;
-    for (const auto& b : bases) {
-        if (starts_with(b, "x=")) has_x = true;
-        if (starts_with(b, "series_")) has_series = true;
-    }
-
-    // Prefer x= otherwise series_
-    std::string must_prefix = "";
-    if (has_x) must_prefix = "x=";
-    else if (has_series) must_prefix = "series_";
-
-    for (const auto& base : bases) {
-
-        if (skip_base_t && (base == "t" || base == "time" || base == "Time")) continue;
-        if (!must_prefix.empty() && !starts_with(base, must_prefix)) continue;
-
-        std::vector<int> fine_cols;
-        int fineMean_col = -1;
-        int upMean_col   = -1;
-
-        for (int c0 = 1; c0 < (int)hdr.size(); ++c0) {
-            const std::string& name = hdr[c0]; // already normalized by read_csv_header
-            const int col = c0 + 1;
-
-            if ((starts_with(name, "Fine_r") || starts_with(name, "FineDeriv_r")) &&
-                base_name_from_header(name) == base) {
-                fine_cols.push_back(col);
-            }
-            else if ((starts_with(name, "FineMean_") || starts_with(name, "FineDerivMean_")) &&
-                     base_name_from_header(name) == base) {
-                fineMean_col = col;
-            }
-            else if ((starts_with(name, "Upscaled_mean_") ||
-                      starts_with(name, "UpscaledDeriv_mean_") ||
-                      starts_with(name, "UpscaledDeriv_") ||
-                      starts_with(name, "Upscaled_")) &&
-                     base_name_from_header(name) == base) {
-                upMean_col = col;
-            }
+        if (skip_base_t) {
+            std::string ht = trim_copy(h);
+            if (ht == "t" || ht == "T" || ht == "time") continue;
         }
 
-        if (fine_cols.empty() && fineMean_col < 0 && upMean_col < 0) continue;
+        std::string base = base_name_from_header(h);
+        groups[base].push_back({c, h});
+    }
 
-        std::string base_file = sanitize_token(base);
+    if (groups.empty()) return false;
 
-        gp << "set output sprintf(\"%s/%s_" << base_file << ".png\", outdir, figpref)\n";
-        gp << "set xlabel \"Time\"\n";
-        gp << "set ylabel ylabel\n";
-        gp << "set title \"" << base << "\"\n";
-        gp << "plot \\\n";
+    // IMPORTANT: outputs must go to run_dir, not build cwd.
+    // We force outputs to fig_prefix (which main should pass as joinPath(run_dir,"..."))
+    std::string out_prefix = fig_prefix;
 
+    std::ofstream gp(gp_path.c_str());
+    if (!gp) return false;
+
+    gp << "set datafile separator ','\n";
+    gp << "set grid\n";
+    gp << "set xlabel 't'\n";
+    gp << "set ylabel '" << y_label << "'\n";
+    gp << "set key outside\n";
+    gp << "set term pngcairo size 1400,900\n";
+
+    // Line styles (as you requested):
+    // Fine_*        : gray
+    // FineMean_*    : bold black
+    // Upscaled*     : bold red
+    // (Derivative versions also respected)
+    gp << "set style line 1 lc rgb '#9a9a9a' lt 1 lw 1\n"; // fine gray
+    gp << "set style line 2 lc rgb '#000000' lt 1 lw 3\n"; // mean bold black
+    gp << "set style line 3 lc rgb '#d60000' lt 1 lw 3\n"; // upscaled bold red\n";
+
+    for (auto& kv : groups) {
+        const std::string& base = kv.first;
+        const auto& cols = kv.second;
+
+        std::string out_png = out_prefix + "_" + sanitize_token(base) + ".png";
+        gp << "set output '" << out_png << "'\n";
+        gp << "set title '" << base << "'\n";
+
+        gp << "plot ";
         bool first = true;
 
-        bool draw_gray = !(fine_cols.size() == 1 && fineMean_col > 0);
+        for (auto& pr : cols) {
+            int col = pr.first;
+            const std::string& name = pr.second;
 
-        if (draw_gray) {
-            for (int col : fine_cols) {
-                if (!first) gp << ", \\\n";
-                first = false;
-                gp << "  csvfile using 1:" << col
-                   << " with lines lw 1 lc rgb \"#b0b0b0\" notitle";
-            }
-        }
+            int ls = 1;
+            if (starts_with(name, "FineMean_") || starts_with(name, "FineDerivMean_")) ls = 2;
+            else if (starts_with(name, "Upscaled") || starts_with(name, "UpscaledDeriv")) ls = 3;
+            else if (starts_with(name, "Fine_") || starts_with(name, "FineDeriv_")) ls = 1;
 
-        if (fineMean_col > 0) {
-            if (!first) gp << ", \\\n";
+            if (!first) gp << ", ";
             first = false;
-            gp << "  csvfile using 1:" << fineMean_col
-               << " with lines lw 4 lc rgb \"black\" title \"FineMean\"";
+
+            gp << "'" << csv_path << "' using 1:" << col
+               << " with lines ls " << ls
+               << " title '" << name << "'";
         }
 
-        if (upMean_col > 0) {
-            if (!first) gp << ", \\\n";
-            first = false;
-            gp << "  csvfile using 1:" << upMean_col
-               << " with lines lw 4 lc rgb \"red\" title \"Upscaled mean\"";
-        }
-
-        gp << "\n\n";
-        made++;
+        gp << "\n";
     }
 
     gp << "unset output\n";
-    gp << "print \"Wrote " << fig_prefix << "_*.png\"\n";
-
-    if (made == 0) {
-        std::cerr << "WARNING: no plots generated for: " << csv_path << "\n";
-    }
-
     return true;
+}
+
+int run_gnuplot_script(const std::string& gp_path)
+{
+    std::string cmd = "gnuplot \"" + gp_path + "\"";
+    return std::system(cmd.c_str());
 }
