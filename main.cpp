@@ -51,6 +51,8 @@ int main(int argc, char** argv) {
     std::string output_dir = "/home/behzad/Projects/PETSc_test/Results";
 #elif SligoCreek
     std::string output_dir = "/media/arash/E/Projects/PETSc_test/Results";
+#elif WSL
+    std::string output_dir = "/home/behzad/Projects/PETSc_test/Results";
 #else
     std::string output_dir = "./Results";
 #endif
