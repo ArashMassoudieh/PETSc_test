@@ -1141,6 +1141,29 @@ void Grid2D::normalizeField(const std::string& name, ArrayKind kind, double a, d
         (*A)[i] = ((*A)[i] - a) / b;
 }
 
+void Grid2D::normalizeField(const std::string& name, ArrayKind kind)
+{
+    double a = fieldMean(name, kind);
+    double b = fieldStdDev(name,kind);
+
+    std::vector<double>* A = nullptr;
+    std::size_t N = 0;
+
+    if (kind == ArrayKind::Cell) {
+        A = &field(name);
+        N = static_cast<std::size_t>(nx_) * ny_;
+    } else if (kind == ArrayKind::Fx) {
+        A = &flux(name);
+        N = static_cast<std::size_t>(nx_ + 1) * ny_;
+    } else { // ArrayKind::Fy
+        A = &flux(name);
+        N = static_cast<std::size_t>(nx_) * (ny_ + 1);
+    }
+
+    for (std::size_t i = 0; i < N; ++i)
+        (*A)[i] = ((*A)[i] - a) / b;
+}
+
 double Grid2D::fieldAverageAtX(const std::string& name, double x) const
 {
     if (!hasField(name))

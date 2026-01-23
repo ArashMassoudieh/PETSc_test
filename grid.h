@@ -326,6 +326,7 @@ public:
 
     // Normalize values of a field: v -> (v - a)/b
     void normalizeField(const std::string& name, ArrayKind kind, double a, double b);
+    void normalizeField(const std::string& name, ArrayKind kind);
 
     // Average of field values at given x (cell field only)
     double fieldAverageAtX(const std::string& name, double x) const;

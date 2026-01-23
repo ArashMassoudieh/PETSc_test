@@ -127,9 +127,9 @@ int main(int argc, char** argv) {
     double Ly = 1.0;
     double correlation_ls_x = 1;
     double correlation_ls_y = 0.1;
-    double stdev = 1.0;
+    double stdev = 2.0; // new
     double g_mean = 0;
-    double Diffusion_coefficient = 0;
+    double Diffusion_coefficient = 0.001; // new
 
     // -----------------------------
     // Realizations
@@ -170,20 +170,22 @@ int main(int argc, char** argv) {
             unsigned long run_seed = 20260115UL;
             unsigned long seed = run_seed + 1000UL*(unsigned long)r + (unsigned long)rank;
             g.makeGaussianFieldSGS("K_normal_score", correlation_ls_x, correlation_ls_y, 10, seed);
+            g.normalizeField("K_normal_score",Grid2D::ArrayKind::Cell); // new
 
             PetscTime(&t_asm0);
             PetscTime(&t_total0);
 
             g.writeNamedMatrix("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "K_normal_score.txt"));
-            g.writeNamedVTI("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "NormalScore.vti"));
+            g.writeNamedVTI("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "K_normalScore.vti"));
 
             g.createExponentialField("K_normal_score", stdev, g_mean, "K");
+            g.writeNamedVTI("K", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "K.vti"));
+
             PetscTime(&t_asm1);
 
             PetscTime(&t_solve0);
             g.DarcySolve(Lx, 0, "K", "K");
             std::cout << "Darcy solved ... " << std::endl;
-            g.writeNamedVTI("K", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "K.vti"));
             PetscTime(&t_solve1);
 
             g.computeMassBalanceError("MassBalanceError");
