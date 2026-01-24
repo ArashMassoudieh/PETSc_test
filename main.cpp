@@ -1,75 +1,48 @@
-// main.cpp
+// main.cpp  (FULL, updated with t-switches + proper plot output dir + styles)
 #include "petsc_init.h"
 #include "petscmatrix.h"
 #include "petscvector.h"
+
 #include <cmath>
 #include <iostream>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <errno.h>
 #include <string>
+#include <sstream>
+#include <iomanip>
+#include <mpi.h>
+#include <fstream>
+#include <vector>
+#include <map>
+#include <limits>
+#include <cstdlib>
+#include <algorithm>
+
 #include "grid.h"
 #include "TimeSeries.h"
 #include "Pathway.h"
 #include "PathwaySet.h"
 
-static inline PetscInt idx(PetscInt i, PetscInt j, PetscInt nx) { return j*nx + i; }
+#include "sim_helpers.h"
 
-// NOTE: helper to detect boundary cells. Not used in this file, but can be used for BC assignment.
-static inline bool on_bc(PetscInt i, PetscInt j, PetscInt nx, PetscInt ny, double x, double y, double Lx, double Ly) {
-    const double eps = 1e-14;
-    return (i==0) || (j==0) || (std::abs(x - Lx) < eps) || (std::abs(y - Ly) < eps);
-}
+// -------------------------------------------------------------
+// Compare-time switches
+// -------------------------------------------------------------
+enum class TBaseMode { Fixed, FromUpscaled, FromFirstFine };
+enum class AlignMode { Resample, MakeUniform };
 
-// Helper function to create directory if it doesn't exist
-// IMPORTANT: This is defined but not called in main() below.
-// If output_dir doesn't exist, file writes may fail silently depending on your I/O code.
-bool createDirectory(const std::string& path) {
-    struct stat info;
-
-    // Check if directory already exists
-    if (stat(path.c_str(), &info) == 0) {
-        if (info.st_mode & S_IFDIR) {
-            return true; // Directory exists
-        } else {
-            std::cerr << "Error: Path exists but is not a directory: " << path << std::endl;
-            return false;
-        }
-    }
-
-    // Try to create directory
-#ifdef _WIN32
-    if (mkdir(path.c_str()) != 0) {
-#else
-    if (mkdir(path.c_str(), 0755) != 0) {
-#endif
-        if (errno != EEXIST) {
-            std::cerr << "Error creating directory " << path << ": " << strerror(errno) << std::endl;
-            return false;
-        }
-    }
-
-    std::cout << "Created output directory: " << path << std::endl;
+static inline bool load_csv_time_only(const std::string& path, std::vector<double>& t_out)
+{
+    std::vector<double> t;
+    std::vector<std::string> names;
+    std::vector<std::vector<double>> cols;
+    if (!read_time_series_table_csv(path, t, names, cols)) return false;
+    if (t.empty()) return false;
+    t_out = std::move(t);
     return true;
 }
 
-// Helper function to join path with filename
-// IMPORTANT: Uses "/" when dir does not end with "/" or "\" (works fine on Linux; ok on Windows in many cases too).
-std::string joinPath(const std::string& dir, const std::string& filename) {
-    if (dir.empty()) return filename;
-    if (dir.back() == '/' || dir.back() == '\\') {
-        return dir + filename;
-    }
-    return dir + "/" + filename;
-}
-
 int main(int argc, char** argv) {
-    // PETSc + MPI init RAII wrapper (assumed)
     PETScInit petsc(argc, argv);
 
-    // Set output directory (can be modified via command line argument)
-    // IMPORTANT: output_dir is only defined if one of these macros is defined.
-    // If none are defined, output_dir will be uninitialized/undefined behavior.
 #ifdef Arash
     std::string output_dir = "/home/arash/Projects/UpscalingResults";
 #elif PowerEdge
@@ -78,443 +51,1038 @@ int main(int argc, char** argv) {
     std::string output_dir = "/home/behzad/Projects/PETSc_test/Results";
 #elif SligoCreek
     std::string output_dir = "/media/arash/E/Projects/PETSc_test/Results";
+#elif WSL
+    std::string output_dir = "/home/behzad/Projects/PETSc_test/Results";
+#else
+    std::string output_dir = "./Results";
 #endif
 
-    // Domain / grid resolution for primary Darcy/transport solves
-    // NOTE: comments say "very coarse for debugging" but nx=300 is not super coarse.
-    int nx = 300;   // Very coarse for debugging
-    int nu = 100;    // Very coarse for debugging  (used later for u-grid logic)
-    int ny = 100;    // Very coarse for debugging
-    double Lx = 3.0;
-    double Ly = 1.0;
-    double Diffusion_coefficient = 0;
-
-    // Primary spatial grid (x,y)
-    Grid2D g(nx, ny, Lx, Ly);
-
-    // PETSc timers (assembly/solve/total segments)
-    PetscLogDouble t_total0, t_total1, t_asm0, t_asm1, t_solve0, t_solve1;
-
-    // Generate heterogeneous field: Gaussian random field via SGS in "normal score" space
-    g.makeGaussianFieldSGS("K_normal_score", 1, 0.1, 10);
-
-    // Start timing (NOTE: order here makes assembly time include earlier work depending on what follows)
-    PetscTime(&t_asm0);
-    PetscTime(&t_total0);
-
-    // Write raw normal-score permeability field
-    g.writeNamedMatrix("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(output_dir, "K_normal_score.txt"));
-    g.writeNamedVTI("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(output_dir, "NormalScore.vti"));
-
-    // Transform normal score to exponential field "K"
-    g.createExponentialField("K_normal_score", 1, 0, "K");
-
-    // End "assembly" timer (name suggests assembly, but it currently covers field generation + writes too)
-    PetscTime(&t_asm1);
-
-    // Start solver timer
-    PetscTime(&t_solve0);
-
-    // Darcy solve using "K" (inputs/outputs depend on your Grid2D::DarcySolve signature)
-    g.DarcySolve(Lx, 0, "K", "K");
-    std::cout << "Darcy solved ... " << std::endl;
-
-    // Save K field
-    g.writeNamedVTI("K", Grid2D::ArrayKind::Cell, joinPath(output_dir, "K.vti"));
-
-    // End solver timer
-    PetscTime(&t_solve1);
-
-    // Diagnostics: mass balance error field
-    g.computeMassBalanceError("MassBalanceError");
-    g.writeNamedMatrix("MassBalanceError", Grid2D::ArrayKind::Cell, joinPath(output_dir, "error.txt"));
-
-    // Save head + flux fields
-    g.writeNamedVTI("head", Grid2D::ArrayKind::Cell, joinPath(output_dir, "Head.vti"));
-    g.writeNamedMatrix("head", Grid2D::ArrayKind::Cell, joinPath(output_dir, "Head.txt"));
-    g.writeNamedVTI("qx", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx.vti"));
-    g.writeNamedVTI("qy", Grid2D::ArrayKind::Fy, joinPath(output_dir, "qy.vti"));
-
-    // Export qx to TimeSeries then convert to normal-score for statistical derivative sampling
-    TimeSeries<double> AllQxValues = g.exportFieldToTimeSeries("qx", Grid2D::ArrayKind::Fx);
-    TimeSeries<double> QxNormalScores = AllQxValues.ConvertToNormalScore();
-    g.assignFromTimeSeries(QxNormalScores, "qx_normal_score", Grid2D::ArrayKind::Fx);
-
-    g.writeNamedVTI("qx_normal_score", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx_normal_score.vti"));
-
-    // Sample second derivative of qx_normal_score (curvature proxy) along X direction
-    std::cout << "Sampling points for derivative ..." << std::endl;
-    TimeSeries<double> curvture = g.sampleSecondDerivative("qx_normal_score", Grid2D::ArrayKind::Fx, Grid2D::DerivDir::X, 10000, 0.05);
-    curvture.writefile(joinPath(output_dir, "2nd_deriv.txt"));
-
-    // =============================================================================
-    // Velocity autocorrelation analysis via Gaussian perturbation sampling
-    // =============================================================================
-
-    // Define range of separation distances (logarithmic spacing)
-    double delta_min = 0.001;
-    double delta_max = 0.2;
-    int num_deltas = 30;
-    int num_samples_per_delta = 10000;
-
-    // TimeSeries to store correlation vs distance for each direction
-    TimeSeries<double> corr_radial;
-    TimeSeries<double> corr_x;
-    TimeSeries<double> corr_y;
-
-    std::cout << "Computing velocity autocorrelation (radial)..." << std::endl;
-    for (int i = 0; i < num_deltas; ++i) {
-        double exponent = static_cast<double>(i) / (num_deltas - 1);
-        double delta = delta_min * std::pow(delta_max / delta_min, exponent);
-        try {
-            TimeSeries<double> samples = g.sampleGaussianPerturbation(
-                "qx_normal_score", Grid2D::ArrayKind::Fx,
-                num_samples_per_delta, delta, 0, PerturbDir::Radial);
-            double correlation = samples.correlation_tc();
-            corr_radial.append(delta, correlation);
-            std::cout << "  delta = " << delta << ", correlation = " << correlation << std::endl;
-        } catch (const std::exception& e) {
-            std::cerr << "Warning: Failed at delta = " << delta << ": " << e.what() << std::endl;
-        }
-    }
-    corr_radial.writefile(joinPath(output_dir, "velocity_correlation_radial.txt"));
-    double lambda_radial = corr_radial.fitExponentialDecay();
-    std::cout << "Radial correlation length scale: " << lambda_radial << std::endl;
-
-    std::cout << "Computing velocity autocorrelation (x-direction)..." << std::endl;
-    for (int i = 0; i < num_deltas; ++i) {
-        double exponent = static_cast<double>(i) / (num_deltas - 1);
-        double delta = delta_min * std::pow(delta_max / delta_min, exponent);
-        try {
-            TimeSeries<double> samples = g.sampleGaussianPerturbation(
-                "qx_normal_score", Grid2D::ArrayKind::Fx,
-                num_samples_per_delta, delta, 0, PerturbDir::XOnly);
-            double correlation = samples.correlation_tc();
-            corr_x.append(delta, correlation);
-            std::cout << "  delta = " << delta << ", correlation = " << correlation << std::endl;
-        } catch (const std::exception& e) {
-            std::cerr << "Warning: Failed at delta = " << delta << ": " << e.what() << std::endl;
-        }
-    }
-    corr_x.writefile(joinPath(output_dir, "velocity_correlation_x.txt"));
-    double lambda_x_emp = corr_x.fitExponentialDecay();
-    std::cout << "X-direction correlation length scale: " << lambda_x_emp << std::endl;
-
-    std::cout << "Computing velocity autocorrelation (y-direction)..." << std::endl;
-    for (int i = 0; i < num_deltas; ++i) {
-        double exponent = static_cast<double>(i) / (num_deltas - 1);
-        double delta = delta_min * std::pow(delta_max / delta_min, exponent);
-        try {
-            TimeSeries<double> samples = g.sampleGaussianPerturbation(
-                "qx_normal_score", Grid2D::ArrayKind::Fx,
-                num_samples_per_delta, delta, 0, PerturbDir::YOnly);
-            double correlation = samples.correlation_tc();
-            corr_y.append(delta, correlation);
-            std::cout << "  delta = " << delta << ", correlation = " << correlation << std::endl;
-        } catch (const std::exception& e) {
-            std::cerr << "Warning: Failed at delta = " << delta << ": " << e.what() << std::endl;
-        }
-    }
-    corr_y.writefile(joinPath(output_dir, "velocity_correlation_y.txt"));
-    double lambda_y_emp = corr_y.fitExponentialDecay();
-    std::cout << "Y-direction correlation length scale: " << lambda_y_emp << std::endl;
-
-    std::cout << "\n=== Velocity Correlation Length Scales ===" << std::endl;
-    std::cout << "  Radial: " << lambda_radial << std::endl;
-    std::cout << "  X-dir:  " << lambda_x_emp << std::endl;
-    std::cout << "  Y-dir:  " << lambda_y_emp << std::endl;
-
-    // CFL-like timestep estimate based on max qx (NOTE: if max qx ~ 0, dt becomes huge)
-    double dt_optimal = 0.5 * g.dx() / g.fieldMinMax("qx", Grid2D::ArrayKind::Fx).second;
-    std::cout << "Optimal Time-Step: " << dt_optimal << std::endl;
-
-    // Initialize transport concentration field
-    g.assignConstant("C", Grid2D::ArrayKind::Cell, 0);
-
-    // Save raw fields as matrices (for debugging / external scripts)
-    g.writeNamedMatrix("qx", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx.txt"));
-    g.writeNamedMatrix("qy", Grid2D::ArrayKind::Fy, joinPath(output_dir, "qy.txt"));
-    g.writeNamedMatrix("K", Grid2D::ArrayKind::Cell, joinPath(output_dir, "K.txt"));
-
-    // Transport parameters
-    g.SetVal("diffusion", Diffusion_coefficient);
-    g.SetVal("porosity", 1);
-    g.SetVal("c_left", 1.0);
-
-    // BTC locations (x positions) where breakthrough curves will be recorded
-    std::vector<double> xLocations{0.5, 1.5, 2.5};
-    g.setBTCLocations(xLocations);
-
-    // Fine-scale transport solve (uses g’s spatial velocity field)
-    TimeSeriesSet<double> BTCs_FineScaled;
-    g.SolveTransport(10, std::min(dt_optimal, 0.5/10.0), "transport_", 50, output_dir, "C", &BTCs_FineScaled);
-
-    // Save final concentration
-    g.writeNamedVTI_Auto("C", joinPath(output_dir, "C.vti"));
-
-    // Save BTCs
-    BTCs_FineScaled.write(joinPath(output_dir, "BTC_FineScaled.csv"));
-
-    // Total timing checkpoint (NOTE: later you overwrite t_total1 again)
-    PetscTime(&t_total1);
-
-    // --------------------------------------------------------------------
-    // Single particle tracking (diagnostic)
-    // --------------------------------------------------------------------
-    Pathway path(0);
-    path.addParticle(0.0, 0.5, 0.0);  // Start at left boundary (x=0, y=0.5)
-
-    // Track particle with dx_step = 0.01 (step size in x)
-    path.trackParticle(&g, 0.01);
-
-    // Check results
-    std::cout << "Pathway length: " << path.pathLength() << std::endl;
-    std::cout << "Travel time: " << path.duration() << std::endl;
-    std::cout << "Exit position: (" << path.last().x() << ", "
-              << path.last().y() << ")" << std::endl;
-
-    // Save pathway polyline / points
-    path.writeVTK(joinPath(output_dir, "pathway.vtk"));
-
-    // --------------------------------------------------------------------
-    // Many particle tracking (PathwaySet) for statistics + correlation
-    // --------------------------------------------------------------------
-    PathwaySet pathways;
-
-    // Initialize 1000 pathways with flux weighting (inlet sampling weighted by flux)
-    pathways.Initialize(1000, PathwaySet::Weighting::FluxWeighted, &g);
-
-    // Track all pathways with dx_step = 0.01
-    pathways.trackAllPathways(&g, 0.01);
-
-    // ====================================================================
-    // Compute velocity correlation as a function of separation distance
-    // ====================================================================
-    std::cout << "\n=== Computing velocity correlation function ===" << std::endl;
-
-    // Define range of separation distances (logarithmic spacing)
-    double Delta_x_min = 0.001;
-    double Delta_x_max = 0.5;
-    int num_Delta_x = 30;  // Number of separation distances to sample
-    int num_samples_per_Delta_x = 10000;  // Number of particle pairs per distance
-
-    TimeSeries<double> qx_correlation;
-
-    for (int i = 0; i < num_Delta_x; ++i) {
-        // Logarithmic spacing: Delta_x = Delta_x_min * (Delta_x_max/Delta_x_min)^(i/(num-1))
-        double exponent = static_cast<double>(i) / (num_Delta_x - 1);
-        double Delta_x = Delta_x_min * std::pow(Delta_x_max / Delta_x_min, exponent);
-
-        try {
-            // Sample particle pairs at this separation distance
-            // particle_pairs[0] contains particles at x
-            // particle_pairs[1] contains particles at x+Delta_x
-            // NOTE: this creates/returns a PathwaySet containing two "groups" (index 0 and 1) by your convention
-            PathwaySet particle_pairs = pathways.sampleParticlePairs(Delta_x, num_samples_per_Delta_x);
-
-            // Calculate correlation between qx values at x and x+Delta_x
-            // NOTE: calculateCorrelation(0,1,"qx") assumes both groups have matched pairing logic
-            double correlation = particle_pairs.calculateCorrelation(0, 1, "qx");
-
-            // Store in TimeSeries: (Delta_x, correlation)
-            qx_correlation.append(Delta_x, correlation);
-
-            std::cout << "  Delta_x = " << Delta_x
-                      << ", correlation = " << correlation << std::endl;
-
-        } catch (const std::exception& e) {
-            std::cerr << "Warning: Failed to compute correlation at Delta_x = "
-                      << Delta_x << ": " << e.what() << std::endl;
-        }
-    }
-
-    // Save correlation function
-    qx_correlation.writefile(joinPath(output_dir, "qx_correlation_vs_distance.txt"));
-
-    // Fit exponential decay to estimate correlation length scale (used later conceptually)
-    double advection_correlation_length_scale = qx_correlation.fitExponentialDecay();
-
-    std::cout << "Velocity correlation function saved with "
-              << qx_correlation.size() << " points" << std::endl;
-
-    std::cout << "Velocity correlation length scale = " << advection_correlation_length_scale << std::endl;
-
-    // PathwaySet statistics
-    std::cout << "Mean path length: " << pathways.meanPathLength() << std::endl;
-    std::cout << "Mean travel time: " << pathways.meanTravelTime() << std::endl;
-
-    // NOTE: "Completed pathways" label, but function is countActive() — check semantics in your class.
-    std::cout << "Completed pathways: " << pathways.countActive() << std::endl;
-
-    // Write pathway summary and combined VTK
-    pathways.writeToFile(joinPath(output_dir,"pathway_summary.txt"));
-    pathways.writeCombinedVTK(joinPath(output_dir,"all_pathways.vtk"));
-
-    // ----- Report -----
-    // NOTE: timing here uses t_total1 that was set earlier (after fine-scale transport).
-    // Later you call PetscTime(&t_total1) again at the end.
     int rank = 0;
     MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
-    if (rank == 0) {
-        std::cout << "Assembly time: " << (t_asm1 - t_asm0) << " s\n";
-        std::cout << "Solve time:    " << (t_solve1 - t_solve0) << " s\n";
-        std::cout << "Total time:    " << (t_total1 - t_total0) << " s\n";
-        std::cout << "All outputs saved to: " << output_dir << std::endl;
+
+    // -----------------------------
+    // CLI options
+    // -----------------------------
+    bool upscale_only = false;
+    std::string resume_run_dir = output_dir + "/run_20260115_132010";
+
+    bool use_timeseriesset_mean = true;
+
+    // NEW: compare switches
+    TBaseMode tbase_mode = TBaseMode::Fixed;     // --tbase (default), --t-upscaled, --t-fine
+    AlignMode align_mode = AlignMode::Resample;  // --resample (default), --make-uniform
+
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--upscale-only") upscale_only = true;
+        else if (a == "--mean-ts") use_timeseriesset_mean = true;
+        else if (a == "--no-mean-ts") use_timeseriesset_mean = false;
+        else if (a.rfind("--run-dir=", 0) == 0) resume_run_dir = a.substr(std::string("--run-dir=").size());
+
+        else if (a == "--tbase")      tbase_mode = TBaseMode::Fixed;
+        else if (a == "--t-upscaled") tbase_mode = TBaseMode::FromUpscaled;
+        else if (a == "--t-fine")     tbase_mode = TBaseMode::FromFirstFine;
+
+        else if (a == "--resample")     align_mode = AlignMode::Resample;
+        else if (a == "--make-uniform") align_mode = AlignMode::MakeUniform;
     }
 
-    // ====================================================================
-    // STEP 1: Extract velocity CDF from the flow field
-    // ====================================================================
-    std::cout << "\n=== Computing velocity CDF from qx field ===" << std::endl;
+    std::string run_dir;
+    if (rank == 0) {
+        createDirectory(output_dir);
 
-    // Extract inverse CDF (quantile function) from qx field with 100 bins/points
-    TimeSeries<double> qx_inverse_cdf = g.extractFieldCDF("qx", Grid2D::ArrayKind::Fx, 100);
+        if (upscale_only) {
+            if (resume_run_dir.empty()) {
+                std::cerr << "ERROR: --upscale-only requires --run-dir=/path/to/run_YYYYMMDD_HHMMSS\n";
+                MPI_Abort(PETSC_COMM_WORLD, 1);
+            }
+            run_dir = resume_run_dir;
+            if (!dirExists(run_dir)) {
+                std::cerr << "ERROR: run_dir does not exist: " << run_dir << "\n";
+                MPI_Abort(PETSC_COMM_WORLD, 2);
+            }
+            std::cout << "Upscale-only: using run_dir: " << run_dir << "\n";
+        } else {
+            run_dir = joinPath(output_dir, "run_" + makeTimestamp());
+            createDirectory(run_dir);
+            std::cout << "Run directory: " << run_dir << "\n";
+        }
+    }
 
-    // Make uniform in probability axis at dp=0.01 (common for stable interpolation)
-    qx_inverse_cdf = qx_inverse_cdf.make_uniform(0.01);
+    // broadcast run_dir
+    int len = 0;
+    if (rank == 0) len = (int)run_dir.size();
+    MPI_Bcast(&len, 1, MPI_INT, 0, PETSC_COMM_WORLD);
+    run_dir.resize(len);
+    MPI_Bcast(run_dir.data(), len, MPI_CHAR, 0, PETSC_COMM_WORLD);
 
-    // Save inverse CDF
-    qx_inverse_cdf.writefile(joinPath(output_dir, "qx_inverse_cdf.txt"));
+    if (!run_dir.empty() && run_dir.back() != '/' && run_dir.back() != '\\') run_dir += "/";
+    MPI_Barrier(PETSC_COMM_WORLD);
 
-    // Print velocity range using quantiles p=0 and p=1
-    std::cout << "qx inverse CDF extracted with " << qx_inverse_cdf.size() << " points" << std::endl;
-    std::cout << "Velocity range: [" << qx_inverse_cdf.interpol(0.0)
-              << ", " << qx_inverse_cdf.interpol(1.0) << "]" << std::endl;
+    // -----------------------------
+    // Domain / grid resolution
+    // -----------------------------
+    int nx = 300;
+    int nu = 100;
+    int ny = 100;
+    double Lx = 3.0;
+    double Ly = 1.0;
+    double correlation_ls_x = 1;
+    double correlation_ls_y = 0.1;
+    double stdev = 2.0; // new
+    double g_mean = 0;
+    double Diffusion_coefficient = 0.001; // new
 
-    // ====================================================================
-    // STEP 2: Create grid for mixing PDF in (x,u) space
-    // ====================================================================
-    std::cout << "\n=== Creating Mixing PDF Grid ===" << std::endl;
+    // -----------------------------
+    // Realizations
+    // -----------------------------
+    const int nReal_default = 20;
+    const double du = 0.01;
+    const int nU = (int)std::round(1.0 / du) + 1;
 
-    // IMPORTANT: This creates Grid2D(nx, ny, Lx, Ly).
-    // But your comment says (x,u) space and prints nx x nu below.
-    // That means ny is being used as the second dimension here, not nu.
+    std::vector<double> lc_all, lx_all, ly_all, dt_all;
+    std::vector<double> invcdf_sum(nU, 0.0);
+
+    std::string stats_csv = joinPath(run_dir, "fine_params_all.csv");
+    if (!upscale_only && rank == 0) {
+        std::ofstream f(stats_csv);
+        f << "realization,lc,lambda_x,lambda_y,dt_opt\n";
+    }
+
+    // =====================================================================
+    // FINE-SCALE LOOP (skipped in --upscale-only)
+    // =====================================================================
+    int nReal = nReal_default;
+
+    if (!upscale_only) {
+        for (int r = 1; r <= nReal; ++r) {
+            const std::string rlab = makeRealLabel(r);
+
+            std::string fine_dir = joinPath(run_dir, makeFineFolder(r));
+            if (rank == 0) createDirectory(fine_dir);
+            //MPI_Barrier(PETSC_COMM_WORLD);
+            if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
+
+            const std::string pfx = rlab + "_";
+
+            Grid2D g(nx, ny, Lx, Ly);
+
+            PetscLogDouble t_total0, t_total1, t_asm0, t_asm1, t_solve0, t_solve1;
+
+            unsigned long run_seed = 20260115UL;
+            unsigned long seed = run_seed + 1000UL*(unsigned long)r + (unsigned long)rank;
+            g.makeGaussianFieldSGS("K_normal_score", correlation_ls_x, correlation_ls_y, 10, seed);
+            g.normalizeField("K_normal_score",Grid2D::ArrayKind::Cell); // new
+
+            PetscTime(&t_asm0);
+            PetscTime(&t_total0);
+
+            g.writeNamedMatrix("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "K_normal_score.txt"));
+            g.writeNamedVTI("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "K_normal_score.vti"));
+
+            g.createExponentialField("K_normal_score", stdev, g_mean, "K");
+            g.writeNamedVTI("K", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "K.vti"));
+
+            PetscTime(&t_asm1);
+
+            PetscTime(&t_solve0);
+            g.DarcySolve(Lx, 0, "K", "K");
+            std::cout << "Darcy solved ... " << std::endl;
+            PetscTime(&t_solve1);
+
+            g.computeMassBalanceError("MassBalanceError");
+            g.writeNamedMatrix("MassBalanceError", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "error.txt"));
+
+            g.writeNamedVTI("head", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "Head.vti"));
+            g.writeNamedMatrix("head", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "Head.txt"));
+            g.writeNamedVTI("qx", Grid2D::ArrayKind::Fx, joinPath(fine_dir, pfx + "qx.vti"));
+            g.writeNamedVTI("qy", Grid2D::ArrayKind::Fy, joinPath(fine_dir, pfx + "qy.vti"));
+
+            TimeSeries<double> AllQxValues = g.exportFieldToTimeSeries("qx", Grid2D::ArrayKind::Fx);
+            TimeSeries<double> QxNormalScores = AllQxValues.ConvertToNormalScore();
+            g.assignFromTimeSeries(QxNormalScores, "qx_normal_score", Grid2D::ArrayKind::Fx);
+            g.writeNamedVTI("qx_normal_score", Grid2D::ArrayKind::Fx, joinPath(fine_dir, pfx + "qx_normal_score.vti"));
+
+            std::cout << "Sampling points for derivative ..." << std::endl;
+            TimeSeries<double> curvture = g.sampleSecondDerivative("qx_normal_score", Grid2D::ArrayKind::Fx,
+                                                                   Grid2D::DerivDir::X, 10000, 0.05);
+            curvture.writefile(joinPath(fine_dir, pfx + "2nd_deriv.txt"));
+
+            // velocity autocorrelation (X,Y) via perturbation
+            double delta_min = 0.001, delta_max = 0.2;
+            int num_deltas = 30;
+            int num_samples_per_delta = 10000;
+
+            TimeSeries<double> corr_x, corr_y;
+
+            for (int i = 0; i < num_deltas; ++i) {
+                double exponent = static_cast<double>(i) / (num_deltas - 1);
+                double delta = delta_min * std::pow(delta_max / delta_min, exponent);
+                try {
+                    TimeSeries<double> samples = g.sampleGaussianPerturbation(
+                        "qx_normal_score", Grid2D::ArrayKind::Fx,
+                        num_samples_per_delta, delta, 0, PerturbDir::XOnly);
+                    corr_x.append(delta, samples.correlation_tc());
+                } catch (...) {}
+            }
+            corr_x.writefile(joinPath(fine_dir, pfx + "velocity_correlation_x.txt"));
+            double lambda_x_emp = corr_x.fitExponentialDecay();
+
+            for (int i = 0; i < num_deltas; ++i) {
+                double exponent = static_cast<double>(i) / (num_deltas - 1);
+                double delta = delta_min * std::pow(delta_max / delta_min, exponent);
+                try {
+                    TimeSeries<double> samples = g.sampleGaussianPerturbation(
+                        "qx_normal_score", Grid2D::ArrayKind::Fx,
+                        num_samples_per_delta, delta, 0, PerturbDir::YOnly);
+                    corr_y.append(delta, samples.correlation_tc());
+                } catch (...) {}
+            }
+            corr_y.writefile(joinPath(fine_dir, pfx + "velocity_correlation_y.txt"));
+            double lambda_y_emp = corr_y.fitExponentialDecay();
+
+            // dt
+            double dt_optimal = 0.5 * g.dx() / g.fieldMinMax("qx", Grid2D::ArrayKind::Fx).second;
+
+            // transport
+            g.assignConstant("C", Grid2D::ArrayKind::Cell, 0);
+
+            g.writeNamedMatrix("qx", Grid2D::ArrayKind::Fx, joinPath(fine_dir, pfx + "qx.txt"));
+            g.writeNamedMatrix("qy", Grid2D::ArrayKind::Fy, joinPath(fine_dir, pfx + "qy.txt"));
+            g.writeNamedMatrix("K",  Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "K.txt"));
+
+            g.SetVal("diffusion", Diffusion_coefficient);
+            g.SetVal("porosity", 1);
+            g.SetVal("c_left", 1.0);
+
+            std::vector<double> xLocations{0.5, 1.5, 2.5};
+            g.setBTCLocations(xLocations);
+
+            TimeSeriesSet<double> BTCs_FineScaled;
+            g.SolveTransport(10,
+                             std::min(dt_optimal, 0.5 / 10.0),
+                             "transport_", 50,
+                             fine_dir,
+                             "C",
+                             &BTCs_FineScaled,
+                             r);
+
+            for (int i = 0; i < (int)xLocations.size() && i < (int)BTCs_FineScaled.size(); ++i) {
+                BTCs_FineScaled.setSeriesName(i, fmt_x(xLocations[i]));
+            }
+
+            const std::string btc_path       = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
+            const std::string btc_deriv_path = joinPath(fine_dir, pfx + "BTC_FineScaled_derivative.csv");
+
+            BTCs_FineScaled.write(btc_path);
+            BTCs_FineScaled.derivative().write(btc_deriv_path);
+
+            PetscTime(&t_total1);
+
+            // pathway correlation -> lc
+            PathwaySet pathways;
+            pathways.Initialize(1000, PathwaySet::Weighting::FluxWeighted, &g);
+            pathways.trackAllPathways(&g, 0.01);
+
+            double Delta_x_min = 0.001, Delta_x_max = 0.5;
+            int num_Delta_x = 30;
+            int num_samples_per_Delta_x = 10000;
+
+            TimeSeries<double> qx_correlation;
+            for (int i = 0; i < num_Delta_x; ++i) {
+                double exponent = static_cast<double>(i) / (num_Delta_x - 1);
+                double Delta_x = Delta_x_min * std::pow(Delta_x_max / Delta_x_min, exponent);
+                try {
+                    PathwaySet particle_pairs = pathways.sampleParticlePairs(Delta_x, num_samples_per_Delta_x);
+                    double correlation = particle_pairs.calculateCorrelation(0, 1, "qx");
+                    qx_correlation.append(Delta_x, correlation);
+                } catch (...) {}
+            }
+
+            qx_correlation.writefile(joinPath(fine_dir, pfx + "qx_correlation_vs_distance.txt"));
+            double advection_correlation_length_scale = qx_correlation.fitExponentialDecay();
+
+            pathways.writeToFile(joinPath(fine_dir, pfx + "pathway_summary.txt"));
+            pathways.writeCombinedVTK(joinPath(fine_dir, pfx + "all_pathways.vtk"));
+
+            // inverse CDF
+            TimeSeries<double> qx_inverse_cdf = g.extractFieldCDF("qx", Grid2D::ArrayKind::Fx, 100);
+            qx_inverse_cdf = qx_inverse_cdf.make_uniform(du);
+            qx_inverse_cdf.writefile(joinPath(fine_dir, pfx + "qx_inverse_cdf.txt"));
+
+            // meta
+            if (rank == 0) {
+                std::ofstream m(joinPath(fine_dir, pfx + "meta.txt"));
+                m << "realization=" << r << "\n";
+                m << "nx=" << nx << "\nny=" << ny << "\nnu=" << nu << "\n";
+                m << "Lx=" << Lx << "\nLy=" << Ly << "\n";
+                m << "correlation_ls_x=" << correlation_ls_x << "\n";
+                m << "correlation_ls_y=" << correlation_ls_y << "\n";
+                m << "stdev=" << stdev << "\n";
+                m << "g_mean=" << g_mean << "\n";
+                m << "lc=" << advection_correlation_length_scale << "\n";
+                m << "lambda_x=" << lambda_x_emp << "\n";
+                m << "lambda_y=" << lambda_y_emp << "\n";
+                m << "dt_opt=" << dt_optimal << "\n";
+                m << "seed=" << seed << "\n";
+            }
+
+            // accumulate means
+            if (rank == 0) {
+                lc_all.push_back(advection_correlation_length_scale);
+                lx_all.push_back(lambda_x_emp);
+                ly_all.push_back(lambda_y_emp);
+                dt_all.push_back(dt_optimal);
+
+                for (int k = 0; k < nU; ++k) {
+                    double u = k * du;
+                    invcdf_sum[k] += qx_inverse_cdf.interpol(u);
+                }
+
+                std::ofstream f(stats_csv, std::ios::app);
+                f << r << "," << advection_correlation_length_scale << ","
+                  << lambda_x_emp << "," << lambda_y_emp << "," << dt_optimal << "\n";
+            }
+
+            if (rank == 0) {
+                std::cout << "[Fine " << rlab << "] Assembly time: " << (t_asm1 - t_asm0) << " s\n";
+                std::cout << "[Fine " << rlab << "] Solve time:    " << (t_solve1 - t_solve0) << " s\n";
+                std::cout << "[Fine " << rlab << "] Total time:   " << (t_total1 - t_total0) << " s\n";
+                std::cout << "[Fine " << rlab << "] Outputs saved to: " << fine_dir << "\n";
+            }
+
+            MPI_Barrier(PETSC_COMM_WORLD);
+        }
+    }
+
+    // =====================================================================
+    // MEAN PARAMS + UPSCALED RUN
+    // =====================================================================
+    double lc_mean = 0, lx_mean = 0, ly_mean = 0, dt_mean = 0;
+    std::vector<double> invcdf_mean;
+
+    if (rank == 0) {
+        if (!upscale_only) {
+            nReal = (int)lc_all.size();
+            lc_mean = mean_of(lc_all);
+            lx_mean = mean_of(lx_all);
+            ly_mean = mean_of(ly_all);
+            dt_mean = mean_of(dt_all);
+
+            invcdf_mean.resize(nU, 0.0);
+            for (int k = 0; k < nU; ++k) invcdf_mean[k] = invcdf_sum[k] / (double)nReal;
+
+            {
+                std::ofstream f(joinPath(run_dir, "mean_params.txt"));
+                f << "nReal=" << nReal << "\n";
+                f << "lc_mean=" << lc_mean << "\n";
+                f << "lambda_x_mean=" << lx_mean << "\n";
+                f << "lambda_y_mean=" << ly_mean << "\n";
+                f << "dt_mean=" << dt_mean << "\n";
+                f << "du=" << du << "\n";
+            }
+            {
+                std::ofstream f(joinPath(run_dir, "mean_qx_inverse_cdf.txt"));
+                f << "u,v\n";
+                for (int k = 0; k < nU; ++k) {
+                    double u = k * du;
+                    f << u << "," << invcdf_mean[k] << "\n";
+                }
+            }
+        } else {
+            const std::string mean_params_path = joinPath(run_dir, "mean_params.txt");
+            const std::string mean_cdf_path    = joinPath(run_dir, "mean_qx_inverse_cdf.txt");
+
+            bool ok_params = fileExists(mean_params_path) &&
+                             read_mean_params_txt(mean_params_path, lc_mean, lx_mean, ly_mean, dt_mean);
+
+            std::vector<double> uvec, vvec;
+            bool ok_cdf = fileExists(mean_cdf_path) &&
+                          read_mean_inverse_cdf_csv(mean_cdf_path, uvec, vvec);
+
+            if (ok_params && ok_cdf) {
+                invcdf_mean.assign(nU, 0.0);
+                for (int k = 0; k < nU; ++k) {
+                    double u = k * du;
+                    invcdf_mean[k] = interp1_linear(uvec, vvec, u);
+                }
+                std::cout << "Loaded mean_params.txt and mean_qx_inverse_cdf.txt\n";
+            } else {
+                std::cout << "Mean files missing/incomplete; reconstructing from fine_* folders...\n";
+
+                auto fine_folders = list_fine_folders(run_dir);
+                if (fine_folders.empty()) {
+                    std::cerr << "ERROR: No fine_* folders found under: " << run_dir << "\n";
+                    MPI_Abort(PETSC_COMM_WORLD, 3);
+                }
+                nReal = (int)fine_folders.size();
+
+                std::vector<double> lc_v, lx_v, ly_v, dt_v;
+                bool ok_fine_params = fileExists(stats_csv) &&
+                                      read_fine_params_all_csv(stats_csv, lc_v, lx_v, ly_v, dt_v);
+
+                if (ok_fine_params) {
+                    lc_mean = mean_of(lc_v);
+                    lx_mean = mean_of(lx_v);
+                    ly_mean = mean_of(ly_v);
+                    dt_mean = mean_of(dt_v);
+                    std::cout << "Loaded params from fine_params_all.csv\n";
+                } else {
+                    lc_v.clear(); lx_v.clear(); ly_v.clear(); dt_v.clear();
+                    for (auto& pr : fine_folders) {
+                        int rr = pr.first;
+                        std::string fine_dir = pr.second;
+                        std::string pfx = makeRealLabel(rr) + "_";
+                        std::string meta = joinPath(fine_dir, pfx + "meta.txt");
+
+                        std::map<std::string,std::string> kv;
+                        if (!parse_keyval_file(meta, kv)) continue;
+
+                        auto getd = [&](const std::string& k, double& out)->bool{
+                            auto it = kv.find(k);
+                            if (it == kv.end()) return false;
+                            out = std::atof(it->second.c_str());
+                            return true;
+                        };
+
+                        double v1,v2,v3,v4;
+                        if (getd("lc", v1) && getd("lambda_x", v2) && getd("lambda_y", v3) && getd("dt_opt", v4)) {
+                            lc_v.push_back(v1); lx_v.push_back(v2); ly_v.push_back(v3); dt_v.push_back(v4);
+                        }
+                    }
+                    if (lc_v.empty()) {
+                        std::cerr << "ERROR: Could not read params from fine_params_all.csv or meta.txt files.\n";
+                        MPI_Abort(PETSC_COMM_WORLD, 4);
+                    }
+                    lc_mean = mean_of(lc_v);
+                    lx_mean = mean_of(lx_v);
+                    ly_mean = mean_of(ly_v);
+                    dt_mean = mean_of(dt_v);
+                    std::cout << "Loaded params from fine meta.txt files\n";
+                }
+
+                std::fill(invcdf_sum.begin(), invcdf_sum.end(), 0.0);
+                int used = 0;
+                for (auto& pr : fine_folders) {
+                    int rr = pr.first;
+                    std::string fine_dir = pr.second;
+                    if (accumulate_inverse_cdf_on_grid(fine_dir, rr, du, nU, invcdf_sum)) used++;
+                }
+                if (used == 0) {
+                    std::cerr << "ERROR: No qx_inverse_cdf.txt files could be read.\n";
+                    MPI_Abort(PETSC_COMM_WORLD, 5);
+                }
+
+                invcdf_mean.resize(nU, 0.0);
+                for (int k = 0; k < nU; ++k) invcdf_mean[k] = invcdf_sum[k] / (double)used;
+
+                {
+                    std::ofstream f(joinPath(run_dir, "mean_params.txt"));
+                    f << "nReal=" << used << "\n";
+                    f << "lc_mean=" << lc_mean << "\n";
+                    f << "lambda_x_mean=" << lx_mean << "\n";
+                    f << "lambda_y_mean=" << ly_mean << "\n";
+                    f << "dt_mean=" << dt_mean << "\n";
+                    f << "du=" << du << "\n";
+                }
+                {
+                    std::ofstream f(joinPath(run_dir, "mean_qx_inverse_cdf.txt"));
+                    f << "u,v\n";
+                    for (int k = 0; k < nU; ++k) {
+                        double u = k * du;
+                        f << u << "," << invcdf_mean[k] << "\n";
+                    }
+                }
+
+                std::cout << "Reconstruction done from " << used << " fine realizations.\n";
+            }
+        }
+    }
+
+    MPI_Bcast(&lc_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
+    MPI_Bcast(&lx_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
+    MPI_Bcast(&ly_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
+    MPI_Bcast(&dt_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
+
+    int nU_b = 0;
+    if (rank == 0) nU_b = (int)invcdf_mean.size();
+    MPI_Bcast(&nU_b, 1, MPI_INT, 0, PETSC_COMM_WORLD);
+    if (rank != 0) invcdf_mean.resize(nU_b);
+    MPI_Bcast(invcdf_mean.data(), nU_b, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
+
+    TimeSeries<double> qx_inverse_cdf_mean;
+    for (int k = 0; k < nU; ++k) {
+        double u = k * du;
+        qx_inverse_cdf_mean.append(u, invcdf_mean[k]);
+    }
+
+    // Upscaled folder + prefix
+    std::string up_dir = joinPath(run_dir, "upscaled_mean");
+    if (rank == 0) createDirectory(up_dir);
+    MPI_Barrier(PETSC_COMM_WORLD);
+    if (!up_dir.empty() && up_dir.back() != '/' && up_dir.back() != '\\') up_dir += "/";
+
+    const std::string up_pfx = std::string("upscaled_");
+
+    if (rank == 0) {
+        std::cout << "\n=== UPSCALED RUN USING MEAN PARAMETERS ===\n";
+        std::cout << "lc_mean=" << lc_mean << "\n";
+        std::cout << "lambda_x_mean=" << lx_mean << "\n";
+        std::cout << "lambda_y_mean=" << ly_mean << "\n";
+        std::cout << "dt_mean=" << dt_mean << "\n";
+        std::cout << "upscaled output: " << up_dir << "\n";
+    }
+
     Grid2D g_u(nx, ny, Lx, Ly);
 
-    std::cout << "Grid created: " << nx << " x " << nu
-              << " (x is spatial, y is u-space)" << std::endl;
-
-    // ====================================================================
-    // STEP 3: Initialize flux arrays (IMPORTANT!)
-    // ====================================================================
-    std::cout << "\n=== Initializing flux arrays ===" << std::endl;
-
-    // Expected sizes for flux arrays for a staggered grid:
-    // Fx size ~ (nx+1)*nu ; Fy size ~ nx*(nu+1)
-    // NOTE: these sizes are computed with nu, but g_u was created with ny above.
     int qx_size = nu * (nx + 1);
     int qy_size = (nu + 1) * nx;
 
-    // Initialize flux arrays with zeros
     auto& qx_u = g_u.flux("qx");
     auto& qy_u = g_u.flux("qy");
 
     qx_u.resize(qx_size, 0.0);
     qy_u.resize(qy_size, 0.0);
 
-    std::cout << "Flux arrays initialized: qx(" << qx_size << "), qy(" << qy_size << ")" << std::endl;
-
-    // ====================================================================
-    // STEP 4: Assign velocity field v(u) from CDF
-    // ====================================================================
-    std::cout << "\n=== Setting velocity field v(u) from CDF ===" << std::endl;
-
-    // For each u-level, assign velocity from the inverse CDF
     for (int j = 0; j < nu; ++j) {
-        double u = static_cast<double>(j) / (nu - 1);   // u in [0,1]
-        double v_at_u = qx_inverse_cdf.interpol(u);      // v(u) = quantile(u)
-
-        // Set qx for all x-positions at this u-level
-        // NOTE: uses nx+1, which matches staggered Fx indexing in x direction
+        double u = static_cast<double>(j) / (nu - 1);
+        double v_at_u = qx_inverse_cdf_mean.interpol(u);
         for (int i = 0; i < nx + 1; ++i) {
-            int idx = j * (nx + 1) + i; // NOTE: local var "idx" shadows function idx(...) above
-            if (idx >= qx_size) {
-                std::cerr << "ERROR: qx index out of bounds: " << idx << " >= " << qx_size << std::endl;
+            int id = j * (nx + 1) + i;
+            if (id >= qx_size) {
+                std::cerr << "ERROR: qx index out of bounds: " << id << " >= " << qx_size << "\n";
                 return 1;
             }
-            qx_u[idx] = v_at_u;
+            qx_u[id] = v_at_u;
         }
     }
 
-    // qy is already set to zero from resize
-    std::cout << "Velocity field v(u) assigned to grid" << std::endl;
+    g_u.writeNamedVTI("qx", Grid2D::ArrayKind::Fx, joinPath(up_dir, up_pfx + "qx_u_initial.vti"));
+    g_u.writeNamedVTI("qy", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "qy_u_initial.vti"));
+    g_u.writeNamedMatrix("qx", Grid2D::ArrayKind::Fx, joinPath(up_dir, up_pfx + "qx_u_initial.txt"));
+    g_u.writeNamedMatrix("qy", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "qy_u_initial.txt"));
 
-    // ====================================================================
-    // STEP 5: Write initial fields for verification
-    // ====================================================================
-    std::cout << "\n=== Writing initial fields for verification ===" << std::endl;
-
-    // Save velocity fields on (x,u) grid (as VTI + text)
-    g_u.writeNamedVTI("qx", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx_u_initial.vti"));
-    g_u.writeNamedVTI("qy", Grid2D::ArrayKind::Fy, joinPath(output_dir, "qy_u_initial.vti"));
-    g_u.writeNamedMatrix("qx", Grid2D::ArrayKind::Fx, joinPath(output_dir, "qx_u_initial.txt"));
-    g_u.writeNamedMatrix("qy", Grid2D::ArrayKind::Fy, joinPath(output_dir, "qy_u_initial.txt"));
-
-    std::cout << "Initial velocity fields written" << std::endl;
-
-    // ====================================================================
-    // STEP 6: Set mixing parameters
-    // ====================================================================
-    std::cout << "\n=== Setting mixing parameters ===" << std::endl;
-
-    double lc = advection_correlation_length_scale;        // Correlation length scale (NOTE: you computed one above too) ~ 0.35
-    double lambda_x = lambda_x_emp;     // Transverse dispersion length in x direction ~ 1.0
-    double lambda_y = lambda_y_emp;   // Transverse dispersion length in y direction ~ 0.10
-
-    // Set mixing model parameters used by your upscaled PDE
-    g_u.setMixingParams(lc, lambda_x, lambda_y);
-
-    // Molecular diffusion + porosity + inlet PDF/BC
-    g_u.SetVal("diffusion", Diffusion_coefficient);  // Molecular diffusion
-    g_u.SetVal("porosity", 1.0);
-    g_u.SetVal("c_left", 1.0);       // Uniform PDF at inlet
-
-    // ====================================================================
-    // STEP 7: Solve mixing PDF equation
-    // ====================================================================
-    std::cout << "\n=== Solving Mixing PDF Equation ===" << std::endl;
+    g_u.setMixingParams(lc_mean, lx_mean, ly_mean);
 
     double t_end_pdf = 10;
-    double dt_pdf = dt_optimal;          // NOTE: dt_optimal came from fine-scale grid, reused here
+    double dt_pdf = dt_mean;
     int output_interval_pdf = 50;
 
-    // Compute effective mixing diffusion coefficient (writes into "D_y" field by your convention)
-    std::cout << "\n=== Computing effective D_y ===" << std::endl;
+    g_u.SetVal("diffusion", Diffusion_coefficient);
+    g_u.SetVal("porosity", 1.0);
+    g_u.SetVal("c_left", 1.0);
+
     g_u.computeMixingDiffusionCoefficient();
+    g_u.writeNamedVTI("D_y", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "D_y.vti"));
 
-    // Save D_y for verification
-    std::cout << "\n=== Writing D_y into vti ===" << std::endl;
-    g_u.writeNamedVTI("D_y", Grid2D::ArrayKind::Fy, joinPath(output_dir, "D_y.vti"));
-
-    // Solve transport on (x,u) grid
-    std::cout << "\n=== Solving ===" << std::endl;
-
-    // Initialize scalar (NOTE: you later call SolveTransport(...,"Cu",...) not "C")
     g_u.assignConstant("C", Grid2D::ArrayKind::Cell, 0);
 
-    TimeSeriesSet<double> BTCs_Upscaled;
+    std::vector<double> xLocations{0.5, 1.5, 2.5};
     g_u.setBTCLocations(xLocations);
 
-    // IMPORTANT: last argument "Cu" is the field name passed to SolveTransport
-    // But above you initialized "C", and later you write "C". Ensure your Grid2D expects this.
-    g_u.SolveTransport(t_end_pdf, dt_pdf, "transport_", output_interval_pdf, output_dir, "Cu",&BTCs_Upscaled);
+    TimeSeriesSet<double> BTCs_Upscaled;
+    g_u.SolveTransport(t_end_pdf, dt_pdf, "transport_", output_interval_pdf, up_dir, "Cu", &BTCs_Upscaled);
 
-    // Save upscaled BTCs
-    BTCs_Upscaled.write(joinPath(output_dir, "BTC_Upscaled.csv"));
+    for (int i = 0; i < (int)xLocations.size() && i < (int)BTCs_Upscaled.size(); ++i) {
+        BTCs_Upscaled.setSeriesName(i, fmt_x(xLocations[i]));
+    }
 
-    // ====================================================================
-    // STEP 8: Save final PDF distribution
-    // ====================================================================
-    std::cout << "\n=== Saving final results ===" << std::endl;
+    const std::string up_btc_path       = joinPath(up_dir, up_pfx + "BTC_Upscaled.csv");
+    const std::string up_btc_deriv_path = joinPath(up_dir, up_pfx + "BTC_Upscaled_derivative.csv");
 
-    // NOTE: filenames say Cu.*, but field written is "C"
-    g_u.writeNamedVTI_Auto("C", joinPath(output_dir, "Cu.vti"));
-    g_u.writeNamedMatrix("C", Grid2D::ArrayKind::Cell,
-                         joinPath(output_dir, "Cu.txt"));
+    BTCs_Upscaled.write(up_btc_path);
+    BTCs_Upscaled.derivative().write(up_btc_deriv_path);
 
-    std::cout << "\nMixing PDF simulation complete!" << std::endl;
+    g_u.writeNamedVTI_Auto("C", joinPath(up_dir, "Cu.vti"));
+    g_u.writeNamedMatrix("C", Grid2D::ArrayKind::Cell, joinPath(up_dir, up_pfx + "Cu.txt"));
 
-    // NOTE: overwrites t_total1 again (timing report earlier won’t reflect this)
-    PetscTime(&t_total1);
+    // =====================================================================
+    // FINAL AGGREGATION CSVs for comparison / plotting
+    // =====================================================================
+    if (rank == 0) {
+        const double t_end_cmp = 10.0;
+        const double dt_cmp    = 0.001;
+
+        auto fine_folders = list_fine_folders(run_dir);
+
+        // -----------------------
+        // choose t_base
+        // -----------------------
+        std::vector<double> t_base;
+
+        auto build_fixed = [&](){
+            t_base.clear();
+            t_base.reserve((size_t)std::ceil(t_end_cmp / dt_cmp) + 1);
+            for (double tt = 0.0; tt <= t_end_cmp + 1e-12; tt += dt_cmp) t_base.push_back(tt);
+        };
+
+        if (tbase_mode == TBaseMode::Fixed) {
+            build_fixed();
+        } else if (tbase_mode == TBaseMode::FromUpscaled) {
+            if (!load_csv_time_only(up_btc_path, t_base)) {
+                std::cerr << "WARNING: --t-upscaled failed; using fixed t_base\n";
+                build_fixed();
+            }
+        } else {
+            bool ok = false;
+            for (auto& pr : fine_folders) {
+                int rr = pr.first;
+                std::string fine_dir = pr.second;
+                if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
+                std::string pfx  = makeRealLabel(rr) + "_";
+                std::string path = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
+                ok = load_csv_time_only(path, t_base);
+                if (ok) break;
+            }
+            if (!ok) {
+                std::cerr << "WARNING: --t-fine failed; using fixed t_base\n";
+                build_fixed();
+            }
+        }
+
+        // -----------------------
+        // helper: load CSV -> append to TimeSeriesSet on chosen t_base
+        // alignment behavior:
+        //   Resample: direct interpolation onto t_base
+        //   MakeUniform: first uniformize on dt_cmp, then interpolate onto t_base (still ends on t_base)
+        // -----------------------
+        auto load_csv_as_tsset = [&](const std::string& path,
+                                     const std::string& prefix,
+                                     TimeSeriesSet<double>& out) -> bool
+        {
+            std::vector<double> t;
+            std::vector<std::string> names;
+            std::vector<std::vector<double>> cols;
+
+            if (!read_time_series_table_csv(path, t, names, cols)) {
+                std::cerr << "WARNING: could not read CSV: " << path << "\n";
+                return false;
+            }
+
+            bool any = false;
+
+            for (size_t j = 0; j < names.size(); ++j) {
+                if (names[j] == "t" || names[j] == "T" || names[j] == "time") continue;
+
+                std::vector<double> y_aligned;
+
+                if (align_mode == AlignMode::Resample) {
+                    y_aligned = resample_col_linear(t, cols[j], t_base);
+                } else {
+                    // make_uniform step (meaningful), then final interpolate to t_base
+                    TimeSeries<double> ts0;
+                    ts0.reserve(t.size());
+                    for (size_t i = 0; i < t.size(); ++i) ts0.append(t[i], cols[j][i]);
+
+                    TimeSeries<double> tsu = ts0.make_uniform(dt_cmp, false);
+
+                    std::vector<double> tu, yu;
+                    tu.reserve(tsu.size());
+                    yu.reserve(tsu.size());
+                    for (size_t i = 0; i < tsu.size(); ++i) {
+                        tu.push_back(tsu.getTime(i));
+                        yu.push_back(tsu.getValue(i));
+                    }
+
+                    y_aligned = resample_col_linear(tu, yu, t_base);
+                }
+
+                TimeSeries<double> ts;
+                ts.setName(prefix + "_" + names[j]);
+                ts.reserve(t_base.size());
+                for (size_t i = 0; i < t_base.size(); ++i) ts.append(t_base[i], y_aligned[i]);
+
+                if (!out.append(ts, ts.name())) {
+                    std::cerr << "WARNING: duplicate series skipped: " << ts.name() << "\n";
+                } else {
+                    any = true;
+                }
+            }
+
+            return any;
+        };
+
+        // ============================================================
+        // BTC Compare
+        // ============================================================
+        TimeSeriesSet<double> BTC_compare;
+        TimeSeriesSet<double> BTC_fineMean_only;
+
+        for (auto& pr : fine_folders) {
+            int rr = pr.first;
+            std::string fine_dir = pr.second;
+            if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
+
+            std::string pfx  = makeRealLabel(rr) + "_";
+            std::string path = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
+
+            load_csv_as_tsset(path, "Fine_" + makeRealLabel(rr), BTC_compare);
+        }
+
+        {
+            bool initialized = false;
+            std::vector<std::string> mean_names;
+
+            if (!use_timeseriesset_mean) {
+                std::vector<std::vector<double>> sum_cols;
+                std::vector<std::vector<int>>    cnt_cols;
+                int used = 0;
+
+                for (auto& pr : fine_folders) {
+                    int rr = pr.first;
+                    std::string fine_dir = pr.second;
+                    if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
+
+                    std::string pfx  = makeRealLabel(rr) + "_";
+                    std::string path = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
+
+                    std::vector<double> t;
+                    std::vector<std::string> names;
+                    std::vector<std::vector<double>> cols;
+                    if (!read_time_series_table_csv(path, t, names, cols)) continue;
+
+                    // align each column to t_base using same alignment mode
+                    std::vector<std::vector<double>> cols_aligned(cols.size());
+                    for (size_t j = 0; j < cols.size(); ++j) {
+                        if (align_mode == AlignMode::Resample) {
+                            cols_aligned[j] = resample_col_linear(t, cols[j], t_base);
+                        } else {
+                            TimeSeries<double> ts0;
+                            ts0.reserve(t.size());
+                            for (size_t i = 0; i < t.size(); ++i) ts0.append(t[i], cols[j][i]);
+                            TimeSeries<double> tsu = ts0.make_uniform(dt_cmp, false);
+
+                            std::vector<double> tu, yu;
+                            tu.reserve(tsu.size()); yu.reserve(tsu.size());
+                            for (size_t i = 0; i < tsu.size(); ++i) { tu.push_back(tsu.getTime(i)); yu.push_back(tsu.getValue(i)); }
+                            cols_aligned[j] = resample_col_linear(tu, yu, t_base);
+                        }
+                    }
+
+                    if (!initialized) {
+                        mean_names = names;
+                        sum_cols.assign(mean_names.size(), std::vector<double>{});
+                        cnt_cols.assign(mean_names.size(), std::vector<int>{});
+                        initialized = true;
+                    }
+                    if (names.size() != mean_names.size()) continue;
+
+                    for (size_t j = 0; j < mean_names.size(); ++j) {
+                        if (mean_names[j] == "t" || mean_names[j] == "T" || mean_names[j] == "time") continue;
+                        accumulate_sum_count(cols_aligned[j], sum_cols[j], cnt_cols[j]);
+                    }
+                    used++;
+                }
+
+                if (initialized && used > 0) {
+                    for (size_t j = 0; j < mean_names.size(); ++j) {
+                        if (mean_names[j] == "t" || mean_names[j] == "T" || mean_names[j] == "time") continue;
+
+                        std::vector<double> col_mean = finalize_mean_vec(sum_cols[j], cnt_cols[j]);
+
+                        TimeSeries<double> ts;
+                        ts.setName("FineMean_" + mean_names[j]);
+                        ts.reserve(t_base.size());
+                        for (size_t i = 0; i < t_base.size(); ++i) ts.append(t_base[i], col_mean[i]);
+
+                        BTC_compare.append(ts, ts.name());
+                        BTC_fineMean_only.append(ts, ts.name());
+                    }
+                    std::cout << "Added FineMean (BTC) by sum/count from " << used << " realizations.\n";
+                } else {
+                    std::cerr << "WARNING: FineMean (BTC) not added.\n";
+                }
+
+            } else {
+                std::vector<TimeSeriesSet<double>> stacks;
+                int used = 0;
+
+                for (auto& pr : fine_folders) {
+                    int rr = pr.first;
+                    std::string fine_dir = pr.second;
+                    if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
+
+                    std::string pfx  = makeRealLabel(rr) + "_";
+                    std::string path = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
+
+                    std::vector<double> t;
+                    std::vector<std::string> names;
+                    std::vector<std::vector<double>> cols;
+                    if (!read_time_series_table_csv(path, t, names, cols)) continue;
+
+                    std::vector<std::vector<double>> cols_aligned(cols.size());
+                    for (size_t j = 0; j < cols.size(); ++j) {
+                        if (align_mode == AlignMode::Resample) {
+                            cols_aligned[j] = resample_col_linear(t, cols[j], t_base);
+                        } else {
+                            TimeSeries<double> ts0;
+                            ts0.reserve(t.size());
+                            for (size_t i = 0; i < t.size(); ++i) ts0.append(t[i], cols[j][i]);
+                            TimeSeries<double> tsu = ts0.make_uniform(dt_cmp, false);
+
+                            std::vector<double> tu, yu;
+                            tu.reserve(tsu.size()); yu.reserve(tsu.size());
+                            for (size_t i = 0; i < tsu.size(); ++i) { tu.push_back(tsu.getTime(i)); yu.push_back(tsu.getValue(i)); }
+                            cols_aligned[j] = resample_col_linear(tu, yu, t_base);
+                        }
+                    }
+
+                    if (!initialized) {
+                        mean_names = names;
+                        stacks.assign(mean_names.size(), TimeSeriesSet<double>{});
+                        initialized = true;
+                    }
+                    if (names.size() != mean_names.size()) continue;
+
+                    for (size_t j = 0; j < mean_names.size(); ++j) {
+                        if (mean_names[j] == "t" || mean_names[j] == "T" || mean_names[j] == "time") continue;
+
+                        TimeSeries<double> ts;
+                        ts.setName(makeRealLabel(rr));
+                        ts.reserve(t_base.size());
+                        for (size_t i = 0; i < t_base.size(); ++i) ts.append(t_base[i], cols_aligned[j][i]);
+                        stacks[j].append(ts, ts.name());
+                    }
+
+                    used++;
+                }
+
+                if (initialized && used > 0) {
+                    for (size_t j = 0; j < mean_names.size(); ++j) {
+                        if (mean_names[j] == "t" || mean_names[j] == "T" || mean_names[j] == "time") continue;
+
+                        TimeSeries<double> m = stacks[j].mean_ts(0);
+
+                        TimeSeries<double> ts;
+                        ts.setName("FineMean_" + mean_names[j]);
+                        ts.reserve(t_base.size());
+                        for (size_t i = 0; i < t_base.size(); ++i) {
+                            ts.append(t_base[i], (i < m.size()) ? m.getValue(i) : 0.0);
+                        }
+
+                        BTC_compare.append(ts, ts.name());
+                        BTC_fineMean_only.append(ts, ts.name());
+                    }
+
+                    std::cout << "Added FineMean (BTC) using TimeSeriesSet::mean_ts from "
+                              << used << " realizations.\n";
+                } else {
+                    std::cerr << "WARNING: FineMean (BTC) not added.\n";
+                }
+            }
+        }
+
+        load_csv_as_tsset(up_btc_path, "Upscaled", BTC_compare);
+
+        const std::string out_cmp = joinPath(run_dir, "BTC_Compare.csv");
+        BTC_compare.write(out_cmp);
+        std::cout << "Wrote BTC WIDE comparison CSV (t_base): " << out_cmp << "\n";
+
+        const std::string fm_csv = joinPath(run_dir, "BTC_FineMean.csv");
+        if (BTC_fineMean_only.size() > 0) BTC_fineMean_only.write(fm_csv);
+
+        // GNUPLOT (outputs forced into run_dir by passing absolute fig_prefix)
+        {
+            const std::string gp1 = joinPath(run_dir, "plot_BTC_compare.gp");
+            const std::string fig_prefix = joinPath(run_dir, "BTC_compare");
+            if (write_btc_compare_plot_gnuplot_by_basename(gp1, out_cmp, fig_prefix, "Concentration")) {
+                int rc = run_gnuplot_script(gp1);
+                if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << ") for: " << gp1 << "\n";
+            }
+        }
+
+        // ============================================================
+        // Derivative Compare
+        // ============================================================
+        TimeSeriesSet<double> BTCd_compare;
+        TimeSeriesSet<double> BTCd_fineMean_only;
+
+        for (auto& pr : fine_folders) {
+            int rr = pr.first;
+            std::string fine_dir = pr.second;
+            if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
+
+            std::string pfx  = makeRealLabel(rr) + "_";
+            std::string path = joinPath(fine_dir, pfx + "BTC_FineScaled_derivative.csv");
+
+            load_csv_as_tsset(path, "FineDeriv_" + makeRealLabel(rr), BTCd_compare);
+        }
+
+        // FineDerivMean
+        {
+            bool initialized = false;
+            std::vector<std::string> mean_names;
+
+            if (!use_timeseriesset_mean) {
+                std::vector<std::vector<double>> sum_cols;
+                std::vector<std::vector<int>>    cnt_cols;
+                int used = 0;
+
+                for (auto& pr : fine_folders) {
+                    int rr = pr.first;
+                    std::string fine_dir = pr.second;
+                    if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
+
+                    std::string pfx  = makeRealLabel(rr) + "_";
+                    std::string path = joinPath(fine_dir, pfx + "BTC_FineScaled_derivative.csv");
+
+                    std::vector<double> t;
+                    std::vector<std::string> names;
+                    std::vector<std::vector<double>> cols;
+                    if (!read_time_series_table_csv(path, t, names, cols)) continue;
+
+                    std::vector<std::vector<double>> cols_aligned(cols.size());
+                    for (size_t j = 0; j < cols.size(); ++j) {
+                        if (align_mode == AlignMode::Resample) {
+                            cols_aligned[j] = resample_col_linear(t, cols[j], t_base);
+                        } else {
+                            TimeSeries<double> ts0;
+                            ts0.reserve(t.size());
+                            for (size_t i = 0; i < t.size(); ++i) ts0.append(t[i], cols[j][i]);
+                            TimeSeries<double> tsu = ts0.make_uniform(dt_cmp, false);
+
+                            std::vector<double> tu, yu;
+                            tu.reserve(tsu.size()); yu.reserve(tsu.size());
+                            for (size_t i = 0; i < tsu.size(); ++i) { tu.push_back(tsu.getTime(i)); yu.push_back(tsu.getValue(i)); }
+                            cols_aligned[j] = resample_col_linear(tu, yu, t_base);
+                        }
+                    }
+
+                    if (!initialized) {
+                        mean_names = names;
+                        sum_cols.assign(mean_names.size(), std::vector<double>{});
+                        cnt_cols.assign(mean_names.size(), std::vector<int>{});
+                        initialized = true;
+                    }
+                    if (names.size() != mean_names.size()) continue;
+
+                    for (size_t j = 0; j < mean_names.size(); ++j) {
+                        if (mean_names[j] == "t" || mean_names[j] == "T" || mean_names[j] == "time") continue;
+                        accumulate_sum_count(cols_aligned[j], sum_cols[j], cnt_cols[j]);
+                    }
+                    used++;
+                }
+
+                if (initialized && used > 0) {
+                    for (size_t j = 0; j < mean_names.size(); ++j) {
+                        if (mean_names[j] == "t" || mean_names[j] == "T" || mean_names[j] == "time") continue;
+
+                        std::vector<double> col_mean = finalize_mean_vec(sum_cols[j], cnt_cols[j]);
+
+                        TimeSeries<double> ts;
+                        ts.setName("FineDerivMean_" + mean_names[j]);
+                        ts.reserve(t_base.size());
+                        for (size_t i = 0; i < t_base.size(); ++i) ts.append(t_base[i], col_mean[i]);
+
+                        BTCd_compare.append(ts, ts.name());
+                        BTCd_fineMean_only.append(ts, ts.name());
+                    }
+                    std::cout << "Added FineDerivMean by sum/count from " << used << " realizations.\n";
+                } else {
+                    std::cerr << "WARNING: FineDerivMean not added.\n";
+                }
+
+            } else {
+                std::vector<TimeSeriesSet<double>> stacks;
+                int used = 0;
+
+                for (auto& pr : fine_folders) {
+                    int rr = pr.first;
+                    std::string fine_dir = pr.second;
+                    if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
+
+                    std::string pfx  = makeRealLabel(rr) + "_";
+                    std::string path = joinPath(fine_dir, pfx + "BTC_FineScaled_derivative.csv");
+
+                    std::vector<double> t;
+                    std::vector<std::string> names;
+                    std::vector<std::vector<double>> cols;
+                    if (!read_time_series_table_csv(path, t, names, cols)) continue;
+
+                    std::vector<std::vector<double>> cols_aligned(cols.size());
+                    for (size_t j = 0; j < cols.size(); ++j) {
+                        if (align_mode == AlignMode::Resample) {
+                            cols_aligned[j] = resample_col_linear(t, cols[j], t_base);
+                        } else {
+                            TimeSeries<double> ts0;
+                            ts0.reserve(t.size());
+                            for (size_t i = 0; i < t.size(); ++i) ts0.append(t[i], cols[j][i]);
+                            TimeSeries<double> tsu = ts0.make_uniform(dt_cmp, false);
+
+                            std::vector<double> tu, yu;
+                            tu.reserve(tsu.size()); yu.reserve(tsu.size());
+                            for (size_t i = 0; i < tsu.size(); ++i) { tu.push_back(tsu.getTime(i)); yu.push_back(tsu.getValue(i)); }
+                            cols_aligned[j] = resample_col_linear(tu, yu, t_base);
+                        }
+                    }
+
+                    if (!initialized) {
+                        mean_names = names;
+                        stacks.assign(mean_names.size(), TimeSeriesSet<double>{});
+                        initialized = true;
+                    }
+                    if (names.size() != mean_names.size()) continue;
+
+                    for (size_t j = 0; j < mean_names.size(); ++j) {
+                        if (mean_names[j] == "t" || mean_names[j] == "T" || mean_names[j] == "time") continue;
+
+                        TimeSeries<double> ts;
+                        ts.setName(makeRealLabel(rr));
+                        ts.reserve(t_base.size());
+                        for (size_t i = 0; i < t_base.size(); ++i) ts.append(t_base[i], cols_aligned[j][i]);
+                        stacks[j].append(ts, ts.name());
+                    }
+
+                    used++;
+                }
+
+                if (initialized && used > 0) {
+                    for (size_t j = 0; j < mean_names.size(); ++j) {
+                        if (mean_names[j] == "t" || mean_names[j] == "T" || mean_names[j] == "time") continue;
+
+                        TimeSeries<double> m = stacks[j].mean_ts(0);
+
+                        TimeSeries<double> ts;
+                        ts.setName("FineDerivMean_" + mean_names[j]);
+                        ts.reserve(t_base.size());
+                        for (size_t i = 0; i < t_base.size(); ++i) {
+                            ts.append(t_base[i], (i < m.size()) ? m.getValue(i) : 0.0);
+                        }
+
+                        BTCd_compare.append(ts, ts.name());
+                        BTCd_fineMean_only.append(ts, ts.name());
+                    }
+
+                    std::cout << "Added FineDerivMean using TimeSeriesSet::mean_ts from "
+                              << used << " realizations.\n";
+                } else {
+                    std::cerr << "WARNING: FineDerivMean not added.\n";
+                }
+            }
+        }
+
+        load_csv_as_tsset(up_btc_deriv_path, "UpscaledDeriv", BTCd_compare);
+
+        const std::string out_cmp_d = joinPath(run_dir, "BTC_Derivative_Compare.csv");
+        BTCd_compare.write(out_cmp_d);
+        std::cout << "Wrote derivative WIDE comparison CSV (t_base): " << out_cmp_d << "\n";
+
+        const std::string fdm_csv = joinPath(run_dir, "BTC_FineDerivMean.csv");
+        if (BTCd_fineMean_only.size() > 0) BTCd_fineMean_only.write(fdm_csv);
+
+        {
+            const std::string gp2 = joinPath(run_dir, "plot_BTC_derivative_compare.gp");
+            const std::string fig_prefix = joinPath(run_dir, "BTC_derivative_compare");
+            if (write_btc_compare_plot_gnuplot_by_basename(gp2, out_cmp_d, fig_prefix, "dC/dt")) {
+                int rc = run_gnuplot_script(gp2);
+                if (rc != 0) std::cerr << "WARNING: gnuplot failed (rc=" << rc << ") for: " << gp2 << "\n";
+            }
+        }
+
+        std::cout << "\nMixing PDF simulation complete!\n";
+        std::cout << "All outputs saved to: " << run_dir << "\n";
+    }
+
+    MPI_Barrier(PETSC_COMM_WORLD);
     return 0;
 }

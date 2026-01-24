@@ -21,6 +21,10 @@ DEFINES += PowerEdge
 #CONFIG += SligoCreek
 #DEFINES += SligoCreek
 
+# NEW: WSL
+#CONFIG += WSL
+#DEFINES += WSL
+
 # ==== VTK paths ====
 contains(DEFINES, Behzad) {
     VTKBUILDPATH = /home/behzad/Projects/VTK-9.3.1/VTK-build
@@ -44,6 +48,21 @@ contains(DEFINES, SligoCreek) {
     VTKBUILDPATH = /media/arash/E/Projects/VTK-9.1.0/VTK-build
     VTKHEADERPATH = /media/arash/E/Projects/VTK-9.1.0
     VTK_V = -9.1
+}
+
+contains(DEFINES, WSL) {
+    # ---- VTK (INSTALL prefix; validated on this machine) ----
+    VTKINSTALLPATH = /home/behzad/Projects/VTK-install
+    VTK_V          = -9.4
+    VTK_INCNAME    = vtk-9.4
+
+    # Extra guard: fail fast if the install path is wrong
+    !exists($$VTKINSTALLPATH/include/$$VTK_INCNAME/vtkSmartPointer.h) {
+        error("VTK not found: $$VTKINSTALLPATH/include/$$VTK_INCNAME/vtkSmartPointer.h")
+    }
+
+    # (Optional) If you ever want to ensure you never accidentally pick up the source-tree VTK:
+    # message("WSL VTK source-tree also exists at: $$HOME/Projects/VTK (ignored)")
 }
 
 # ==== PETSc (build-tree layout) ====
@@ -93,7 +112,8 @@ SOURCES += \
     grid.cpp \
     petscmatrix.cpp \
     petscsolver.cpp \
-    petscvector.cpp
+    petscvector.cpp \
+    sim_helpers.cpp
 
 HEADERS += \
     Particle.h \
@@ -113,7 +133,8 @@ HEADERS += \
     petsc_init.h \
     petscmatrix.h \
     petscsolver.h \
-    petscvector.h
+    petscvector.h \
+    sim_helpers.h
 
 # ==== Armadillo / GSL ====
 DEFINES += ARMA_USE_LAPACK ARMA_USE_BLAS

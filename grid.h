@@ -326,6 +326,7 @@ public:
 
     // Normalize values of a field: v -> (v - a)/b
     void normalizeField(const std::string& name, ArrayKind kind, double a, double b);
+    void normalizeField(const std::string& name, ArrayKind kind);
 
     // Average of field values at given x (cell field only)
     double fieldAverageAtX(const std::string& name, double x) const;
@@ -380,7 +381,14 @@ public:
     double getPorosity() const { return porosity_; }
     double getLeftBC() const { return c_left_; }
 
-    void SolveTransport(const double& t_end, const double& dt, const char* ksp_prefix = nullptr, int output_interval = 1, const std::string& output_dir = "", const std::string& filename = "", TimeSeriesSet<double>* btc_data = nullptr);
+    void SolveTransport(const double& t_end,
+                        const double& dt,
+                        const char* ksp_prefix = nullptr,
+                        int output_interval = 1,
+                        const std::string& output_dir = "",
+                        const std::string& filename = "",
+                        TimeSeriesSet<double>* btc_data = nullptr,
+                        int realization = -1);
 
     void printSampleC(const std::vector<std::pair<int,int>>& pts) const;
 

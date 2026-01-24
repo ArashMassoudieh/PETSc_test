@@ -29,7 +29,8 @@ SOURCES += main.cpp \
     grid.cpp \
     petscmatrix.cpp \
     petscsolver.cpp \
-    petscvector.cpp
+    petscvector.cpp \
+    sim_helpers.cpp
 
 # Use the MPI wrapper for both compile and link steps
 QMAKE_CXX = mpicxx
@@ -73,7 +74,8 @@ HEADERS += \
     petsc_init.h \
     petscmatrix.h \
     petscsolver.h \
-    petscvector.h
+    petscvector.h \
+    sim_helpers.h
 
 DEFINES += ARMA_USE_LAPACK ARMA_USE_BLAS
 LIBS += -larmadillo -llapack -lblas -lgsl
