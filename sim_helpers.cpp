@@ -369,30 +369,10 @@ bool read_mean_params_txt(const std::string& path,
 }
 
 bool read_mean_inverse_cdf_csv(const std::string& path,
-                               std::vector<double>& u,
-                               std::vector<double>& v)
+                               TimeSeries<double>& mean_cdf)
 {
-    u.clear(); v.clear();
-    std::ifstream f(path.c_str());
-    if (!f) return false;
-
-    std::string header;
-    if (!std::getline(f, header)) return false;
-
-    char delim = detect_delim(header);
-
-    std::string line;
-    while (std::getline(f, line)) {
-        if (trim_copy(line).empty()) continue;
-        auto a = split_line_delim(line, delim);
-        if (a.size() < 2) continue;
-        double uu, vv;
-        if (!try_parse_double(a[0], uu)) continue;
-        if (!try_parse_double(a[1], vv)) continue;
-        u.push_back(uu);
-        v.push_back(vv);
-    }
-    return !u.empty();
+    mean_cdf.readfile(path);
+    return !mean_cdf.empty();
 }
 
 bool read_xy_table(const std::string& path, std::vector<double>& x, std::vector<double>& y)

@@ -2511,6 +2511,70 @@ TimeSeries<double> Grid2D::extractFieldCDF(const std::string& field_name,
     return inverse_cdf;
 }
 
+TimeSeries<double> Grid2D::extractFieldPDF(const std::string& field_name,
+                                           ArrayKind kind,
+                                           int num_bins,
+                                           double threshold) const
+{
+    // Export field to TimeSeries
+    TimeSeries<double> field_data = exportFieldToTimeSeries(field_name, kind);
+
+    // Collect values above threshold
+    std::vector<double> values;
+    values.reserve(field_data.size());
+    for (size_t i = 0; i < field_data.size(); ++i) {
+        double val = field_data[i].c;
+        if (val >= threshold) {
+            values.push_back(val);
+        }
+    }
+
+    if (values.empty()) return TimeSeries<double>();
+
+    // Find min and max of FILTERED data
+    double min_val = *std::min_element(values.begin(), values.end());
+    double max_val = *std::max_element(values.begin(), values.end());
+
+    // Extend range slightly to ensure bins capture all values
+    double range = max_val - min_val;
+    double bin_width = range / static_cast<double>(num_bins);
+
+    // Create bins: we'll have num_bins+2 to include zero padding
+    TimeSeries<double> pdf;
+
+    // First point: CLAMP to threshold if needed
+    double bin_start = min_val - bin_width;
+    if (bin_start < threshold) {
+        bin_start = threshold;  // Don't go below threshold!
+    }
+    pdf.addPoint(bin_start, 0.0);
+
+    // Create histogram bins
+    std::vector<int> counts(num_bins, 0);
+
+    for (double val : values) {
+        int bin_idx = static_cast<int>((val - min_val) / bin_width);
+        if (bin_idx < 0) bin_idx = 0;
+        if (bin_idx >= num_bins) bin_idx = num_bins - 1;
+        counts[bin_idx]++;
+    }
+
+    // Convert counts to density (normalized PDF)
+    double total_count = static_cast<double>(values.size());
+
+    for (int i = 0; i < num_bins; ++i) {
+        double bin_center = min_val + (i + 0.5) * bin_width;
+        double density = counts[i] / (total_count * bin_width);
+        pdf.addPoint(bin_center, density);
+    }
+
+    // Last point: bin after data (density = 0)
+    double bin_end = max_val + bin_width;
+    pdf.addPoint(bin_end, 0.0);
+
+    return pdf;
+}
+
 double Grid2D::getFieldValueAtCDF(const std::string& field_name, ArrayKind kind, double u) const
 {
     TimeSeries<double> inverse_cdf = extractFieldCDF(field_name, kind);

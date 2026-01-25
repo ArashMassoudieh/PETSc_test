@@ -541,6 +541,11 @@ public:
                                        int num_bins = 100,
                                        double threshold = -std::numeric_limits<double>::max()) const;
 
+    TimeSeries<double> extractFieldPDF(const std::string& field_name,
+                                       ArrayKind kind,
+                                       int num_bins = 100,
+                                       double threshold = -std::numeric_limits<double>::max()) const;
+
     /**
     * @brief Get field value at a given cumulative probability
     * @param field_name Name of the field

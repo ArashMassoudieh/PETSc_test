@@ -122,9 +122,9 @@ int main(int argc, char** argv) {
     // -----------------------------
     // Domain / grid resolution
     // -----------------------------
-    int nx = 300;
-    int nu = 100;
-    int ny = 100;
+    int nx = 30;
+    int nu = 10;
+    int ny = 10;
     double Lx = 3.0;
     double Ly = 1.0;
     double correlation_ls_x = 1;
@@ -136,12 +136,13 @@ int main(int argc, char** argv) {
     // -----------------------------
     // Realizations
     // -----------------------------
-    const int nReal_default = 20;
-    const double du = 0.01;
-    const int nU = (int)std::round(1.0 / du) + 1;
+    const int nReal_default = 1;
+    const double du = 1/double(nu);
 
     std::vector<double> lc_all, lx_all, ly_all, dt_all;
-    std::vector<double> invcdf_sum(nU, 0.0);
+    TimeSeriesSet<double> inverse_qx_cdfs;
+    TimeSeriesSet<double> qx_pdfs;
+
 
     std::string stats_csv = joinPath(run_dir, "fine_params_all.csv");
     if (!upscale_only && rank == 0) {
@@ -243,8 +244,10 @@ int main(int argc, char** argv) {
 
             // inverse CDF
             TimeSeries<double> qx_inverse_cdf = g.extractFieldCDF("qx", Grid2D::ArrayKind::Fx, 100,1e-6);
+            TimeSeries<double> qx_pdf = g.extractFieldPDF("qx", Grid2D::ArrayKind::Fx, 100,1e-6);
             qx_inverse_cdf = qx_inverse_cdf.make_uniform(du);
             qx_inverse_cdf.writefile(joinPath(fine_dir, pfx + "qx_inverse_cdf.txt"));
+            qx_pdf.writefile(joinPath(fine_dir, pfx + "qx_pdf.txt"));
 
             // dt
             double dt_optimal = 0.5 * g.dx() / g.fieldMinMax("qx", Grid2D::ArrayKind::Fx).second;
@@ -336,11 +339,8 @@ int main(int argc, char** argv) {
                 ly_all.push_back(lambda_y_emp);
                 dt_all.push_back(dt_optimal);
 
-                for (int k = 0; k < nU; ++k) {
-                    double u = k * du;
-                    invcdf_sum[k] += qx_inverse_cdf.interpol(u);
-                }
-
+                inverse_qx_cdfs.append(qx_inverse_cdf,"qx_inverse_cdf"+aquiutils::numbertostring(r+1));
+                qx_pdfs.append(qx_pdf,"qx_pdf" + aquiutils::numbertostring(r+1));
                 std::ofstream f(stats_csv, std::ios::app);
                 f << r << "," << advection_correlation_length_scale << ","
                   << lambda_x_emp << "," << lambda_y_emp << "," << dt_optimal << "\n";
@@ -357,12 +357,15 @@ int main(int argc, char** argv) {
         }
     }
 
+    inverse_qx_cdfs.write(joinPath(run_dir, "qx_inverse_cdfs.txt"));
+    qx_pdfs.write(joinPath(run_dir, "qx_pdfs.txt"));
+    qx_pdfs.mean_ts().writefile(joinPath(run_dir, "qx_mean_pdf.txt"));
     // =====================================================================
     // MEAN PARAMS + UPSCALED RUN
     // =====================================================================
 
     double lc_mean = 0, lx_mean = 0, ly_mean = 0, dt_mean = 0;
-    std::vector<double> invcdf_mean;
+    TimeSeries<double> invcdf_mean;
 
     if (rank == 0) {
         if (!upscale_only) {
@@ -371,27 +374,17 @@ int main(int argc, char** argv) {
             lx_mean = mean_of(lx_all);
             ly_mean = mean_of(ly_all);
             dt_mean = mean_of(dt_all);
+            invcdf_mean = inverse_qx_cdfs.mean_ts();
+            invcdf_mean.writefile(joinPath(run_dir, "mean_qx_inverse_cdf.txt"));
 
-            invcdf_mean.resize(nU, 0.0);
-            for (int k = 0; k < nU; ++k) invcdf_mean[k] = invcdf_sum[k] / (double)nReal;
+            std::ofstream f(joinPath(run_dir, "mean_params.txt"));
+            f << "nReal=" << nReal << "\n";
+            f << "lc_mean=" << lc_mean << "\n";
+            f << "lambda_x_mean=" << lx_mean << "\n";
+            f << "lambda_y_mean=" << ly_mean << "\n";
+            f << "dt_mean=" << dt_mean << "\n";
+            f << "du=" << du << "\n";
 
-            {
-                std::ofstream f(joinPath(run_dir, "mean_params.txt"));
-                f << "nReal=" << nReal << "\n";
-                f << "lc_mean=" << lc_mean << "\n";
-                f << "lambda_x_mean=" << lx_mean << "\n";
-                f << "lambda_y_mean=" << ly_mean << "\n";
-                f << "dt_mean=" << dt_mean << "\n";
-                f << "du=" << du << "\n";
-            }
-            {
-                std::ofstream f(joinPath(run_dir, "mean_qx_inverse_cdf.txt"));
-                f << "u,v\n";
-                for (int k = 0; k < nU; ++k) {
-                    double u = k * du;
-                    f << u << "," << invcdf_mean[k] << "\n";
-                }
-            }
         } else {
             const std::string mean_params_path = joinPath(run_dir, "mean_params.txt");
             const std::string mean_cdf_path    = joinPath(run_dir, "mean_qx_inverse_cdf.txt");
@@ -399,16 +392,11 @@ int main(int argc, char** argv) {
             bool ok_params = fileExists(mean_params_path) &&
                              read_mean_params_txt(mean_params_path, lc_mean, lx_mean, ly_mean, dt_mean);
 
-            std::vector<double> uvec, vvec;
+            TimeSeries<double> mean_qx_cdf;
             bool ok_cdf = fileExists(mean_cdf_path) &&
-                          read_mean_inverse_cdf_csv(mean_cdf_path, uvec, vvec);
+                          read_mean_inverse_cdf_csv(mean_cdf_path, mean_qx_cdf);
 
             if (ok_params && ok_cdf) {
-                invcdf_mean.assign(nU, 0.0);
-                for (int k = 0; k < nU; ++k) {
-                    double u = k * du;
-                    invcdf_mean[k] = interp1_linear(uvec, vvec, u);
-                }
                 std::cout << "Loaded mean_params.txt and mean_qx_inverse_cdf.txt\n";
             } else {
                 std::cout << "Mean files missing/incomplete; reconstructing from fine_* folders...\n";
@@ -464,40 +452,25 @@ int main(int argc, char** argv) {
                     std::cout << "Loaded params from fine meta.txt files\n";
                 }
 
-                std::fill(invcdf_sum.begin(), invcdf_sum.end(), 0.0);
-                int used = 0;
-                for (auto& pr : fine_folders) {
-                    int rr = pr.first;
-                    std::string fine_dir = pr.second;
-                    if (accumulate_inverse_cdf_on_grid(fine_dir, rr, du, nU, invcdf_sum)) used++;
-                }
-                if (used == 0) {
-                    std::cerr << "ERROR: No qx_inverse_cdf.txt files could be read.\n";
-                    MPI_Abort(PETSC_COMM_WORLD, 5);
-                }
 
-                invcdf_mean.resize(nU, 0.0);
-                for (int k = 0; k < nU; ++k) invcdf_mean[k] = invcdf_sum[k] / (double)used;
+                std::ofstream f(joinPath(run_dir, "mean_params.txt"));
+                //f << "nReal=" << used << "\n"; not sure what used was
+                f << "lc_mean=" << lc_mean << "\n";
+                f << "lambda_x_mean=" << lx_mean << "\n";
+                f << "lambda_y_mean=" << ly_mean << "\n";
+                f << "dt_mean=" << dt_mean << "\n";
+                f << "du=" << du << "\n";
 
-                {
-                    std::ofstream f(joinPath(run_dir, "mean_params.txt"));
-                    f << "nReal=" << used << "\n";
-                    f << "lc_mean=" << lc_mean << "\n";
-                    f << "lambda_x_mean=" << lx_mean << "\n";
-                    f << "lambda_y_mean=" << ly_mean << "\n";
-                    f << "dt_mean=" << dt_mean << "\n";
-                    f << "du=" << du << "\n";
-                }
                 {
                     std::ofstream f(joinPath(run_dir, "mean_qx_inverse_cdf.txt"));
                     f << "u,v\n";
-                    for (int k = 0; k < nU; ++k) {
+                    for (int k = 0; k < nu; ++k) {
                         double u = k * du;
-                        f << u << "," << invcdf_mean[k] << "\n";
+                        f << u << "," << invcdf_mean.getValue(k) << "\n";
                     }
                 }
 
-                std::cout << "Reconstruction done from " << used << " fine realizations.\n";
+                //std::cout << "Reconstruction done from " << used << " fine realizations.\n";
             }
         }
     }
@@ -512,12 +485,6 @@ int main(int argc, char** argv) {
     MPI_Bcast(&nU_b, 1, MPI_INT, 0, PETSC_COMM_WORLD);
     if (rank != 0) invcdf_mean.resize(nU_b);
     MPI_Bcast(invcdf_mean.data(), nU_b, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
-
-    TimeSeries<double> qx_inverse_cdf_mean;
-    for (int k = 0; k < nU; ++k) {
-        double u = k * du;
-        qx_inverse_cdf_mean.append(u, invcdf_mean[k]);
-    }
 
     // Upscaled folder + prefix
     std::string up_dir = joinPath(run_dir, "upscaled_mean");
@@ -549,7 +516,7 @@ int main(int argc, char** argv) {
 
     for (int j = 0; j < nu; ++j) {
         double u = static_cast<double>(j) / (nu - 1);
-        double v_at_u = qx_inverse_cdf_mean.interpol(u);
+        double v_at_u = invcdf_mean.interpol(u);
         for (int i = 0; i < nx + 1; ++i) {
             int id = j * (nx + 1) + i;
             if (id >= qx_size) {
@@ -577,6 +544,7 @@ int main(int argc, char** argv) {
 
     g_u.computeMixingDiffusionCoefficient();
     g_u.writeNamedVTI("D_y", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "D_y.vti"));
+    g_u.writeNamedMatrix("D_y",Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "D_y.txt"));
 
     g_u.assignConstant("C", Grid2D::ArrayKind::Cell, 0);
 

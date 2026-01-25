@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <sstream>
 #include <ctime>
+#include <TimeSeries.h>
 
 #include <petscsys.h>   // PetscInt
 
@@ -135,8 +136,7 @@ bool read_mean_params_txt(
 
 bool read_mean_inverse_cdf_csv(
     const std::string& path,
-    std::vector<double>& u,
-    std::vector<double>& v
+    TimeSeries<double>&
 );
 
 bool read_xy_table(const std::string& path, std::vector<double>& x, std::vector<double>& y);
