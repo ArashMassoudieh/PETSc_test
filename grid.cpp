@@ -2473,33 +2473,40 @@ void Grid2D::mixingPDFStep(double dt, const char* ksp_prefix)
 }
 
 
-TimeSeries<double> Grid2D::extractFieldCDF(const std::string& field_name, ArrayKind kind, int num_bins) const
+TimeSeries<double> Grid2D::extractFieldCDF(const std::string& field_name,
+                                           ArrayKind kind,
+                                           int num_bins,
+                                           double threshold) const
 {
-    // First, export field to TimeSeries
+    // Export field to TimeSeries
     TimeSeries<double> field_data = exportFieldToTimeSeries(field_name, kind);
 
-    // Get the PDF using the distribution() function
-    TimeSeries<double> pdf = field_data.distribution(num_bins,0);
+    // Collect values above threshold
+    std::vector<double> sorted_values;
+    sorted_values.reserve(field_data.size());
+    for (size_t i = 0; i < field_data.size(); ++i) {
+        double val = field_data[i].c;
+        if (val >= threshold) {  // Only include values >= threshold
+            sorted_values.push_back(val);
+        }
+    }
 
-    // Integrate PDF to get CDF, but store as inverse CDF for interpolation
-    // We want: time = cumulative probability (u), value = field value
+    if (sorted_values.empty()) return TimeSeries<double>();
+
+    std::sort(sorted_values.begin(), sorted_values.end());
+
+    // Create inverse CDF from the filtered data
     TimeSeries<double> inverse_cdf;
-    inverse_cdf.reserve(pdf.size());
+    size_t n = sorted_values.size();
+    size_t step = std::max(1UL, n / num_bins);
 
-    double cumulative = 0.0;
-    double total_prob = 0.0;
-
-    // First pass: compute total to normalize
-    for (size_t i = 0; i < pdf.size(); ++i) {
-        total_prob += pdf.getValue(i);
+    for (size_t i = 0; i < n; i += step) {
+        double u = static_cast<double>(i) / static_cast<double>(n - 1);
+        inverse_cdf.addPoint(u, sorted_values[i]);
     }
 
-    // Second pass: compute inverse CDF (cumulative prob -> value)
-    for (size_t i = 0; i < pdf.size(); ++i) {
-        cumulative += pdf.getValue(i) / total_prob;
-        // Store: time = u (cumulative prob), value = field value
-        inverse_cdf.addPoint(cumulative, pdf.getTime(i));
-    }
+    // Always include the last point at u=1.0
+    inverse_cdf.addPoint(1.0, sorted_values[n - 1]);
 
     return inverse_cdf;
 }

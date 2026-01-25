@@ -241,6 +241,11 @@ int main(int argc, char** argv) {
             corr_y.writefile(joinPath(fine_dir, pfx + "velocity_correlation_y.txt"));
             double lambda_y_emp = corr_y.fitExponentialDecay();
 
+            // inverse CDF
+            TimeSeries<double> qx_inverse_cdf = g.extractFieldCDF("qx", Grid2D::ArrayKind::Fx, 100,1e-6);
+            qx_inverse_cdf = qx_inverse_cdf.make_uniform(du);
+            qx_inverse_cdf.writefile(joinPath(fine_dir, pfx + "qx_inverse_cdf.txt"));
+
             // dt
             double dt_optimal = 0.5 * g.dx() / g.fieldMinMax("qx", Grid2D::ArrayKind::Fx).second;
 
@@ -259,9 +264,9 @@ int main(int argc, char** argv) {
             g.setBTCLocations(xLocations);
 
             TimeSeriesSet<double> BTCs_FineScaled;
-            g.SolveTransport(10,
+            g.SolveTransport(20,
                              std::min(dt_optimal, 0.5 / 10.0),
-                             "transport_", 50,
+                             "transport_", 500,
                              fine_dir,
                              "C",
                              &BTCs_FineScaled,
@@ -305,10 +310,7 @@ int main(int argc, char** argv) {
             pathways.writeToFile(joinPath(fine_dir, pfx + "pathway_summary.txt"));
             pathways.writeCombinedVTK(joinPath(fine_dir, pfx + "all_pathways.vtk"));
 
-            // inverse CDF
-            TimeSeries<double> qx_inverse_cdf = g.extractFieldCDF("qx", Grid2D::ArrayKind::Fx, 100);
-            qx_inverse_cdf = qx_inverse_cdf.make_uniform(du);
-            qx_inverse_cdf.writefile(joinPath(fine_dir, pfx + "qx_inverse_cdf.txt"));
+
 
             // meta
             if (rank == 0) {
@@ -358,6 +360,7 @@ int main(int argc, char** argv) {
     // =====================================================================
     // MEAN PARAMS + UPSCALED RUN
     // =====================================================================
+
     double lc_mean = 0, lx_mean = 0, ly_mean = 0, dt_mean = 0;
     std::vector<double> invcdf_mean;
 
@@ -564,9 +567,9 @@ int main(int argc, char** argv) {
 
     g_u.setMixingParams(lc_mean, lx_mean, ly_mean);
 
-    double t_end_pdf = 10;
+    double t_end_pdf = 20;
     double dt_pdf = dt_mean;
-    int output_interval_pdf = 50;
+    int output_interval_pdf = 500;
 
     g_u.SetVal("diffusion", Diffusion_coefficient);
     g_u.SetVal("porosity", 1.0);
