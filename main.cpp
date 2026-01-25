@@ -244,7 +244,7 @@ int main(int argc, char** argv) {
 
             // inverse CDF
             TimeSeries<double> qx_inverse_cdf = g.extractFieldCDF("qx", Grid2D::ArrayKind::Fx, 100,1e-6);
-            TimeSeries<double> qx_pdf = g.extractFieldPDF("qx", Grid2D::ArrayKind::Fx, 100,1e-6);
+            TimeSeries<double> qx_pdf = g.extractFieldPDF("qx", Grid2D::ArrayKind::Fx, 50,1e-6,true);
             qx_inverse_cdf = qx_inverse_cdf.make_uniform(du);
             qx_inverse_cdf.writefile(joinPath(fine_dir, pfx + "qx_inverse_cdf.txt"));
             qx_pdf.writefile(joinPath(fine_dir, pfx + "qx_pdf.txt"));

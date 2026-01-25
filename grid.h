@@ -536,12 +536,13 @@ public:
      * @param num_bins Number of bins for the distribution
      * @return TimeSeries where time=value and value=cumulative probability
      */
-    TimeSeries<double> extractFieldCDF(const std::string& field_name,
+    TimeSeries<double> extractFieldPDF(const std::string& field_name,
                                        ArrayKind kind,
                                        int num_bins = 100,
-                                       double threshold = -std::numeric_limits<double>::max()) const;
+                                       double threshold = -std::numeric_limits<double>::max(),
+                                       bool use_log_bins = false) const;
 
-    TimeSeries<double> extractFieldPDF(const std::string& field_name,
+    TimeSeries<double> extractFieldCDF(const std::string& field_name,
                                        ArrayKind kind,
                                        int num_bins = 100,
                                        double threshold = -std::numeric_limits<double>::max()) const;

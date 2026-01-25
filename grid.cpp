@@ -2486,7 +2486,7 @@ TimeSeries<double> Grid2D::extractFieldCDF(const std::string& field_name,
     sorted_values.reserve(field_data.size());
     for (size_t i = 0; i < field_data.size(); ++i) {
         double val = field_data[i].c;
-        if (val >= threshold) {  // Only include values >= threshold
+        if (val >= threshold) {
             sorted_values.push_back(val);
         }
     }
@@ -2498,15 +2498,24 @@ TimeSeries<double> Grid2D::extractFieldCDF(const std::string& field_name,
     // Create inverse CDF from the filtered data
     TimeSeries<double> inverse_cdf;
     size_t n = sorted_values.size();
-    size_t step = std::max(1UL, n / num_bins);
 
-    for (size_t i = 0; i < n; i += step) {
-        double u = static_cast<double>(i) / static_cast<double>(n - 1);
-        inverse_cdf.addPoint(u, sorted_values[i]);
+    // ALWAYS start at u=0 with the minimum value (>= threshold)
+    inverse_cdf.addPoint(0.0, sorted_values[0]);
+
+    // Add intermediate points
+    if (num_bins > 0 && n > 1) {
+        size_t step = std::max(1UL, n / static_cast<size_t>(num_bins));
+
+        for (size_t i = step; i < n - 1; i += step) {  // Stop before n-1
+            double u = static_cast<double>(i) / static_cast<double>(n - 1);
+            inverse_cdf.addPoint(u, sorted_values[i]);
+        }
     }
 
-    // Always include the last point at u=1.0
-    inverse_cdf.addPoint(1.0, sorted_values[n - 1]);
+    // ALWAYS end at u=1.0 with the maximum value
+    if (n > 1) {
+        inverse_cdf.addPoint(1.0, sorted_values[n - 1]);
+    }
 
     return inverse_cdf;
 }
@@ -2514,63 +2523,29 @@ TimeSeries<double> Grid2D::extractFieldCDF(const std::string& field_name,
 TimeSeries<double> Grid2D::extractFieldPDF(const std::string& field_name,
                                            ArrayKind kind,
                                            int num_bins,
-                                           double threshold) const
+                                           double threshold,
+                                           bool use_log_bins) const
 {
     // Export field to TimeSeries
     TimeSeries<double> field_data = exportFieldToTimeSeries(field_name, kind);
 
-    // Collect values above threshold
-    std::vector<double> values;
-    values.reserve(field_data.size());
+    // Filter values above threshold
+    TimeSeries<double> filtered_data;
     for (size_t i = 0; i < field_data.size(); ++i) {
-        double val = field_data[i].c;
-        if (val >= threshold) {
-            values.push_back(val);
+        if (field_data[i].c >= threshold) {
+            filtered_data.append(field_data[i].t, field_data[i].c);
         }
     }
 
-    if (values.empty()) return TimeSeries<double>();
+    if (filtered_data.size() == 0) return TimeSeries<double>();
 
-    // Find min and max of FILTERED data
-    double min_val = *std::min_element(values.begin(), values.end());
-    double max_val = *std::max_element(values.begin(), values.end());
-
-    // Extend range slightly to ensure bins capture all values
-    double range = max_val - min_val;
-    double bin_width = range / static_cast<double>(num_bins);
-
-    // Create bins: we'll have num_bins+2 to include zero padding
+    // Use the existing distribution functions
     TimeSeries<double> pdf;
-
-    // First point: CLAMP to threshold if needed
-    double bin_start = min_val - bin_width;
-    if (bin_start < threshold) {
-        bin_start = threshold;  // Don't go below threshold!
+    if (use_log_bins) {
+        pdf = filtered_data.distributionLog(num_bins, 0);
+    } else {
+        pdf = filtered_data.distribution(num_bins, 0);
     }
-    pdf.addPoint(bin_start, 0.0);
-
-    // Create histogram bins
-    std::vector<int> counts(num_bins, 0);
-
-    for (double val : values) {
-        int bin_idx = static_cast<int>((val - min_val) / bin_width);
-        if (bin_idx < 0) bin_idx = 0;
-        if (bin_idx >= num_bins) bin_idx = num_bins - 1;
-        counts[bin_idx]++;
-    }
-
-    // Convert counts to density (normalized PDF)
-    double total_count = static_cast<double>(values.size());
-
-    for (int i = 0; i < num_bins; ++i) {
-        double bin_center = min_val + (i + 0.5) * bin_width;
-        double density = counts[i] / (total_count * bin_width);
-        pdf.addPoint(bin_center, density);
-    }
-
-    // Last point: bin after data (density = 0)
-    double bin_end = max_val + bin_width;
-    pdf.addPoint(bin_end, 0.0);
 
     return pdf;
 }
