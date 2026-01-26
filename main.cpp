@@ -122,9 +122,9 @@ int main(int argc, char** argv) {
     // -----------------------------
     // Domain / grid resolution
     // -----------------------------
-    int nx = 600;
-    int nu = 200;
-    int ny = 200;
+    int nx = 300;
+    int nu = 100;
+    int ny = 100;
     double Lx = 3.0;
     double Ly = 1.0;
     double correlation_ls_x = 1;
@@ -327,6 +327,7 @@ int main(int argc, char** argv) {
                 m << "realization=" << r << "\n";
                 m << "nx=" << nx << "\nny=" << ny << "\nnu=" << nu << "\n";
                 m << "Lx=" << Lx << "\nLy=" << Ly << "\n";
+                m << "D=" << Diffusion_coefficient << "\n";
                 m << "correlation_ls_x=" << correlation_ls_x << "\n";
                 m << "correlation_ls_y=" << correlation_ls_y << "\n";
                 m << "stdev=" << stdev << "\n";
