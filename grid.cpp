@@ -2564,7 +2564,6 @@ void Grid2D::computeMixingDiffusionCoefficient()
         std::vector<double> D_y_data(nx_ * (ny_ + 1), 0.0);
         fluxes_["D_y"] = D_y_data;
     }
-
     auto& D_y = flux("D_y");
 
     // For each vertical face
@@ -2572,15 +2571,20 @@ void Grid2D::computeMixingDiffusionCoefficient()
         for (int i = 0; i < nx_; ++i) {
             int idx = j * nx_ + i;
 
-            // Compute u at this face (same as for q_y)
+            // Compute u at this face
             double u;
             if (j == 0) {
                 u = 0.0;
             } else if (j == ny_) {
                 u = 1.0;
             } else {
-                // Average of cells above and below
                 u = static_cast<double>(j - 0.5) / (ny_ - 1);
+            }
+
+            // At boundaries u=0 and u=1, phi(Phi^{-1}(u)) = 0, so D_y = 0
+            if (j == 0 || j == ny_) {
+                D_y[idx] = 0.0;
+                continue;
             }
 
             // Get velocity at this location (average from neighboring cells)
