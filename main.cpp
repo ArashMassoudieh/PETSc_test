@@ -142,6 +142,9 @@ int main(int argc, char** argv) {
     std::vector<double> lc_all, lx_all, ly_all, dt_all;
     TimeSeriesSet<double> inverse_qx_cdfs;
     TimeSeriesSet<double> qx_pdfs;
+    TimeSeriesSet<double> lambda_x_correlations;
+    TimeSeriesSet<double> lambda_y_correlations;
+    TimeSeriesSet<double> lambda_a_correlations;
 
 
     std::string stats_csv = joinPath(run_dir, "fine_params_all.csv");
@@ -227,6 +230,7 @@ int main(int argc, char** argv) {
                 } catch (...) {}
             }
             corr_x.writefile(joinPath(fine_dir, pfx + "velocity_correlation_x.txt"));
+            lambda_x_correlations.append(corr_x,"Realization" + aquiutils::numbertostring(r+1));
             double lambda_x_emp = corr_x.fitExponentialDecay();
 
             for (int i = 0; i < num_deltas; ++i) {
@@ -240,6 +244,7 @@ int main(int argc, char** argv) {
                 } catch (...) {}
             }
             corr_y.writefile(joinPath(fine_dir, pfx + "velocity_correlation_y.txt"));
+            lambda_y_correlations.append(corr_y,"Realization" + aquiutils::numbertostring(r+1));
             double lambda_y_emp = corr_y.fitExponentialDecay();
 
             // inverse CDF
@@ -308,6 +313,7 @@ int main(int argc, char** argv) {
             }
 
             qx_correlation.writefile(joinPath(fine_dir, pfx + "qx_correlation_vs_distance.txt"));
+            lambda_a_correlations.append(qx_correlation,"Realization" + aquiutils::numbertostring(r+1));
             double advection_correlation_length_scale = qx_correlation.fitExponentialDecay();
 
             pathways.writeToFile(joinPath(fine_dir, pfx + "pathway_summary.txt"));
@@ -452,6 +458,10 @@ int main(int argc, char** argv) {
                     std::cout << "Loaded params from fine meta.txt files\n";
                 }
 
+
+                lambda_a_correlations.write(joinPath(run_dir, "advective_correlations.txt"));
+                lambda_x_correlations.write(joinPath(run_dir, "diffusion_x_correlations.txt"));
+                lambda_y_correlations.write(joinPath(run_dir, "diffusion_y_correlations.txt"));
 
                 std::ofstream f(joinPath(run_dir, "mean_params.txt"));
                 //f << "nReal=" << used << "\n"; not sure what used was
