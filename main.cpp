@@ -64,6 +64,9 @@ int main(int argc, char** argv) {
     // CLI options
     // -----------------------------
     bool upscale_only = false;
+    bool solve_fine_scale_transport = true;
+    bool solve_upscale_transport = true;
+
     std::string resume_run_dir = output_dir + "/run_20260115_132010";
 
     bool use_timeseriesset_mean = true;
@@ -71,6 +74,9 @@ int main(int argc, char** argv) {
     // NEW: compare switches
     TBaseMode tbase_mode = TBaseMode::Fixed;     // --tbase (default), --t-upscaled, --t-fine
     AlignMode align_mode = AlignMode::Resample;  // --resample (default), --make-uniform
+
+    upscale_only = false;
+
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -131,7 +137,7 @@ int main(int argc, char** argv) {
     double correlation_ls_y = 0.1;
     double stdev = 2.0; // new
     double g_mean = 0;
-    double Diffusion_coefficient = 0.001; // new
+    double Diffusion_coefficient = 0.01; // new
 
     // -----------------------------
     // Realizations
@@ -161,7 +167,6 @@ int main(int argc, char** argv) {
     if (!upscale_only) {
         for (int r = 1; r <= nReal; ++r) {
             const std::string rlab = makeRealLabel(r);
-
             std::string fine_dir = joinPath(run_dir, makeFineFolder(r));
             if (rank == 0) createDirectory(fine_dir);
             //MPI_Barrier(PETSC_COMM_WORLD);
@@ -272,24 +277,25 @@ int main(int argc, char** argv) {
             g.setBTCLocations(xLocations);
 
             TimeSeriesSet<double> BTCs_FineScaled;
-            g.SolveTransport(20,
-                             std::min(dt_optimal, 0.5 / 10.0),
-                             "transport_", 500,
-                             fine_dir,
-                             "C",
-                             &BTCs_FineScaled,
-                             r);
+            if (solve_fine_scale_transport)
+            {   g.SolveTransport(20,
+                                 std::min(dt_optimal, 0.5 / 10.0),
+                                 "transport_", 500,
+                                 fine_dir,
+                                 "C",
+                                 &BTCs_FineScaled,
+                                 r);
 
-            for (int i = 0; i < (int)xLocations.size() && i < (int)BTCs_FineScaled.size(); ++i) {
-                BTCs_FineScaled.setSeriesName(i, fmt_x(xLocations[i]));
+                for (int i = 0; i < (int)xLocations.size() && i < (int)BTCs_FineScaled.size(); ++i) {
+                    BTCs_FineScaled.setSeriesName(i, fmt_x(xLocations[i]));
+                }
+
+                const std::string btc_path       = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
+                const std::string btc_deriv_path = joinPath(fine_dir, pfx + "BTC_FineScaled_derivative.csv");
+
+                BTCs_FineScaled.write(btc_path);
+                BTCs_FineScaled.derivative().write(btc_deriv_path);
             }
-
-            const std::string btc_path       = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
-            const std::string btc_deriv_path = joinPath(fine_dir, pfx + "BTC_FineScaled_derivative.csv");
-
-            BTCs_FineScaled.write(btc_path);
-            BTCs_FineScaled.derivative().write(btc_deriv_path);
-
             PetscTime(&t_total1);
 
             // pathway correlation -> lc
@@ -367,6 +373,11 @@ int main(int argc, char** argv) {
     inverse_qx_cdfs.write(joinPath(run_dir, "qx_inverse_cdfs.txt"));
     qx_pdfs.write(joinPath(run_dir, "qx_pdfs.txt"));
     qx_pdfs.mean_ts().writefile(joinPath(run_dir, "qx_mean_pdf.txt"));
+
+    lambda_a_correlations.write(joinPath(run_dir, "advective_correlations.txt"));
+    lambda_x_correlations.write(joinPath(run_dir, "diffusion_x_correlations.txt"));
+    lambda_y_correlations.write(joinPath(run_dir, "diffusion_y_correlations.txt"));
+
     // =====================================================================
     // MEAN PARAMS + UPSCALED RUN
     // =====================================================================
@@ -459,10 +470,6 @@ int main(int argc, char** argv) {
                     std::cout << "Loaded params from fine meta.txt files\n";
                 }
 
-
-                lambda_a_correlations.write(joinPath(run_dir, "advective_correlations.txt"));
-                lambda_x_correlations.write(joinPath(run_dir, "diffusion_x_correlations.txt"));
-                lambda_y_correlations.write(joinPath(run_dir, "diffusion_y_correlations.txt"));
 
                 std::ofstream f(joinPath(run_dir, "mean_params.txt"));
                 //f << "nReal=" << used << "\n"; not sure what used was
@@ -563,21 +570,21 @@ int main(int argc, char** argv) {
     g_u.setBTCLocations(xLocations);
 
     TimeSeriesSet<double> BTCs_Upscaled;
-    g_u.SolveTransport(t_end_pdf, dt_pdf, "transport_", output_interval_pdf, up_dir, "Cu", &BTCs_Upscaled);
-
-    for (int i = 0; i < (int)xLocations.size() && i < (int)BTCs_Upscaled.size(); ++i) {
-        BTCs_Upscaled.setSeriesName(i, fmt_x(xLocations[i]));
-    }
-
     const std::string up_btc_path       = joinPath(up_dir, up_pfx + "BTC_Upscaled.csv");
     const std::string up_btc_deriv_path = joinPath(up_dir, up_pfx + "BTC_Upscaled_derivative.csv");
+    if (solve_upscale_transport)
+    {   g_u.SolveTransport(t_end_pdf, dt_pdf, "transport_", output_interval_pdf, up_dir, "Cu", &BTCs_Upscaled);
 
-    BTCs_Upscaled.write(up_btc_path);
-    BTCs_Upscaled.derivative().write(up_btc_deriv_path);
+        for (int i = 0; i < (int)xLocations.size() && i < (int)BTCs_Upscaled.size(); ++i) {
+            BTCs_Upscaled.setSeriesName(i, fmt_x(xLocations[i]));
+        }
 
-    g_u.writeNamedVTI_Auto("C", joinPath(up_dir, "Cu.vti"));
-    g_u.writeNamedMatrix("C", Grid2D::ArrayKind::Cell, joinPath(up_dir, up_pfx + "Cu.txt"));
+        BTCs_Upscaled.write(up_btc_path);
+        BTCs_Upscaled.derivative().write(up_btc_deriv_path);
 
+        g_u.writeNamedVTI_Auto("C", joinPath(up_dir, "Cu.vti"));
+        g_u.writeNamedMatrix("C", Grid2D::ArrayKind::Cell, joinPath(up_dir, up_pfx + "Cu.txt"));
+    }
     // =====================================================================
     // FINAL AGGREGATION CSVs for comparison / plotting
     // =====================================================================

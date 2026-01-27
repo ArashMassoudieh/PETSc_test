@@ -50,4 +50,4 @@ plot 'fine_r0001/r0001_velocity_correlation_y.txt' u 1:2 w l ls 1 notitle, \
      'fine_r0018/r0018_velocity_correlation_y.txt' u 1:2 w l ls 1 notitle, \
      'fine_r0019/r0019_velocity_correlation_y.txt' u 1:2 w l ls 1 notitle, \
      'fine_r0020/r0020_velocity_correlation_y.txt' u 1:2 w l ls 1 title 'Realizations', \
-     fit_func(x) w l ls 2 lw 4 title 'exp(-{/Symbol D}x/{/Symbol l})'
+     fit_func(x) w l ls 2 lw 4 title 'exp(-{/Symbol D}y/{/Symbol l}_y)'

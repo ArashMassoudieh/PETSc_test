@@ -4,25 +4,18 @@
 set terminal pngcairo enhanced font "Arial,28" size 1200,800
 
 # Output file
-set output 'velocity_pdfs.png'
+set output 'advective_correlation.png'
 
 # Set plot style
 set style line 1 lc rgb '#cccccc' lw 1.5  # Grey for realizations
-set style line 2 lc rgb '#000000' lw 3.0  # Black thick for mean
+set style line 2 lc rgb '#000000' lw 3.0  # Black thick for fit
 
-# Axis labels and titles
-set xlabel 'Velocity (v_x)' font "Arial,32"
-set ylabel 'PDF' font "Arial,32"
+# Axis labels
+set xlabel '{/Symbol D}x' font "Arial,32"
+set ylabel 'E[{/Symbol w}(x){/Symbol w}(x+{/Symbol D}x)]' font "Arial,32"
 
-# Set axis ranges
-set xrange [0.01:15]
-
-# Set logarithmic scales for both axes
+# Set logarithmic scale for x-axis
 set logscale x
-set logscale y
-
-# Format y-axis labels with superscript notation
-set format y "10^{%T}"
 
 # Grid
 set grid
@@ -33,9 +26,12 @@ set key bottom left
 # Set datafile separator to comma
 set datafile separator ","
 
-# Plot all 20 realizations in grey (skip first line which is header)
+# Define the exponential fit function with lambda_a = 0.294484
+fit_func(x) = exp(-x/0.294484)
+
+# Plot all 20 realizations in grey (skip header, columns 1-40 contain pairs)
 # Using column numbers: 1,2 for first realization, 3,4 for second, etc.
-plot 'qx_pdfs.txt' every ::1 u 1:2 w l ls 1 notitle, \
+plot 'advective_correlations.txt' every ::1 u 1:2 w l ls 1 notitle, \
      '' every ::1 u 3:4 w l ls 1 notitle, \
      '' every ::1 u 5:6 w l ls 1 notitle, \
      '' every ::1 u 7:8 w l ls 1 notitle, \
@@ -55,4 +51,4 @@ plot 'qx_pdfs.txt' every ::1 u 1:2 w l ls 1 notitle, \
      '' every ::1 u 35:36 w l ls 1 notitle, \
      '' every ::1 u 37:38 w l ls 1 notitle, \
      '' every ::1 u 39:40 w l ls 1 title 'Realizations', \
-     'qx_mean_pdf.txt' u 1:2 w l ls 2 lw 4 title 'Mean PDF'
+     fit_func(x) w l ls 2 lw 4 title 'exp(-{/Symbol D}x/{/Symbol l}_a)'

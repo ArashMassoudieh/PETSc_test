@@ -1,19 +1,109 @@
+#!/usr/bin/gnuplot
+
+# Set terminal to PNG with good resolution (same as other plots)
+set terminal pngcairo enhanced font "Arial,28" size 1200,800
+
+# Data and grid settings
 set datafile separator ','
 set grid
-set xlabel 't'
-set ylabel 'dC/dt'
-set key outside
-set term pngcairo size 1400,900
-set style line 1 lc rgb '#9a9a9a' lt 1 lw 1
-set style line 2 lc rgb '#000000' lt 1 lw 3
-set style line 3 lc rgb '#d60000' lt 1 lw 3
-set output '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_derivative_compare_x_0_50.png'
-set title 'x=0.50'
-plot '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:2 with lines ls 1 title 'FineDeriv_r0001_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:8 with lines ls 1 title 'FineDeriv_r0002_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:14 with lines ls 1 title 'FineDeriv_r0003_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:20 with lines ls 1 title 'FineDeriv_r0004_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:26 with lines ls 1 title 'FineDeriv_r0005_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:32 with lines ls 1 title 'FineDeriv_r0006_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:38 with lines ls 1 title 'FineDeriv_r0007_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:44 with lines ls 1 title 'FineDeriv_r0008_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:50 with lines ls 1 title 'FineDeriv_r0009_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:56 with lines ls 1 title 'FineDeriv_r0010_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:62 with lines ls 1 title 'FineDeriv_r0011_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:68 with lines ls 1 title 'FineDeriv_r0012_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:74 with lines ls 1 title 'FineDeriv_r0013_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:80 with lines ls 1 title 'FineDeriv_r0014_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:86 with lines ls 1 title 'FineDeriv_r0015_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:92 with lines ls 1 title 'FineDeriv_r0016_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:98 with lines ls 1 title 'FineDeriv_r0017_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:104 with lines ls 1 title 'FineDeriv_r0018_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:110 with lines ls 1 title 'FineDeriv_r0019_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:116 with lines ls 1 title 'FineDeriv_r0020_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:122 with lines ls 2 title 'FineDerivMean_x=0.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:128 with lines ls 3 title 'UpscaledDeriv_x=0.50'
-set output '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_derivative_compare_x_1_50.png'
-set title 'x=1.50'
-plot '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:4 with lines ls 1 title 'FineDeriv_r0001_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:10 with lines ls 1 title 'FineDeriv_r0002_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:16 with lines ls 1 title 'FineDeriv_r0003_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:22 with lines ls 1 title 'FineDeriv_r0004_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:28 with lines ls 1 title 'FineDeriv_r0005_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:34 with lines ls 1 title 'FineDeriv_r0006_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:40 with lines ls 1 title 'FineDeriv_r0007_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:46 with lines ls 1 title 'FineDeriv_r0008_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:52 with lines ls 1 title 'FineDeriv_r0009_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:58 with lines ls 1 title 'FineDeriv_r0010_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:64 with lines ls 1 title 'FineDeriv_r0011_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:70 with lines ls 1 title 'FineDeriv_r0012_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:76 with lines ls 1 title 'FineDeriv_r0013_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:82 with lines ls 1 title 'FineDeriv_r0014_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:88 with lines ls 1 title 'FineDeriv_r0015_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:94 with lines ls 1 title 'FineDeriv_r0016_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:100 with lines ls 1 title 'FineDeriv_r0017_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:106 with lines ls 1 title 'FineDeriv_r0018_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:112 with lines ls 1 title 'FineDeriv_r0019_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:118 with lines ls 1 title 'FineDeriv_r0020_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:124 with lines ls 2 title 'FineDerivMean_x=1.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:130 with lines ls 3 title 'UpscaledDeriv_x=1.50'
-set output '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_derivative_compare_x_2_50.png'
-set title 'x=2.50'
-plot '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:6 with lines ls 1 title 'FineDeriv_r0001_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:12 with lines ls 1 title 'FineDeriv_r0002_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:18 with lines ls 1 title 'FineDeriv_r0003_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:24 with lines ls 1 title 'FineDeriv_r0004_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:30 with lines ls 1 title 'FineDeriv_r0005_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:36 with lines ls 1 title 'FineDeriv_r0006_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:42 with lines ls 1 title 'FineDeriv_r0007_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:48 with lines ls 1 title 'FineDeriv_r0008_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:54 with lines ls 1 title 'FineDeriv_r0009_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:60 with lines ls 1 title 'FineDeriv_r0010_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:66 with lines ls 1 title 'FineDeriv_r0011_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:72 with lines ls 1 title 'FineDeriv_r0012_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:78 with lines ls 1 title 'FineDeriv_r0013_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:84 with lines ls 1 title 'FineDeriv_r0014_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:90 with lines ls 1 title 'FineDeriv_r0015_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:96 with lines ls 1 title 'FineDeriv_r0016_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:102 with lines ls 1 title 'FineDeriv_r0017_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:108 with lines ls 1 title 'FineDeriv_r0018_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:114 with lines ls 1 title 'FineDeriv_r0019_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:120 with lines ls 1 title 'FineDeriv_r0020_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:126 with lines ls 2 title 'FineDerivMean_x=2.50', '/home/arash/Projects/UpscalingResults/run_20260125_150108/BTC_Derivative_Compare.csv' using 1:132 with lines ls 3 title 'UpscaledDeriv_x=2.50'
+
+# Axis labels with larger fonts
+set xlabel 't' font "Arial,32"
+set ylabel 'c/c_0' font "Arial,32"
+
+# Set logarithmic scale for y-axis
+set logscale y
+
+# Format y-axis labels with superscript notation
+set format y "10^{%T}"
+
+# Set y-axis range with minimum of 1e-6
+set yrange [1e-6:*]
+
+# Legend position
+set key bottom left
+
+# Define line styles
+set style line 1 lc rgb '#cccccc' lw 1.5  # Grey for realizations
+set style line 2 lc rgb '#000000' lw 3.0  # Black for mean
+set style line 3 lc rgb '#d60000' lw 3.0  # Red for upscaled
+
+# Plot for x=0.50
+set output 'BTC_derivative_compare_x_0_50.png'
+set title 'x=0.50' font "Arial,32"
+plot 'BTC_Derivative_Compare.csv' using 1:2 with lines ls 1 notitle, \
+     '' using 1:8 with lines ls 1 notitle, \
+     '' using 1:14 with lines ls 1 notitle, \
+     '' using 1:20 with lines ls 1 notitle, \
+     '' using 1:26 with lines ls 1 notitle, \
+     '' using 1:32 with lines ls 1 notitle, \
+     '' using 1:38 with lines ls 1 notitle, \
+     '' using 1:44 with lines ls 1 notitle, \
+     '' using 1:50 with lines ls 1 notitle, \
+     '' using 1:56 with lines ls 1 notitle, \
+     '' using 1:62 with lines ls 1 notitle, \
+     '' using 1:68 with lines ls 1 notitle, \
+     '' using 1:74 with lines ls 1 notitle, \
+     '' using 1:80 with lines ls 1 notitle, \
+     '' using 1:86 with lines ls 1 notitle, \
+     '' using 1:92 with lines ls 1 notitle, \
+     '' using 1:98 with lines ls 1 notitle, \
+     '' using 1:104 with lines ls 1 notitle, \
+     '' using 1:110 with lines ls 1 notitle, \
+     '' using 1:116 with lines ls 1 title 'Realizations', \
+     '' using 1:122 with lines ls 2 title 'Mean', \
+     '' using 1:128 with lines ls 3 title 'Upscaled'
+
+# Plot for x=1.50
+set output 'BTC_derivative_compare_x_1_50.png'
+set title 'x=1.50' font "Arial,32"
+plot 'BTC_Derivative_Compare.csv' using 1:4 with lines ls 1 notitle, \
+     '' using 1:10 with lines ls 1 notitle, \
+     '' using 1:16 with lines ls 1 notitle, \
+     '' using 1:22 with lines ls 1 notitle, \
+     '' using 1:28 with lines ls 1 notitle, \
+     '' using 1:34 with lines ls 1 notitle, \
+     '' using 1:40 with lines ls 1 notitle, \
+     '' using 1:46 with lines ls 1 notitle, \
+     '' using 1:52 with lines ls 1 notitle, \
+     '' using 1:58 with lines ls 1 notitle, \
+     '' using 1:64 with lines ls 1 notitle, \
+     '' using 1:70 with lines ls 1 notitle, \
+     '' using 1:76 with lines ls 1 notitle, \
+     '' using 1:82 with lines ls 1 notitle, \
+     '' using 1:88 with lines ls 1 notitle, \
+     '' using 1:94 with lines ls 1 notitle, \
+     '' using 1:100 with lines ls 1 notitle, \
+     '' using 1:106 with lines ls 1 notitle, \
+     '' using 1:112 with lines ls 1 notitle, \
+     '' using 1:118 with lines ls 1 title 'Realizations', \
+     '' using 1:124 with lines ls 2 title 'Mean', \
+     '' using 1:130 with lines ls 3 title 'Upscaled'
+
+# Plot for x=2.50
+set output 'BTC_derivative_compare_x_2_50.png'
+set title 'x=2.50' font "Arial,32"
+plot 'BTC_Derivative_Compare.csv' using 1:6 with lines ls 1 notitle, \
+     '' using 1:12 with lines ls 1 notitle, \
+     '' using 1:18 with lines ls 1 notitle, \
+     '' using 1:24 with lines ls 1 notitle, \
+     '' using 1:30 with lines ls 1 notitle, \
+     '' using 1:36 with lines ls 1 notitle, \
+     '' using 1:42 with lines ls 1 notitle, \
+     '' using 1:48 with lines ls 1 notitle, \
+     '' using 1:54 with lines ls 1 notitle, \
+     '' using 1:60 with lines ls 1 notitle, \
+     '' using 1:66 with lines ls 1 notitle, \
+     '' using 1:72 with lines ls 1 notitle, \
+     '' using 1:78 with lines ls 1 notitle, \
+     '' using 1:84 with lines ls 1 notitle, \
+     '' using 1:90 with lines ls 1 notitle, \
+     '' using 1:96 with lines ls 1 notitle, \
+     '' using 1:102 with lines ls 1 notitle, \
+     '' using 1:108 with lines ls 1 notitle, \
+     '' using 1:114 with lines ls 1 notitle, \
+     '' using 1:120 with lines ls 1 title 'Realizations', \
+     '' using 1:126 with lines ls 2 title 'Mean', \
+     '' using 1:132 with lines ls 3 title 'Upscaled'
+
 unset output
