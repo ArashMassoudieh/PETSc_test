@@ -1633,7 +1633,7 @@ void Grid2D::SolveTransport(const double& t_end,
                 btc_values.reserve(BTCLocations_.size());
 
                 for (size_t i = 0; i < BTCLocations_.size(); i++) {
-                    double avg = getAverageAlongY("C", BTCLocations_[i]);
+                    double avg = getAverageAlongYFromGPU(BTCLocations_[i]);
                     btc_values.push_back(avg);
                 }
                 btc_data->append(current_time, btc_values);
@@ -1662,8 +1662,10 @@ void Grid2D::SolveTransport(const double& t_end,
             throw;
         }
 
-        extractConcentrationToCPU();
+
     }
+
+    extractConcentrationToCPU();
 
     std::cout << "\nTransport simulation completed successfully!\n"
               << "Final time: " << current_time << "\n"
@@ -2723,6 +2725,39 @@ double Grid2D::getAverageAlongY(const std::string& field_name, double x) const
     return sum / static_cast<double>(ny_);
 }
 
+double Grid2D::getAverageAlongYFromGPU(double x) const
+{
+    if (!c_current_) {
+        throw std::runtime_error("getAverageAlongYFromGPU: no current GPU concentration available");
+    }
+
+    // Check x bounds
+    if (x < 0.0 || x > Lx_) {
+        throw std::out_of_range("x coordinate out of domain range in getAverageAlongYFromGPU");
+    }
+
+    const int NX = nx();
+    const int NY = ny();
+
+    // Find the grid column index for this x coordinate
+    int i = static_cast<int>(x / dx());
+    if (i >= NX) i = NX - 1;  // Clamp to last column
+
+    // Get read access to GPU vector
+    const PetscScalar* c_array;
+    VecGetArrayRead(c_current_->raw(), &c_array);
+
+    // Sum all values in this column
+    double sum = 0.0;
+    for (int j = 0; j < NY; j++) {
+        int global_idx = j * NX + i;
+        sum += c_array[global_idx];
+    }
+
+    VecRestoreArrayRead(c_current_->raw(), &c_array);
+
+    return sum / static_cast<double>(NY);
+}
 void Grid2D::setBTCLocations(const std::vector<double>& locations)
 {
     BTCLocations_ = locations;

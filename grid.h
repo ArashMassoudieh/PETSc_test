@@ -565,6 +565,7 @@ public:
 
     double getFieldValueAt(const std::string& property_name, double x, double y) const;
     double getAverageAlongY(const std::string& property_name, double x) const;
+    double getAverageAlongYFromGPU(double x) const;
 
     void setBTCLocations(const std::vector<double>& locations);
     const std::vector<double>& getBTCLocations() const;
