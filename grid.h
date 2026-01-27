@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <petscsys.h>
 #include "TimeSeriesSet.h"
+#include <memory>
 
 class PETScMatrix;
 
@@ -223,7 +224,6 @@ public:
     std::pair<double, double> getVelocityAt(double x, double y,
                                             const std::string& qx_name = "qx",
                                             const std::string& qy_name = "qy") const;
-public:
     struct NeighborSet {
         std::vector<std::size_t> idx;   // global linear cell indices (j*nx_ + i)
         std::vector<double>      dist;  // anisotropic metric distance to target (same order as idx)
@@ -371,6 +371,7 @@ public:
     void assembleTransportMatrix(PETScMatrix *A, double dt) const;
 
     void assembleTransportRHS(PETScVector& b, const std::string& c_field, double dt) const;
+    void assembleTransportRHS(PETScVector& b, const PETScVector& c_old, double dt) const;
 
     void transportStep(double dt, const char* ksp_prefix);
 
@@ -529,6 +530,9 @@ public:
     // Single time step for mixing PDF
     void mixingPDFStep(double dt, const char* ksp_prefix);
 
+    void transportStepGPU(double dt, const char* ksp_prefix = nullptr);
+    void extractConcentrationToCPU();
+
      /**
      * @brief Extract empirical CDF from a field by integrating the PDF
      * @param field_name Name of the field
@@ -571,6 +575,7 @@ private:
     double Lx_, Ly_, dx_, dy_;
 
     // Transport properties
+    std::unique_ptr<PETScVector> c_current_;
     double diffusion_coeff_;     // Diffusion coefficient D
     double porosity_;           // Porosity
     double c_left_;            // Left boundary concentration

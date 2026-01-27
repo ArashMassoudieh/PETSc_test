@@ -1417,7 +1417,44 @@ void Grid2D::assembleTransportRHS(PETScVector& b,
     b.assemble();
 }
 
+void Grid2D::assembleTransportRHS(PETScVector& b,
+                                  const PETScVector& c_old,
+                                  double dt) const
+{
+    const int NX = nx(), NY = ny();
+    const double inv_dt = 1.0 / dt;
+    const double DX = dx();
+    const double inv_dx  = 1.0 / DX;
+    const double inv_dx2 = 1.0 / (DX * DX);
 
+    // Get array access to c_old (stays on GPU if possible)
+    const PetscScalar* c_array;
+    VecGetArrayRead(c_old.raw(), &c_array);
+
+    PetscInt Istart, Iend;
+    b.ownershipRange(Istart, Iend);
+
+    for (PetscInt Irow = Istart; Irow < Iend; ++Irow) {
+        const int j = static_cast<int>(Irow / NX);
+        const int i = static_cast<int>(Irow - j * NX);
+        const std::size_t cell_idx = static_cast<std::size_t>(j) * NX + i;
+
+        double rhs = c_array[cell_idx] * inv_dt;
+
+        // --- West boundary: inject boundary concentration ---
+        if (i == 0) {
+            double u_west = getVelocityX(0, j, porosity_);
+            rhs += (std::max(u_west,0.0) * inv_dx) * c_left_;
+            if (diffusion_coeff_ > 0.0) {
+                rhs += (2.0 * diffusion_coeff_ * inv_dx2) * c_left_;
+            }
+        }
+        b.setValue(Irow, rhs, INSERT_VALUES);
+    }
+
+    VecRestoreArrayRead(c_old.raw(), &c_array);
+    b.assemble();
+}
 
 void Grid2D::transportStep(double dt, const char* ksp_prefix)
 {
@@ -1586,7 +1623,7 @@ void Grid2D::SolveTransport(const double& t_end,
         double this_dt = dt;
 
         try {
-            transportStep(this_dt, ksp_prefix);
+            transportStepGPU(this_dt, ksp_prefix);
             step_count++;
             current_time += this_dt;
 
@@ -1602,18 +1639,21 @@ void Grid2D::SolveTransport(const double& t_end,
                 btc_data->append(current_time, btc_values);
             }
 
-            const int progress_interval = std::max(1, std::min(100, total_steps / 10));
-            if (step_count % progress_interval == 0 || current_time >= t_end) {
-                double progress = (current_time / t_end) * 100.0;
-                std::cout << "Step " << step_count << "/" << total_steps
-                          << ", Time: " << std::fixed << std::setprecision(6) << current_time
-                          << " (" << std::setprecision(1) << progress << "%)\n";
-                std::cout << "   Samples: ";
-                printSampleC({{0,50}, {10,50}, {50,50}, {100,50}, {200,50}, {299,50}});
-            }
+
 
             // Write snapshots
             if (output_interval > 0 && step_count % output_interval == 0) {
+                const int progress_interval = std::max(1, std::min(100, total_steps / 10));
+                if (step_count % progress_interval == 0 || current_time >= t_end) {
+                    extractConcentrationToCPU();
+                    double progress = (current_time / t_end) * 100.0;
+                    std::cout << "Step " << step_count << "/" << total_steps
+                              << ", Time: " << std::fixed << std::setprecision(6) << current_time
+                              << " (" << std::setprecision(1) << progress << "%)\n";
+                    std::cout << "   Samples: ";
+                    printSampleC({{0,50}, {10,50}, {50,50}, {100,50}, {200,50}, {299,50}});
+                }
+
                 writeNamedVTI_Auto("C", output_dir + "/" + makeVtiName(filename_, step_count));
             }
         } catch (const std::exception& e) {
@@ -1621,6 +1661,8 @@ void Grid2D::SolveTransport(const double& t_end,
                       << " at time " << current_time << ": " << e.what() << std::endl;
             throw;
         }
+
+        extractConcentrationToCPU();
     }
 
     std::cout << "\nTransport simulation completed successfully!\n"
@@ -2694,4 +2736,59 @@ const std::vector<double>& Grid2D::getBTCLocations() const
 std::vector<double>& Grid2D::getBTCLocations()
 {
     return BTCLocations_;
+}
+
+void Grid2D::transportStepGPU(double dt, const char* ksp_prefix) {
+    if (!hasFlux("qx") || !hasFlux("qy"))
+        throw std::runtime_error("transportStep: must solve flow first");
+
+    const int N = nx() * ny();
+
+    // Initialize c_current_ if this is the first call
+    if (!c_current_) {
+        c_current_ = std::make_unique<PETScVector>(N);
+
+        // Initialize from field("C") if it exists, otherwise zero
+        if (hasField("C")) {
+            auto& C = field("C");
+            PetscScalar* c_array;
+            VecGetArray(c_current_->raw(), &c_array);
+            for (int i = 0; i < N; ++i) {
+                c_array[i] = C[i];
+            }
+            VecRestoreArray(c_current_->raw(), &c_array);
+        } else {
+            VecSet(c_current_->raw(), 0.0);
+            // Also create the CPU field for later use
+            auto& C = field("C");
+            C.assign(static_cast<std::size_t>(N), 0.0);
+        }
+    }
+
+    // Assemble RHS using current GPU vector
+    PETScVector b(N);
+    assembleTransportRHS(b, *c_current_, dt);
+
+    // Solve and update c_current_
+    if (ksp_prefix) {
+        *c_current_ = A->solveNew(b, ksp_prefix);
+    } else {
+        *c_current_ = A->operator/(b);
+    }
+    // Solution stays on GPU!
+}
+
+void Grid2D::extractConcentrationToCPU() {
+    if (!c_current_) return;
+
+    auto& C = field("C");
+    PetscInt n;
+    VecGetSize(c_current_->raw(), &n);
+
+    const PetscScalar* c_array;
+    VecGetArrayRead(c_current_->raw(), &c_array);
+    for (PetscInt i = 0; i < n; ++i) {
+        C[i] = static_cast<double>(c_array[i]);
+    }
+    VecRestoreArrayRead(c_current_->raw(), &c_array);
 }

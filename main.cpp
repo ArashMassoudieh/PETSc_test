@@ -128,16 +128,16 @@ int main(int argc, char** argv) {
     // -----------------------------
     // Domain / grid resolution
     // -----------------------------
-    int nx = 300;
-    int nu = 100;
-    int ny = 100;
+    int nx = 30;
+    int nu = 10;
+    int ny = 10;
     double Lx = 3.0;
     double Ly = 1.0;
     double correlation_ls_x = 1;
     double correlation_ls_y = 0.1;
-    double stdev = 2.0; // new
+    double stdev = 2.0;
     double g_mean = 0;
-    double Diffusion_coefficient = 0.01; // new
+    double Diffusion_coefficient = 0.01;
 
     // -----------------------------
     // Realizations
@@ -212,11 +212,11 @@ int main(int argc, char** argv) {
             g.assignFromTimeSeries(QxNormalScores, "qx_normal_score", Grid2D::ArrayKind::Fx);
             g.writeNamedVTI("qx_normal_score", Grid2D::ArrayKind::Fx, joinPath(fine_dir, pfx + "qx_normal_score.vti"));
 
-            std::cout << "Sampling points for derivative ..." << std::endl;
+            /*std::cout << "Sampling points for derivative ..." << std::endl;
             TimeSeries<double> curvture = g.sampleSecondDerivative("qx_normal_score", Grid2D::ArrayKind::Fx,
                                                                    Grid2D::DerivDir::X, 10000, 0.05);
             curvture.writefile(joinPath(fine_dir, pfx + "2nd_deriv.txt"));
-
+            */
             // velocity autocorrelation (X,Y) via perturbation
             double delta_min = 0.001, delta_max = 0.2;
             int num_deltas = 30;
