@@ -37,10 +37,17 @@ int main(int argc, char** argv)
     // Simulation options (passed to sim_runner)
     // -----------------------------
     RunOptions opts;
-    std::string resume_run_dir = output_dir + "/run_20260128_132010";
+    opts.upscale_only   = false;
+    opts.hardcoded_mean = false; // IMPORTANT: do NOT default true (otherwise you always skip fine loop)
+    opts.solve_fine_scale_transport = false;
+    opts.solve_upscale_transport    = true;
 
-    opts.hardcoded_qx_cdf_path =
-        output_dir + "/run_20260128_153933/" + "mean_qx_inverse_cdf.txt";
+    // If you want a default resume folder for upscale-only:
+    std::string resume_run_dir = joinPath(output_dir, "run_20260128_153933");
+
+    // If you want to hardcode the qx inverse-CDF path from main (OPTIONAL):
+    // (This file exists in the run folder you showed.)
+     opts.hardcoded_qx_cdf_path = joinPath(resume_run_dir, "mean_qx_inverse_cdf.txt");
 
     // -----------------------------
     // Plot options (kept in main only)
@@ -61,16 +68,16 @@ int main(int argc, char** argv)
         else if (a == "--hardcoded-mean") opts.hardcoded_mean = true;
         else if (a.rfind("--run-dir=", 0) == 0) resume_run_dir = a.substr(std::string("--run-dir=").size());
 
-        // --- NEW: hardcoded qx inverse-CDF path (u,v csv) ---
+        // --- hardcoded qx inverse-CDF path (u,v csv; header optional) ---
         else if (a.rfind("--qx-cdf=", 0) == 0) opts.hardcoded_qx_cdf_path = a.substr(std::string("--qx-cdf=").size());
 
-        // --- transport toggles (optional but useful) ---
+        // --- transport toggles ---
         else if (a == "--no-fine-transport") opts.solve_fine_scale_transport = false;
         else if (a == "--fine-transport")    opts.solve_fine_scale_transport = true;
         else if (a == "--no-up-transport")   opts.solve_upscale_transport = false;
         else if (a == "--up-transport")      opts.solve_upscale_transport = true;
 
-        // --- plotter switches (stay in main) ---
+        // --- plotter switches ---
         else if (a == "--plotter") plotter = true;
 
         else if (a == "--tbase")      tbase_mode = TBaseMode::Fixed;
@@ -84,7 +91,7 @@ int main(int argc, char** argv)
         else if (a == "--no-mean-ts") use_timeseriesset_mean = false;
     }
 
-    // hardcoded mean implies upscaled-only (your old behavior)
+    // Your rule: hardcoded mean implies upscale-only
     if (opts.hardcoded_mean) opts.upscale_only = true;
 
     // -----------------------------
@@ -116,7 +123,9 @@ int main(int argc, char** argv)
     H.lx_mean  = 1.25394;
     H.ly_mean  = 0.125017;
     H.dt_mean  = 7.31122e-05;
-    H.qx_const = 1.0;   // fallback only if --qx-cdf not provided or load fails
+
+    // fallback only if --qx-cdf not provided or load fails
+    H.qx_const = 1.0;
 
     // -----------------------------
     // Prepare run_dir (MPI-safe)
@@ -134,7 +143,7 @@ int main(int argc, char** argv)
     }
 
     // -----------------------------
-    // Write compare + mean CSVs (rank0 messages only)
+    // Write compare + mean CSVs
     // -----------------------------
     for (int i = 0; i < (int)P.xLocations.size(); ++i) {
         const std::string out_cmp = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare.csv");
@@ -168,9 +177,14 @@ int main(int argc, char** argv)
     if (rank == 0) {
         std::cout << "\nMixing PDF simulation complete!\n";
         std::cout << "All outputs saved to: " << out.run_dir << "\n";
-        if (opts.hardcoded_mean && !opts.hardcoded_qx_cdf_path.empty()) {
-            std::cout << "Hardcoded mean mode: attempted qx inverse-CDF load from: "
-                      << opts.hardcoded_qx_cdf_path << "\n";
+
+        if (opts.hardcoded_mean) {
+            if (!opts.hardcoded_qx_cdf_path.empty()) {
+                std::cout << "Hardcoded mean mode: qx inverse-CDF path = "
+                          << opts.hardcoded_qx_cdf_path << "\n";
+            } else {
+                std::cout << "Hardcoded mean mode: no --qx-cdf provided; using constant qx fallback.\n";
+            }
         }
     }
 

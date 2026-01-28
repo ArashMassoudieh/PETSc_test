@@ -8,8 +8,8 @@
 // Keep sim_runner.h LIGHT.
 // Do NOT include grid.h here (it causes heavy include chains / incomplete type issues).
 // Only include what we must for types used in signatures.
-#include "TimeSeries.h"     // for TimeSeries<T> and TimeSeriesSet<T>
-#include "sim_helpers.h"    // fileExists, joinPath, createDirectory, read_mean_* helpers, mean_of, fmt_x, etc.
+#include "TimeSeries.h"     // TimeSeries<T>, TimeSeriesSet<T>
+#include "sim_helpers.h"    // FS helpers + mean_of + fmt_x + read_mean_params_txt, etc.
 
 // -----------------------------
 // Simulation switches / options
@@ -17,15 +17,16 @@
 struct RunOptions
 {
     // run modes
-    bool upscale_only = false;              // skip fine loop; do only upscaled (requires run_dir unless hardcoded_mean)
-    bool hardcoded_mean = true;            // use hardcoded lc/lx/ly/dt; and optionally load qx CDF from file
+    bool upscale_only   = false;   // skip fine loop; do only upscaled (requires run_dir unless hardcoded_mean)
+    bool hardcoded_mean = false;    // use hardcoded lc/lx/ly/dt; and optionally load qx inverse-CDF from file
 
     // transport toggles
     bool solve_fine_scale_transport = true;
     bool solve_upscale_transport    = true;
 
-    // NEW: when hardcoded_mean=true, you can supply a qx inverse-CDF file (u,v).
-    // If empty or load fails -> fallback to constant qx_const.
+    // When hardcoded_mean=true, you can supply a qx inverse-CDF file (u,v).
+    // If empty or load fails -> fallback to HardcodedMean::qx_const.
+    // NOTE: sim_runner.cpp will ALSO copy/write mean_qx_inverse_cdf.txt into the new run_dir.
     std::string hardcoded_qx_cdf_path;
 };
 
@@ -39,7 +40,7 @@ struct HardcodedMean
     double ly_mean = 0.0;
     double dt_mean = 0.0;
 
-    // fallback only when hardcoded_qx_cdf_path is not provided or load fails
+    // fallback only when RunOptions::hardcoded_qx_cdf_path is not provided or load fails
     double qx_const = 0.0;
 };
 

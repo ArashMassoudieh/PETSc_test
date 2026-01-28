@@ -8,6 +8,9 @@
 #include <algorithm>
 #include <cstdlib>
 #include <map>
+#include <sstream>
+#include <cctype>
+#include <cmath>
 
 #include "grid.h"
 #include "Pathway.h"
@@ -80,15 +83,14 @@ static inline void build_flat_invcdf(TimeSeries<double>& invcdf_mean, double qx_
     invcdf_mean.append(1.0, qx_const);
 }
 
-// NEW: load an inverse CDF from a CSV (u,v) style file.
-// Uses your existing read_mean_inverse_cdf_csv helper.
+// Load an inverse CDF from a file, tolerant to header/no-header.
 static bool try_load_hardcoded_invcdf(TimeSeries<double>& invcdf_mean, const std::string& path)
 {
     if (path.empty()) return false;
     if (!fileExists(path)) return false;
 
     TimeSeries<double> tmp;
-    if (!read_mean_inverse_cdf_csv(path, tmp)) return false;
+    if (!read_inverse_cdf_any_format(path, tmp)) return false;
     if (tmp.size() < 2) return false;
 
     invcdf_mean = tmp;
@@ -357,31 +359,40 @@ static bool build_mean_for_upscaled(
 
     if (rank != 0) return true; // only rank0 builds; broadcast later
 
+    const std::string run_cdf_copy_path = joinPath(run_dir, "mean_qx_inverse_cdf.txt");
+
     if (opts.hardcoded_mean) {
         lc_mean = H.lc_mean;
         lx_mean = H.lx_mean;
         ly_mean = H.ly_mean;
         dt_mean = H.dt_mean;
 
-        // NEW: prefer loading invcdf from file if provided; fallback to constant
+        // prefer loading invcdf from file if provided; fallback to constant
         const bool loaded = try_load_hardcoded_invcdf(invcdf_mean, opts.hardcoded_qx_cdf_path);
         if (!loaded) {
             build_flat_invcdf(invcdf_mean, H.qx_const);
         }
+
+        // IMPORTANT: always write a copy into *this* run_dir
+        // so user can find it next to mean_params_used.txt
+        invcdf_mean.writefile(run_cdf_copy_path);
 
         std::ofstream f(joinPath(run_dir, "mean_params_used.txt"));
         f << "lc_mean=" << lc_mean << "\n";
         f << "lambda_x_mean=" << lx_mean << "\n";
         f << "lambda_y_mean=" << ly_mean << "\n";
         f << "dt_mean=" << dt_mean << "\n";
-        f << "qx_cdf_path=" << opts.hardcoded_qx_cdf_path << "\n";
+        f << "mean_qx_inverse_cdf_written_to=" << run_cdf_copy_path << "\n";
+        f << "qx_cdf_source_path=" << opts.hardcoded_qx_cdf_path << "\n";
         if (!loaded) f << "qx_const=" << H.qx_const << "\n";
 
         if (loaded) {
             std::cout << "Using HARD-CODED mean params + LOADED qx inverse CDF: "
                       << opts.hardcoded_qx_cdf_path << "\n";
+            std::cout << "Also copied to: " << run_cdf_copy_path << "\n";
         } else {
             std::cout << "Using HARD-CODED mean params + CONSTANT qx (no --qx-cdf or failed load).\n";
+            std::cout << "Wrote flat CDF to: " << run_cdf_copy_path << "\n";
         }
         return true;
     }
@@ -394,7 +405,7 @@ static bool build_mean_for_upscaled(
         dt_mean = mean_of(dt_all);
 
         invcdf_mean = inverse_qx_cdfs.mean_ts();
-        invcdf_mean.writefile(joinPath(run_dir, "mean_qx_inverse_cdf.txt"));
+        invcdf_mean.writefile(run_cdf_copy_path);
 
         std::ofstream f(joinPath(run_dir, "mean_params.txt"));
         f << "nReal=" << (int)lc_all.size() << "\n";
@@ -416,7 +427,7 @@ static bool build_mean_for_upscaled(
 
     TimeSeries<double> mean_qx_cdf;
     bool ok_cdf = fileExists(mean_cdf_path) &&
-                  read_mean_inverse_cdf_csv(mean_cdf_path, mean_qx_cdf);
+                  read_inverse_cdf_any_format(mean_cdf_path, mean_qx_cdf);
 
     if (!ok_params || !ok_cdf) {
         std::cerr << "ERROR: --upscale-only requires existing mean_params.txt and mean_qx_inverse_cdf.txt in:\n"
