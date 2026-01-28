@@ -143,7 +143,7 @@ int main(int argc, char** argv) {
     // -----------------------------
     // Realizations
     // -----------------------------
-    const int nReal_default = 4;
+    const int nReal_default = 20;
     const double du = 1/double(nu);
 
     std::vector<double> lc_all, lx_all, ly_all, dt_all;
