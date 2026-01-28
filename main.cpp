@@ -1,4 +1,4 @@
-// main.cpp  (FULL, updated with t-switches + proper plot output dir + styles)
+// main.cpp
 #include "petsc_init.h"
 #include "petscmatrix.h"
 #include "petscvector.h"
@@ -24,9 +24,6 @@
 #include "sim_helpers.h"
 #include "plotter.h"
 
-// -------------------------------------------------------------
-// Compare-time switches
-// -------------------------------------------------------------
 int main(int argc, char** argv) {
     PETScInit petsc(argc, argv);
 
@@ -58,11 +55,22 @@ int main(int argc, char** argv) {
 
     bool use_timeseriesset_mean = true;
 
-    // NEW: compare switches
+    // compare switches
     TBaseMode tbase_mode = TBaseMode::Fixed;     // --tbase (default), --t-upscaled, --t-fine
     AlignMode align_mode = AlignMode::Resample;  // --resample (default), --make-uniform
 
     bool plotter = false;
+
+    // NEW: force upscaled-only using hardcoded mean params (no file/folder loading)
+    bool hardcoded_mean = true;
+
+    // hardcoded mean params (ONLY used when hardcoded_mean == true)
+    // >>> EDIT THESE <<<
+    double lc_mean_h   = 0.39753;
+    double lx_mean_h   = 1.25394;
+    double ly_mean_h   = 0.125017;
+    double dt_mean_h   = 7.31122e-05;
+    double qx_const_h  = 1.0;   // constant qx used to build invcdf_mean in hardcoded mode
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -77,23 +85,45 @@ int main(int argc, char** argv) {
 
         else if (a == "--resample")     align_mode = AlignMode::Resample;
         else if (a == "--make-uniform") align_mode = AlignMode::MakeUniform;
+
+        else if (a == "--plotter") plotter = true;
+        else if (a == "--hardcoded-mean") hardcoded_mean = true;
     }
+
+    // If hardcoded_mean is enabled, we must skip fine loop
+    if (hardcoded_mean) upscale_only = true;
 
     std::string run_dir;
     if (rank == 0) {
         createDirectory(output_dir);
 
         if (upscale_only) {
-            if (resume_run_dir.empty()) {
-                std::cerr << "ERROR: --upscale-only requires --run-dir=/path/to/run_YYYYMMDD_HHMMSS\n";
-                MPI_Abort(PETSC_COMM_WORLD, 1);
+
+            if (hardcoded_mean) {
+                // hardcoded mode: we DON'T need a previous run folder.
+                // If user provided --run-dir and it exists, use it; otherwise create a fresh run folder.
+                if (!resume_run_dir.empty() && dirExists(resume_run_dir)) {
+                    run_dir = resume_run_dir;
+                    std::cout << "Hardcoded-mean upscaled-only: using run_dir: " << run_dir << "\n";
+                } else {
+                    run_dir = joinPath(output_dir, "run_" + makeTimestamp());
+                    createDirectory(run_dir);
+                    std::cout << "Hardcoded-mean upscaled-only: created run_dir: " << run_dir << "\n";
+                }
+            } else {
+                // ORIGINAL upscale-only behavior (requires existing run-dir)
+                if (resume_run_dir.empty()) {
+                    std::cerr << "ERROR: --upscale-only requires --run-dir=/path/to/run_YYYYMMDD_HHMMSS\n";
+                    MPI_Abort(PETSC_COMM_WORLD, 1);
+                }
+                run_dir = resume_run_dir;
+                if (!dirExists(run_dir)) {
+                    std::cerr << "ERROR: run_dir does not exist: " << run_dir << "\n";
+                    MPI_Abort(PETSC_COMM_WORLD, 2);
+                }
+                std::cout << "Upscale-only: using run_dir: " << run_dir << "\n";
             }
-            run_dir = resume_run_dir;
-            if (!dirExists(run_dir)) {
-                std::cerr << "ERROR: run_dir does not exist: " << run_dir << "\n";
-                MPI_Abort(PETSC_COMM_WORLD, 2);
-            }
-            std::cout << "Upscale-only: using run_dir: " << run_dir << "\n";
+
         } else {
             run_dir = joinPath(output_dir, "run_" + makeTimestamp());
             createDirectory(run_dir);
@@ -123,14 +153,14 @@ int main(int argc, char** argv) {
     double correlation_ls_y = 0.1;
     double stdev = 2.0;
     double g_mean = 0;
-    double Diffusion_coefficient = 0.01; // new
+    double Diffusion_coefficient = 0.01;
     double t_end_pdf = 20;
 
     // -----------------------------
     // Realizations
     // -----------------------------
     const int nReal_default = 20;
-    const double du = 1/double(nu);
+    const double du = 1 / double(nu);
 
     std::vector<double> lc_all, lx_all, ly_all, dt_all;
     TimeSeriesSet<double> inverse_qx_cdfs;
@@ -138,8 +168,7 @@ int main(int argc, char** argv) {
     TimeSeriesSet<double> lambda_x_correlations;
     TimeSeriesSet<double> lambda_y_correlations;
     TimeSeriesSet<double> lambda_a_correlations;
-    vector<TimeSeriesSet<double>> Fine_Scale_BTCs;
-
+    std::vector<TimeSeriesSet<double>> Fine_Scale_BTCs;
 
     std::string stats_csv = joinPath(run_dir, "fine_params_all.csv");
     if (!upscale_only && rank == 0) {
@@ -148,20 +177,18 @@ int main(int argc, char** argv) {
     }
 
     // =====================================================================
-    // FINE-SCALE LOOP (skipped in --upscale-only)
+    // FINE-SCALE LOOP (skipped in --upscale-only or --hardcoded-mean)
     // =====================================================================
     int nReal = nReal_default;
 
     std::vector<double> xLocations{0.5, 1.5, 2.5};
     Fine_Scale_BTCs.resize(xLocations.size());
 
-
     if (!upscale_only) {
         for (int r = 1; r <= nReal; ++r) {
             const std::string rlab = makeRealLabel(r);
             std::string fine_dir = joinPath(run_dir, makeFineFolder(r));
             if (rank == 0) createDirectory(fine_dir);
-            //MPI_Barrier(PETSC_COMM_WORLD);
             if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
 
             const std::string pfx = rlab + "_";
@@ -171,9 +198,9 @@ int main(int argc, char** argv) {
             PetscLogDouble t_total0, t_total1, t_asm0, t_asm1, t_solve0, t_solve1;
 
             unsigned long run_seed = 20260115UL;
-            unsigned long seed = run_seed + 1000UL*(unsigned long)r + (unsigned long)rank;
+            unsigned long seed = run_seed + 1000UL * (unsigned long)r + (unsigned long)rank;
             g.makeGaussianFieldSGS("K_normal_score", correlation_ls_x, correlation_ls_y, 10, seed);
-            g.normalizeField("K_normal_score",Grid2D::ArrayKind::Cell); // new
+            g.normalizeField("K_normal_score", Grid2D::ArrayKind::Cell);
 
             PetscTime(&t_asm0);
             PetscTime(&t_total0);
@@ -204,11 +231,6 @@ int main(int argc, char** argv) {
             g.assignFromTimeSeries(QxNormalScores, "qx_normal_score", Grid2D::ArrayKind::Fx);
             g.writeNamedVTI("qx_normal_score", Grid2D::ArrayKind::Fx, joinPath(fine_dir, pfx + "qx_normal_score.vti"));
 
-            /*std::cout << "Sampling points for derivative ..." << std::endl;
-            TimeSeries<double> curvture = g.sampleSecondDerivative("qx_normal_score", Grid2D::ArrayKind::Fx,
-                                                                   Grid2D::DerivDir::X, 10000, 0.05);
-            curvture.writefile(joinPath(fine_dir, pfx + "2nd_deriv.txt"));
-            */
             // velocity autocorrelation (X,Y) via perturbation
             double delta_min = 0.001, delta_max = 0.2;
             int num_deltas = 30;
@@ -227,7 +249,7 @@ int main(int argc, char** argv) {
                 } catch (...) {}
             }
             corr_x.writefile(joinPath(fine_dir, pfx + "velocity_correlation_x.txt"));
-            lambda_x_correlations.append(corr_x,"Realization" + aquiutils::numbertostring(r+1));
+            lambda_x_correlations.append(corr_x, "Realization" + aquiutils::numbertostring(r + 1));
             double lambda_x_emp = corr_x.fitExponentialDecay();
 
             for (int i = 0; i < num_deltas; ++i) {
@@ -241,12 +263,12 @@ int main(int argc, char** argv) {
                 } catch (...) {}
             }
             corr_y.writefile(joinPath(fine_dir, pfx + "velocity_correlation_y.txt"));
-            lambda_y_correlations.append(corr_y,"Realization" + aquiutils::numbertostring(r+1));
+            lambda_y_correlations.append(corr_y, "Realization" + aquiutils::numbertostring(r + 1));
             double lambda_y_emp = corr_y.fitExponentialDecay();
 
-            // inverse CDF
-            TimeSeries<double> qx_inverse_cdf = g.extractFieldCDF("qx", Grid2D::ArrayKind::Fx, 100,1e-6);
-            TimeSeries<double> qx_pdf = g.extractFieldPDF("qx", Grid2D::ArrayKind::Fx, 50,1e-6,true);
+            // inverse CDF + pdf
+            TimeSeries<double> qx_inverse_cdf = g.extractFieldCDF("qx", Grid2D::ArrayKind::Fx, 100, 1e-6);
+            TimeSeries<double> qx_pdf = g.extractFieldPDF("qx", Grid2D::ArrayKind::Fx, 50, 1e-6, true);
             qx_inverse_cdf = qx_inverse_cdf.make_uniform(du);
             qx_inverse_cdf.writefile(joinPath(fine_dir, pfx + "qx_inverse_cdf.txt"));
             qx_pdf.writefile(joinPath(fine_dir, pfx + "qx_pdf.txt"));
@@ -265,22 +287,22 @@ int main(int argc, char** argv) {
             g.SetVal("porosity", 1);
             g.SetVal("c_left", 1.0);
 
-
-
             TimeSeriesSet<double> BTCs_FineScaled;
             g.setBTCLocations(xLocations);
-            if (solve_fine_scale_transport)
-            {   g.SolveTransport(t_end_pdf,
-                                 std::min(dt_optimal, 0.5 / 10.0),
-                                 "transport_", 500,
-                                 fine_dir,
-                                 "C",
-                                 &BTCs_FineScaled,
-                                 r);
+            if (solve_fine_scale_transport) {
+                g.SolveTransport(
+                    t_end_pdf,
+                    std::min(dt_optimal, 0.5 / 10.0),
+                    "transport_", 500,
+                    fine_dir,
+                    "C",
+                    &BTCs_FineScaled,
+                    r
+                );
 
                 for (int i = 0; i < (int)xLocations.size() && i < (int)BTCs_FineScaled.size(); ++i) {
                     BTCs_FineScaled.setSeriesName(i, fmt_x(xLocations[i]));
-                    Fine_Scale_BTCs[i].append(BTCs_FineScaled[i].derivative() , pfx+fmt_x(xLocations[i]));
+                    Fine_Scale_BTCs[i].append(BTCs_FineScaled[i].derivative(), pfx + fmt_x(xLocations[i]));
                 }
 
                 const std::string btc_path       = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
@@ -288,8 +310,8 @@ int main(int argc, char** argv) {
 
                 BTCs_FineScaled.write(btc_path);
                 BTCs_FineScaled.derivative().write(btc_deriv_path);
-
             }
+
             PetscTime(&t_total1);
 
             // pathway correlation -> lc
@@ -313,13 +335,11 @@ int main(int argc, char** argv) {
             }
 
             qx_correlation.writefile(joinPath(fine_dir, pfx + "qx_correlation_vs_distance.txt"));
-            lambda_a_correlations.append(qx_correlation,"Realization" + aquiutils::numbertostring(r+1));
+            lambda_a_correlations.append(qx_correlation, "Realization" + aquiutils::numbertostring(r + 1));
             double advection_correlation_length_scale = qx_correlation.fitExponentialDecay();
 
             pathways.writeToFile(joinPath(fine_dir, pfx + "pathway_summary.txt"));
             pathways.writeCombinedVTK(joinPath(fine_dir, pfx + "all_pathways.vtk"));
-
-
 
             // meta
             if (rank == 0) {
@@ -346,8 +366,8 @@ int main(int argc, char** argv) {
                 ly_all.push_back(lambda_y_emp);
                 dt_all.push_back(dt_optimal);
 
-                inverse_qx_cdfs.append(qx_inverse_cdf,"qx_inverse_cdf"+aquiutils::numbertostring(r+1));
-                qx_pdfs.append(qx_pdf,"qx_pdf" + aquiutils::numbertostring(r+1));
+                inverse_qx_cdfs.append(qx_inverse_cdf, "qx_inverse_cdf" + aquiutils::numbertostring(r + 1));
+                qx_pdfs.append(qx_pdf, "qx_pdf" + aquiutils::numbertostring(r + 1));
                 std::ofstream f(stats_csv, std::ios::app);
                 f << r << "," << advection_correlation_length_scale << ","
                   << lambda_x_emp << "," << lambda_y_emp << "," << dt_optimal << "\n";
@@ -364,27 +384,53 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Means from fine derivatives (kept)
     TimeSeriesSet<double> mean_BTCs;
-    for (int i=0; i<xLocations.size(); i++)
+    for (int i = 0; i < (int)xLocations.size(); i++)
         mean_BTCs.append(Fine_Scale_BTCs[i].mean_ts(), fmt_x(xLocations[i]));
 
-    inverse_qx_cdfs.write(joinPath(run_dir, "qx_inverse_cdfs.txt"));
-    qx_pdfs.write(joinPath(run_dir, "qx_pdfs.txt"));
-    qx_pdfs.mean_ts().writefile(joinPath(run_dir, "qx_mean_pdf.txt"));
+    if (!upscale_only) {
+        inverse_qx_cdfs.write(joinPath(run_dir, "qx_inverse_cdfs.txt"));
+        qx_pdfs.write(joinPath(run_dir, "qx_pdfs.txt"));
+        qx_pdfs.mean_ts().writefile(joinPath(run_dir, "qx_mean_pdf.txt"));
 
-    lambda_a_correlations.write(joinPath(run_dir, "advective_correlations.txt"));
-    lambda_x_correlations.write(joinPath(run_dir, "diffusion_x_correlations.txt"));
-    lambda_y_correlations.write(joinPath(run_dir, "diffusion_y_correlations.txt"));
+        lambda_a_correlations.write(joinPath(run_dir, "advective_correlations.txt"));
+        lambda_x_correlations.write(joinPath(run_dir, "diffusion_x_correlations.txt"));
+        lambda_y_correlations.write(joinPath(run_dir, "diffusion_y_correlations.txt"));
+    }
 
     // =====================================================================
     // MEAN PARAMS + UPSCALED RUN
     // =====================================================================
-
     double lc_mean = 0, lx_mean = 0, ly_mean = 0, dt_mean = 0;
     TimeSeries<double> invcdf_mean;
 
     if (rank == 0) {
-        if (!upscale_only) {
+
+        if (hardcoded_mean) {
+            // No file loading, no folder scanning, no reconstruction
+            lc_mean = lc_mean_h;
+            lx_mean = lx_mean_h;
+            ly_mean = ly_mean_h;
+            dt_mean = dt_mean_h;
+
+            invcdf_mean.clear();
+            invcdf_mean.append(0.0, qx_const_h);
+            invcdf_mean.append(1.0, qx_const_h);
+
+            // bookkeeping
+            {
+                std::ofstream f(joinPath(run_dir, "mean_params_used.txt"));
+                f << "lc_mean=" << lc_mean << "\n";
+                f << "lambda_x_mean=" << lx_mean << "\n";
+                f << "lambda_y_mean=" << ly_mean << "\n";
+                f << "dt_mean=" << dt_mean << "\n";
+                f << "qx_const=" << qx_const_h << "\n";
+            }
+
+            std::cout << "Using HARD-CODED mean params (no loading).\n";
+        }
+        else if (!upscale_only) {
             nReal = (int)lc_all.size();
             lc_mean = mean_of(lc_all);
             lx_mean = mean_of(lx_all);
@@ -414,6 +460,7 @@ int main(int argc, char** argv) {
 
             if (ok_params && ok_cdf) {
                 std::cout << "Loaded mean_params.txt and mean_qx_inverse_cdf.txt\n";
+                invcdf_mean = mean_qx_cdf;
             } else {
                 std::cout << "Mean files missing/incomplete; reconstructing from fine_* folders...\n";
 
@@ -442,7 +489,7 @@ int main(int argc, char** argv) {
                         std::string pfx = makeRealLabel(rr) + "_";
                         std::string meta = joinPath(fine_dir, pfx + "meta.txt");
 
-                        std::map<std::string,std::string> kv;
+                        std::map<std::string, std::string> kv;
                         if (!parse_keyval_file(meta, kv)) continue;
 
                         auto getd = [&](const std::string& k, double& out)->bool{
@@ -452,7 +499,7 @@ int main(int argc, char** argv) {
                             return true;
                         };
 
-                        double v1,v2,v3,v4;
+                        double v1, v2, v3, v4;
                         if (getd("lc", v1) && getd("lambda_x", v2) && getd("lambda_y", v3) && getd("dt_opt", v4)) {
                             lc_v.push_back(v1); lx_v.push_back(v2); ly_v.push_back(v3); dt_v.push_back(v4);
                         }
@@ -468,29 +515,23 @@ int main(int argc, char** argv) {
                     std::cout << "Loaded params from fine meta.txt files\n";
                 }
 
-
+                // Write mean_params.txt
                 std::ofstream f(joinPath(run_dir, "mean_params.txt"));
-                //f << "nReal=" << used << "\n"; not sure what used was
                 f << "lc_mean=" << lc_mean << "\n";
                 f << "lambda_x_mean=" << lx_mean << "\n";
                 f << "lambda_y_mean=" << ly_mean << "\n";
                 f << "dt_mean=" << dt_mean << "\n";
                 f << "du=" << du << "\n";
 
-                {
-                    std::ofstream f(joinPath(run_dir, "mean_qx_inverse_cdf.txt"));
-                    f << "u,v\n";
-                    for (int k = 0; k < nu; ++k) {
-                        double u = k * du;
-                        f << u << "," << invcdf_mean.getValue(k) << "\n";
-                    }
-                }
-
-                //std::cout << "Reconstruction done from " << used << " fine realizations.\n";
+                // IMPORTANT: do NOT silently fall back to constant qx in non-hardcoded mode
+                std::cerr << "ERROR: mean_qx_inverse_cdf.txt missing and reconstruction of mean CDF is not implemented here.\n"
+                          << "Either provide mean_qx_inverse_cdf.txt, or run with --hardcoded-mean.\n";
+                MPI_Abort(PETSC_COMM_WORLD, 99);
             }
         }
     }
 
+    // Broadcast means + invcdf_mean to all ranks
     MPI_Bcast(&lc_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
     MPI_Bcast(&lx_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
     MPI_Bcast(&ly_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
@@ -531,7 +572,7 @@ int main(int argc, char** argv) {
     qy_u.resize(qy_size, 0.0);
 
     for (int j = 0; j < nu; ++j) {
-        double u = static_cast<double>(j) / (nu - 1);
+        double u = (nu <= 1) ? 0.0 : static_cast<double>(j) / (nu - 1);
         double v_at_u = invcdf_mean.interpol(u);
         for (int i = 0; i < nx + 1; ++i) {
             int id = j * (nx + 1) + i;
@@ -550,7 +591,6 @@ int main(int argc, char** argv) {
 
     g_u.setMixingParams(lc_mean, lx_mean, ly_mean);
 
-
     double dt_pdf = dt_mean;
     int output_interval_pdf = 500;
 
@@ -560,21 +600,21 @@ int main(int argc, char** argv) {
 
     g_u.computeMixingDiffusionCoefficient();
     g_u.writeNamedVTI("D_y", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "D_y.vti"));
-    g_u.writeNamedMatrix("D_y",Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "D_y.txt"));
+    g_u.writeNamedMatrix("D_y", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "D_y.txt"));
 
     g_u.assignConstant("C", Grid2D::ArrayKind::Cell, 0);
-
     g_u.setBTCLocations(xLocations);
 
     TimeSeriesSet<double> BTCs_Upscaled;
     const std::string up_btc_path       = joinPath(up_dir, up_pfx + "BTC_Upscaled.csv");
     const std::string up_btc_deriv_path = joinPath(up_dir, up_pfx + "BTC_Upscaled_derivative.csv");
-    if (solve_upscale_transport)
-    {   g_u.SolveTransport(t_end_pdf, dt_pdf, "transport_", output_interval_pdf, up_dir, "Cu", &BTCs_Upscaled);
+
+    if (solve_upscale_transport) {
+        g_u.SolveTransport(t_end_pdf, dt_pdf, "transport_", output_interval_pdf, up_dir, "Cu", &BTCs_Upscaled);
 
         for (int i = 0; i < (int)xLocations.size() && i < (int)BTCs_Upscaled.size(); ++i) {
             BTCs_Upscaled.setSeriesName(i, fmt_x(xLocations[i]));
-            Fine_Scale_BTCs[i].append(BTCs_Upscaled[i].derivative(),"Upscaled" + fmt_x(xLocations[i]));
+            Fine_Scale_BTCs[i].append(BTCs_Upscaled[i].derivative(), "Upscaled" + fmt_x(xLocations[i]));
         }
 
         BTCs_Upscaled.write(up_btc_path);
@@ -584,40 +624,40 @@ int main(int argc, char** argv) {
         g_u.writeNamedMatrix("C", Grid2D::ArrayKind::Cell, joinPath(up_dir, up_pfx + "Cu.txt"));
     }
 
-    for (int i=0; i<xLocations.size(); i++)
-    {
+    // Your per-location + mean CSV outputs (kept)
+    for (int i = 0; i < (int)xLocations.size(); i++) {
         std::string out_cmp_d = joinPath(run_dir, fmt_x(xLocations[i]) + "BTC_Compare.csv");
-        //Fine_Scale_BTCs[i] = Fine_Scale_BTCs[i].make_uniform(0.01);
         Fine_Scale_BTCs[i].write(out_cmp_d);
         std::cout << "Wrote derivative WIDE comparison CSV (t_base): " << out_cmp_d << "\n";
     }
-    std::string out_cmp_d = joinPath(run_dir, "BTC_mean.csv");
-    //mean_BTCs = mean_BTCs.make_uniform(0.01);
-    mean_BTCs.write(out_cmp_d);
+    {
+        std::string out_cmp_d = joinPath(run_dir, "BTC_mean.csv");
+        mean_BTCs.write(out_cmp_d);
+    }
 
     // =====================================================================
     // FINAL AGGREGATION CSVs for comparison / plotting
     // =====================================================================
-    if (plotter)
-    {
-    if (rank == 0) {
-        const bool ok = run_final_aggregation_and_plots(
-            run_dir,
-            up_btc_path,
-            up_btc_deriv_path,
-            tbase_mode,
-            align_mode,
-            use_timeseriesset_mean,
-            /*t_end_cmp=*/10.0,
-            /*dt_cmp=*/0.001
-        );
+    if (plotter) {
+        if (rank == 0) {
+            const bool ok = run_final_aggregation_and_plots(
+                run_dir,
+                up_btc_path,
+                up_btc_deriv_path,
+                tbase_mode,
+                align_mode,
+                use_timeseriesset_mean,
+                /*t_end_cmp=*/10.0,
+                /*dt_cmp=*/0.001
+            );
 
-        if (!ok) {
-            std::cerr << "WARNING: final aggregation/plotting reported failure.\n";
+            if (!ok) {
+                std::cerr << "WARNING: final aggregation/plotting reported failure.\n";
+            }
         }
     }
-    }
     // =====================================================================
+
     std::cout << "\nMixing PDF simulation complete!\n";
     std::cout << "All outputs saved to: " << run_dir << "\n";
     MPI_Barrier(PETSC_COMM_WORLD);
