@@ -11,6 +11,7 @@
 #include <sstream>
 #include <ctime>
 #include <TimeSeries.h>
+#include <TimeSeriesSet.h>
 
 #include <petscsys.h>   // PetscInt
 

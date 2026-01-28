@@ -9,6 +9,8 @@
 #include "TimeSeriesSet.h"
 #include <memory>
 
+#include "petscvector.h"
+
 class PETScMatrix;
 
 
