@@ -92,6 +92,16 @@ bool write_comparison_csv(
     const std::vector<std::vector<double>>& out_cols
 );
 
+inline bool load_csv_time_only(const std::string& path, std::vector<double>& t_out)
+{
+    std::vector<double> t;
+    std::vector<std::string> names;
+    std::vector<std::vector<double>> cols;
+    if (!read_time_series_table_csv(path, t, names, cols)) return false;
+    if (t.empty()) return false;
+    t_out = std::move(t);
+    return true;
+}
 // --------------------
 // resampling
 // --------------------

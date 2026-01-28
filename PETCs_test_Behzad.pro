@@ -113,6 +113,7 @@ SOURCES += \
     petscmatrix.cpp \
     petscsolver.cpp \
     petscvector.cpp \
+    plotter.cpp \
     sim_helpers.cpp
 
 HEADERS += \
@@ -134,6 +135,7 @@ HEADERS += \
     petscmatrix.h \
     petscsolver.h \
     petscvector.h \
+    plotter.h \
     sim_helpers.h
 
 # ==== Armadillo / GSL ====
