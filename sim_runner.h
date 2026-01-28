@@ -21,7 +21,7 @@ struct RunOptions
     bool hardcoded_mean = true;            // use hardcoded lc/lx/ly/dt; and optionally load qx CDF from file
 
     // transport toggles
-    bool solve_fine_scale_transport = false;
+    bool solve_fine_scale_transport = true;
     bool solve_upscale_transport    = true;
 
     // NEW: when hardcoded_mean=true, you can supply a qx inverse-CDF file (u,v).

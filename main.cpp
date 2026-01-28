@@ -40,7 +40,7 @@ int main(int argc, char** argv)
     std::string resume_run_dir = output_dir + "/run_20260128_132010";
 
     opts.hardcoded_qx_cdf_path =
-        output_dir + "/run_20260128_132010/mean_qx_inverse_cdf.txt";
+        output_dir + "/run_20260128_153933/" + "mean_qx_inverse_cdf.txt";
 
     // -----------------------------
     // Plot options (kept in main only)
