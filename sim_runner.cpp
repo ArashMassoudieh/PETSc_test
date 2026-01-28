@@ -1,3 +1,5 @@
+// sim_runner.cpp
+
 #include "sim_runner.h"
 
 #include <mpi.h>
@@ -76,6 +78,21 @@ static inline void build_flat_invcdf(TimeSeries<double>& invcdf_mean, double qx_
     invcdf_mean.clear();
     invcdf_mean.append(0.0, qx_const);
     invcdf_mean.append(1.0, qx_const);
+}
+
+// NEW: load an inverse CDF from a CSV (u,v) style file.
+// Uses your existing read_mean_inverse_cdf_csv helper.
+static bool try_load_hardcoded_invcdf(TimeSeries<double>& invcdf_mean, const std::string& path)
+{
+    if (path.empty()) return false;
+    if (!fileExists(path)) return false;
+
+    TimeSeries<double> tmp;
+    if (!read_mean_inverse_cdf_csv(path, tmp)) return false;
+    if (tmp.size() < 2) return false;
+
+    invcdf_mean = tmp;
+    return true;
 }
 
 static bool run_fine_loop_collect(
@@ -336,6 +353,7 @@ static bool build_mean_for_upscaled(
     int rank)
 {
     const double du = du_from_nu(P.nu);
+    (void)du;
 
     if (rank != 0) return true; // only rank0 builds; broadcast later
 
@@ -345,16 +363,26 @@ static bool build_mean_for_upscaled(
         ly_mean = H.ly_mean;
         dt_mean = H.dt_mean;
 
-        build_flat_invcdf(invcdf_mean, H.qx_const);
+        // NEW: prefer loading invcdf from file if provided; fallback to constant
+        const bool loaded = try_load_hardcoded_invcdf(invcdf_mean, opts.hardcoded_qx_cdf_path);
+        if (!loaded) {
+            build_flat_invcdf(invcdf_mean, H.qx_const);
+        }
 
         std::ofstream f(joinPath(run_dir, "mean_params_used.txt"));
         f << "lc_mean=" << lc_mean << "\n";
         f << "lambda_x_mean=" << lx_mean << "\n";
         f << "lambda_y_mean=" << ly_mean << "\n";
         f << "dt_mean=" << dt_mean << "\n";
-        f << "qx_const=" << H.qx_const << "\n";
+        f << "qx_cdf_path=" << opts.hardcoded_qx_cdf_path << "\n";
+        if (!loaded) f << "qx_const=" << H.qx_const << "\n";
 
-        std::cout << "Using HARD-CODED mean params (no loading).\n";
+        if (loaded) {
+            std::cout << "Using HARD-CODED mean params + LOADED qx inverse CDF: "
+                      << opts.hardcoded_qx_cdf_path << "\n";
+        } else {
+            std::cout << "Using HARD-CODED mean params + CONSTANT qx (no --qx-cdf or failed load).\n";
+        }
         return true;
     }
 
@@ -374,7 +402,7 @@ static bool build_mean_for_upscaled(
         f << "lambda_x_mean=" << lx_mean << "\n";
         f << "lambda_y_mean=" << ly_mean << "\n";
         f << "dt_mean=" << dt_mean << "\n";
-        f << "du=" << du << "\n";
+        f << "du=" << du_from_nu(P.nu) << "\n";
 
         return true;
     }
@@ -420,7 +448,6 @@ static bool run_upscaled(
     const int nx = P.nx, ny = P.ny, nu = P.nu;
     const double Lx = P.Lx, Ly = P.Ly;
 
-    // Upscaled folder + prefix
     std::string up_dir = joinPath(run_dir, "upscaled_mean");
     if (rank == 0) createDirectory(up_dir);
     MPI_Barrier(PETSC_COMM_WORLD);
@@ -490,7 +517,6 @@ static bool run_upscaled(
     if (opts.solve_upscale_transport) {
         g_u.SolveTransport(P.t_end_pdf, dt_pdf, "transport_", output_interval_pdf, up_dir, "Cu", &BTCs_Upscaled);
 
-        // keep your behavior: append upscaled derivative into Fine_Scale_BTCs stacks
         for (int i = 0; i < (int)P.xLocations.size() && i < (int)BTCs_Upscaled.size(); ++i) {
             BTCs_Upscaled.setSeriesName(i, fmt_x(P.xLocations[i]));
             Fine_Scale_BTCs[i].append(BTCs_Upscaled[i].derivative(), "Upscaled" + fmt_x(P.xLocations[i]));
@@ -516,11 +542,9 @@ bool run_simulation_blocks(
     RunOutputs& out,
     int rank)
 {
-    // initialize outputs
     out.Fine_Scale_BTCs.clear();
     out.Fine_Scale_BTCs.resize(P.xLocations.size());
 
-    // collectors
     std::vector<double> lc_all, lx_all, ly_all, dt_all;
     TimeSeriesSet<double> inverse_qx_cdfs;
     TimeSeriesSet<double> qx_pdfs;
@@ -528,7 +552,6 @@ bool run_simulation_blocks(
     TimeSeriesSet<double> lambda_y_correlations;
     TimeSeriesSet<double> lambda_a_correlations;
 
-    // Fine loop
     if (!opts.upscale_only) {
         const bool ok = run_fine_loop_collect(
             P, opts, out.run_dir,
@@ -541,13 +564,11 @@ bool run_simulation_blocks(
         if (!ok) return false;
     }
 
-    // mean_BTCs (kept behavior)
     out.mean_BTCs.clear();
     for (int i = 0; i < (int)P.xLocations.size(); ++i) {
         out.mean_BTCs.append(out.Fine_Scale_BTCs[i].mean_ts(), fmt_x(P.xLocations[i]));
     }
 
-    // build mean params + invcdf
     double lc_mean=0, lx_mean=0, ly_mean=0, dt_mean=0;
     TimeSeries<double> invcdf_mean;
 
@@ -558,7 +579,6 @@ bool run_simulation_blocks(
         rank
     );
 
-    // broadcast means + invcdf_mean to all ranks
     MPI_Bcast(&lc_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
     MPI_Bcast(&lx_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
     MPI_Bcast(&ly_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
@@ -570,7 +590,6 @@ bool run_simulation_blocks(
     if (rank != 0) invcdf_mean.resize(nU_b);
     MPI_Bcast(invcdf_mean.data(), nU_b, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
 
-    // run upscaled
     std::string up_dir, up_btc_path, up_btc_deriv_path;
     const bool ok_up = run_upscaled(
         P, opts, out.run_dir,

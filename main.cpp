@@ -9,8 +9,8 @@
 #include <mpi.h>
 
 #include "sim_helpers.h"
-#include "plotter.h"
-#include "sim_runner.h"
+#include "plotter.h"     // TBaseMode, AlignMode, run_final_aggregation_and_plots
+#include "sim_runner.h"  // SimParams, RunOptions, HardcodedMean, RunOutputs
 
 int main(int argc, char** argv)
 {
@@ -34,35 +34,58 @@ int main(int argc, char** argv)
     MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
 
     // -----------------------------
-    // Options (CLI)
+    // Simulation options (passed to sim_runner)
     // -----------------------------
     RunOptions opts;
     std::string resume_run_dir = output_dir + "/run_20260115_132010";
 
+    // -----------------------------
+    // Plot options (kept in main only)
+    // -----------------------------
+    bool plotter = false;
+    TBaseMode tbase_mode = TBaseMode::Fixed;
+    AlignMode align_mode = AlignMode::MakeUniform;
+    bool use_timeseriesset_mean = true;
+
+    // -----------------------------
+    // CLI
+    // -----------------------------
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
 
+        // --- run selection ---
         if (a == "--upscale-only") opts.upscale_only = true;
-        else if (a == "--mean-ts") opts.use_timeseriesset_mean = true;
-        else if (a == "--no-mean-ts") opts.use_timeseriesset_mean = false;
+        else if (a == "--hardcoded-mean") opts.hardcoded_mean = true;
         else if (a.rfind("--run-dir=", 0) == 0) resume_run_dir = a.substr(std::string("--run-dir=").size());
 
-        else if (a == "--tbase")      opts.tbase_mode = TBaseMode::Fixed;
-        else if (a == "--t-upscaled") opts.tbase_mode = TBaseMode::FromUpscaled;
-        else if (a == "--t-fine")     opts.tbase_mode = TBaseMode::FromFirstFine;
+        // --- NEW: hardcoded qx inverse-CDF path (u,v csv) ---
+        else if (a.rfind("--qx-cdf=", 0) == 0) opts.hardcoded_qx_cdf_path = a.substr(std::string("--qx-cdf=").size());
 
-        else if (a == "--resample")     opts.align_mode = AlignMode::Resample;
-        else if (a == "--make-uniform") opts.align_mode = AlignMode::MakeUniform;
+        // --- transport toggles (optional but useful) ---
+        else if (a == "--no-fine-transport") opts.solve_fine_scale_transport = false;
+        else if (a == "--fine-transport")    opts.solve_fine_scale_transport = true;
+        else if (a == "--no-up-transport")   opts.solve_upscale_transport = false;
+        else if (a == "--up-transport")      opts.solve_upscale_transport = true;
 
-        else if (a == "--plotter") opts.plotter = true;
-        else if (a == "--hardcoded-mean") opts.hardcoded_mean = true;
+        // --- plotter switches (stay in main) ---
+        else if (a == "--plotter") plotter = true;
+
+        else if (a == "--tbase")      tbase_mode = TBaseMode::Fixed;
+        else if (a == "--t-upscaled") tbase_mode = TBaseMode::FromUpscaled;
+        else if (a == "--t-fine")     tbase_mode = TBaseMode::FromFirstFine;
+
+        else if (a == "--resample")     align_mode = AlignMode::Resample;
+        else if (a == "--make-uniform") align_mode = AlignMode::MakeUniform;
+
+        else if (a == "--mean-ts")    use_timeseriesset_mean = true;
+        else if (a == "--no-mean-ts") use_timeseriesset_mean = false;
     }
 
-    // hardcoded mean implies upscaled-only
+    // hardcoded mean implies upscaled-only (your old behavior)
     if (opts.hardcoded_mean) opts.upscale_only = true;
 
     // -----------------------------
-    // Params (keep here)
+    // Params (kept here)
     // -----------------------------
     SimParams P;
     P.nx = 300;
@@ -84,13 +107,13 @@ int main(int argc, char** argv)
 
     P.xLocations = {0.5, 1.5, 2.5};
 
-    // Hardcoded means (edit here; only used when --hardcoded-mean)
+    // Hardcoded means (used only when --hardcoded-mean)
     HardcodedMean H;
     H.lc_mean  = 0.39753;
     H.lx_mean  = 1.25394;
     H.ly_mean  = 0.125017;
     H.dt_mean  = 7.31122e-05;
-    H.qx_const = 1.0;
+    H.qx_const = 1.0;   // fallback only if --qx-cdf not provided or load fails
 
     // -----------------------------
     // Prepare run_dir (MPI-safe)
@@ -108,15 +131,15 @@ int main(int argc, char** argv)
     }
 
     // -----------------------------
-    // Write your “simple” CSV outputs (kept behavior)
+    // Write compare + mean CSVs (rank0 messages only)
     // -----------------------------
     for (int i = 0; i < (int)P.xLocations.size(); ++i) {
-        std::string out_cmp_d = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare.csv");
-        out.Fine_Scale_BTCs[i].write(out_cmp_d);
-        if (rank == 0) std::cout << "Wrote: " << out_cmp_d << "\n";
+        const std::string out_cmp = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare.csv");
+        out.Fine_Scale_BTCs[i].write(out_cmp);
+        if (rank == 0) std::cout << "Wrote: " << out_cmp << "\n";
     }
     {
-        std::string out_mean = joinPath(out.run_dir, "BTC_mean.csv");
+        const std::string out_mean = joinPath(out.run_dir, "BTC_mean.csv");
         out.mean_BTCs.write(out_mean);
         if (rank == 0) std::cout << "Wrote: " << out_mean << "\n";
     }
@@ -124,14 +147,14 @@ int main(int argc, char** argv)
     // -----------------------------
     // Plotter (rank 0 only)
     // -----------------------------
-    if (opts.plotter && rank == 0) {
+    if (plotter && rank == 0) {
         const bool okp = run_final_aggregation_and_plots(
             out.run_dir,
             out.up_btc_path,
             out.up_btc_deriv_path,
-            opts.tbase_mode,
-            opts.align_mode,
-            opts.use_timeseriesset_mean,
+            tbase_mode,
+            align_mode,
+            use_timeseriesset_mean,
             /*t_end_cmp=*/10.0,
             /*dt_cmp=*/0.001
         );
@@ -142,6 +165,10 @@ int main(int argc, char** argv)
     if (rank == 0) {
         std::cout << "\nMixing PDF simulation complete!\n";
         std::cout << "All outputs saved to: " << out.run_dir << "\n";
+        if (opts.hardcoded_mean && !opts.hardcoded_qx_cdf_path.empty()) {
+            std::cout << "Hardcoded mean mode: attempted qx inverse-CDF load from: "
+                      << opts.hardcoded_qx_cdf_path << "\n";
+        }
     }
 
     MPI_Barrier(PETSC_COMM_WORLD);

@@ -1,97 +1,109 @@
+// sim_runner.h
+
 #pragma once
 
 #include <string>
 #include <vector>
 
-#include "TimeSeries.h"
-#include <TimeSeriesSet.h>
-#include "sim_helpers.h" // joinPath/createDirectory/makeTimestamp/... + TimeSeriesSet
-#include "plotter.h"
+// Keep sim_runner.h LIGHT.
+// Do NOT include grid.h here (it causes heavy include chains / incomplete type issues).
+// Only include what we must for types used in signatures.
+#include "TimeSeries.h"     // for TimeSeries<T> and TimeSeriesSet<T>
+#include "sim_helpers.h"    // fileExists, joinPath, createDirectory, read_mean_* helpers, mean_of, fmt_x, etc.
 
-// Forward declarations to avoid heavy includes here
-class Grid2D;
-
-// All run-time options (flags) go here
+// -----------------------------
+// Simulation switches / options
+// -----------------------------
 struct RunOptions
 {
-    bool upscale_only = false; // loading from fine_scale folders
-    bool solve_fine_scale_transport = true;
-    bool solve_upscale_transport = true;
+    // run modes
+    bool upscale_only = false;              // skip fine loop; do only upscaled (requires run_dir unless hardcoded_mean)
+    bool hardcoded_mean = true;            // use hardcoded lc/lx/ly/dt; and optionally load qx CDF from file
 
-    bool use_timeseriesset_mean = true;
+    // transport toggles
+    bool solve_fine_scale_transport = false;
+    bool solve_upscale_transport    = true;
 
-    bool plotter = false;          // handled in main (calls plotter module)
-    bool hardcoded_mean = true;   // if true: skip fine and skip loading/reconstructing
-
-    // compare time switches (from plotter.h)
-    TBaseMode tbase_mode = TBaseMode::Fixed;
-    AlignMode align_mode = AlignMode::Resample;
+    // NEW: when hardcoded_mean=true, you can supply a qx inverse-CDF file (u,v).
+    // If empty or load fails -> fallback to constant qx_const.
+    std::string hardcoded_qx_cdf_path;
 };
 
-// All numerical parameters you want to keep in main
-struct SimParams
-{
-    // domain / grid
-    int nx = 300;
-    int ny = 100;
-    int nu = 100;
-    double Lx = 3.0;
-    double Ly = 1.0;
-
-    // random field
-    double correlation_ls_x = 1.0;
-    double correlation_ls_y = 0.1;
-    double stdev = 2.0;
-    double g_mean = 0.0;
-
-    // transport
-    double Diffusion_coefficient = 0.01;
-    double t_end_pdf = 20.0;
-
-    // realizations
-    int nReal_default = 20;
-    unsigned long run_seed = 20260115UL;
-
-    // BTC locations
-    std::vector<double> xLocations{0.5, 1.5, 2.5};
-};
-
-// Hardcoded mean params (only used when opts.hardcoded_mean = true)
+// -----------------------------
+// Hardcoded mean parameters
+// -----------------------------
 struct HardcodedMean
 {
-    double lc_mean   = 0.39753;
-    double lx_mean   = 1.25394;
-    double ly_mean   = 0.125017;
-    double dt_mean   = 7.31122e-05;
-    double qx_const  = 1.0; // constant qx -> makes a flat inverse CDF
+    double lc_mean = 0.0;
+    double lx_mean = 0.0;
+    double ly_mean = 0.0;
+    double dt_mean = 0.0;
+
+    // fallback only when hardcoded_qx_cdf_path is not provided or load fails
+    double qx_const = 0.0;
 };
 
-// Outputs you might want back in main
+// -----------------------------
+// Simulation parameters (input)
+// -----------------------------
+struct SimParams
+{
+    int nx = 0;
+    int ny = 0;
+    int nu = 0;
+
+    double Lx = 0.0;
+    double Ly = 0.0;
+
+    int nReal_default = 1;
+
+    // random field params
+    double correlation_ls_x = 0.0;
+    double correlation_ls_y = 0.0;
+    double stdev = 0.0;
+    double g_mean = 0.0;
+
+    unsigned long run_seed = 0UL;
+
+    // transport / BTC params
+    double Diffusion_coefficient = 0.0;
+    double t_end_pdf = 0.0;
+
+    std::vector<double> xLocations;
+};
+
+// -----------------------------
+// Outputs (written by runner)
+// -----------------------------
 struct RunOutputs
 {
     std::string run_dir;
-    std::string up_dir;
 
+    // per-location stacks (each element is a TimeSeriesSet holding all realizations + upscaled)
+    std::vector<TimeSeriesSet<double>> Fine_Scale_BTCs;
+
+    // mean BTC per location (one series per x)
+    TimeSeriesSet<double> mean_BTCs;
+
+    // upscaled outputs (paths)
+    std::string up_dir;
     std::string up_btc_path;
     std::string up_btc_deriv_path;
-
-    // Optional: “wide” per-location stacks for writing CSVs in main (same behavior as your code)
-    std::vector<TimeSeriesSet<double>> Fine_Scale_BTCs;
-    TimeSeriesSet<double> mean_BTCs; // from Fine_Scale_BTCs mean_ts()
 };
 
-// Build or pick run directory and broadcast it
+// -----------------------------
+// API
+// -----------------------------
+
+// Creates/chooses a run directory (rank0 decides; broadcasts to all ranks).
 std::string prepare_run_dir_mpi(
     const std::string& output_dir,
     const std::string& resume_run_dir,
     const RunOptions& opts,
     int rank);
 
-// Main entry for running simulation parts.
-// - If opts.hardcoded_mean: skip fine AND skip all loading/reconstruction.
-// - Else if opts.upscale_only: expects mean files exist (no folder reconstruction inside runner).
-// - Else: runs fine loop and then upscaled using computed means.
-// Returns true on success.
+// Runs fine loop (unless upscale_only) + mean building + upscaled run.
+// Requires out.run_dir already set (usually from prepare_run_dir_mpi).
 bool run_simulation_blocks(
     const SimParams& P,
     const RunOptions& opts,
