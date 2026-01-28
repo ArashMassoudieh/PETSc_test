@@ -133,16 +133,17 @@ int main(int argc, char** argv) {
     int ny = 100;
     double Lx = 3.0;
     double Ly = 1.0;
-    double correlation_ls_x = 0.3;
-    double correlation_ls_y = 0.3;
+    double correlation_ls_x = 1;
+    double correlation_ls_y = 0.1;
     double stdev = 2.0;
     double g_mean = 0;
     double Diffusion_coefficient = 0.00; // new
+    double t_end_pdf = 20;
 
     // -----------------------------
     // Realizations
     // -----------------------------
-    const int nReal_default = 20;
+    const int nReal_default = 4;
     const double du = 1/double(nu);
 
     std::vector<double> lc_all, lx_all, ly_all, dt_all;
@@ -151,6 +152,7 @@ int main(int argc, char** argv) {
     TimeSeriesSet<double> lambda_x_correlations;
     TimeSeriesSet<double> lambda_y_correlations;
     TimeSeriesSet<double> lambda_a_correlations;
+    vector<TimeSeriesSet<double>> Fine_Scale_BTCs;
 
 
     std::string stats_csv = joinPath(run_dir, "fine_params_all.csv");
@@ -163,6 +165,10 @@ int main(int argc, char** argv) {
     // FINE-SCALE LOOP (skipped in --upscale-only)
     // =====================================================================
     int nReal = nReal_default;
+
+    std::vector<double> xLocations{0.5, 1.5, 2.5};
+    Fine_Scale_BTCs.resize(xLocations.size());
+
 
     if (!upscale_only) {
         for (int r = 1; r <= nReal; ++r) {
@@ -273,12 +279,12 @@ int main(int argc, char** argv) {
             g.SetVal("porosity", 1);
             g.SetVal("c_left", 1.0);
 
-            std::vector<double> xLocations{0.5, 1.5, 2.5};
-            g.setBTCLocations(xLocations);
+
 
             TimeSeriesSet<double> BTCs_FineScaled;
+            g.setBTCLocations(xLocations);
             if (solve_fine_scale_transport)
-            {   g.SolveTransport(20,
+            {   g.SolveTransport(t_end_pdf,
                                  std::min(dt_optimal, 0.5 / 10.0),
                                  "transport_", 500,
                                  fine_dir,
@@ -288,6 +294,7 @@ int main(int argc, char** argv) {
 
                 for (int i = 0; i < (int)xLocations.size() && i < (int)BTCs_FineScaled.size(); ++i) {
                     BTCs_FineScaled.setSeriesName(i, fmt_x(xLocations[i]));
+                    Fine_Scale_BTCs[i].append(BTCs_FineScaled[i].derivative() , pfx+fmt_x(xLocations[i]));
                 }
 
                 const std::string btc_path       = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
@@ -295,6 +302,7 @@ int main(int argc, char** argv) {
 
                 BTCs_FineScaled.write(btc_path);
                 BTCs_FineScaled.derivative().write(btc_deriv_path);
+
             }
             PetscTime(&t_total1);
 
@@ -369,6 +377,10 @@ int main(int argc, char** argv) {
             MPI_Barrier(PETSC_COMM_WORLD);
         }
     }
+
+    TimeSeriesSet<double> mean_BTCs;
+    for (int i=0; i<xLocations.size(); i++)
+        mean_BTCs.append(Fine_Scale_BTCs[i].mean_ts(), fmt_x(xLocations[i]));
 
     inverse_qx_cdfs.write(joinPath(run_dir, "qx_inverse_cdfs.txt"));
     qx_pdfs.write(joinPath(run_dir, "qx_pdfs.txt"));
@@ -552,7 +564,7 @@ int main(int argc, char** argv) {
 
     g_u.setMixingParams(lc_mean, lx_mean, ly_mean);
 
-    double t_end_pdf = 20;
+
     double dt_pdf = dt_mean;
     int output_interval_pdf = 500;
 
@@ -566,7 +578,6 @@ int main(int argc, char** argv) {
 
     g_u.assignConstant("C", Grid2D::ArrayKind::Cell, 0);
 
-    std::vector<double> xLocations{0.5, 1.5, 2.5};
     g_u.setBTCLocations(xLocations);
 
     TimeSeriesSet<double> BTCs_Upscaled;
@@ -577,6 +588,7 @@ int main(int argc, char** argv) {
 
         for (int i = 0; i < (int)xLocations.size() && i < (int)BTCs_Upscaled.size(); ++i) {
             BTCs_Upscaled.setSeriesName(i, fmt_x(xLocations[i]));
+            Fine_Scale_BTCs[i].append(BTCs_Upscaled[i].derivative(),"Upscaled" + fmt_x(xLocations[i]));
         }
 
         BTCs_Upscaled.write(up_btc_path);
@@ -585,10 +597,22 @@ int main(int argc, char** argv) {
         g_u.writeNamedVTI_Auto("C", joinPath(up_dir, "Cu.vti"));
         g_u.writeNamedMatrix("C", Grid2D::ArrayKind::Cell, joinPath(up_dir, up_pfx + "Cu.txt"));
     }
+
+    for (int i=0; i<xLocations.size(); i++)
+    {
+        std::string out_cmp_d = joinPath(run_dir, fmt_x(xLocations[i]) + "BTC_Compare.csv");
+        //Fine_Scale_BTCs[i] = Fine_Scale_BTCs[i].make_uniform(0.01);
+        Fine_Scale_BTCs[i].write(out_cmp_d);
+        std::cout << "Wrote derivative WIDE comparison CSV (t_base): " << out_cmp_d << "\n";
+    }
+    std::string out_cmp_d = joinPath(run_dir, "BTC_mean.csv");
+    //mean_BTCs = mean_BTCs.make_uniform(0.01);
+    mean_BTCs.write(out_cmp_d);
+
     // =====================================================================
     // FINAL AGGREGATION CSVs for comparison / plotting
     // =====================================================================
-    if (rank == 0) {
+    /*if (rank == 0) {
         const double t_end_cmp = 10.0;
         const double dt_cmp    = 0.001;
 
@@ -1052,11 +1076,11 @@ int main(int argc, char** argv) {
 
         load_csv_as_tsset(up_btc_deriv_path, "UpscaledDeriv", BTCd_compare);
 
-        const std::string out_cmp_d = joinPath(run_dir, "BTC_Derivative_Compare.csv");
-        BTCd_compare.write(out_cmp_d);
-        std::cout << "Wrote derivative WIDE comparison CSV (t_base): " << out_cmp_d << "\n";
 
-        const std::string fdm_csv = joinPath(run_dir, "BTC_FineDerivMean.csv");
+        //BTCd_compare.write(out_cmp_d);
+
+
+        /*const std::string fdm_csv = joinPath(run_dir, "BTC_FineDerivMean.csv");
         if (BTCd_fineMean_only.size() > 0) BTCd_fineMean_only.write(fdm_csv);
 
         {
@@ -1068,10 +1092,11 @@ int main(int argc, char** argv) {
             }
         }
 
-        std::cout << "\nMixing PDF simulation complete!\n";
-        std::cout << "All outputs saved to: " << run_dir << "\n";
-    }
 
+    }*/
+
+    std::cout << "\nMixing PDF simulation complete!\n";
+    std::cout << "All outputs saved to: " << run_dir << "\n";
     MPI_Barrier(PETSC_COMM_WORLD);
     return 0;
 }
