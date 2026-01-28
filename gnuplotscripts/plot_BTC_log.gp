@@ -1,110 +1,106 @@
-#!/usr/bin/gnuplot
+# plot_BTC_compare_all.gp
+# Generates three separate plots for x=0.50, x=1.50, x=2.50
 
-# Set terminal to PNG with good resolution (same as other plots)
-set terminal pngcairo enhanced font "Arial,28" size 1200,800
+reset
 
-# Data and grid settings
-set datafile separator ','
+# Common settings
+set terminal pngcairo size 1200,800 enhanced font 'Arial,28'
 set grid
+set key top left
+set xlabel 'Time' font 'Arial,32'
+set ylabel 'Concentration' font 'Arial,32'
+set datafile separator ','
+set datafile missing ''
 
-# Axis labels with larger fonts
-set xlabel 't' font "Arial,32"
-set ylabel 'c/c_0' font "Arial,32"
-
-# Set logarithmic scale for y-axis
+# Logarithmic y-axis with superscript notation
 set logscale y
-
-# Format y-axis labels with superscript notation
 set format y "10^{%T}"
+set yrange [1e-8:*]
+set xrange [0:20]
 
-# Set y-axis range with minimum of 1e-6
-#set autoscale fix
-set yrange [1e-4:*]
+# ============================================================
+# Plot 1: x = 0.50
+# ============================================================
+set output 'BTC_compare_x0.50.png'
+set title 'Breakthrough Curve at x = 0.50 m' font 'Arial,32'
 
-# Legend position
-set key bottom left
+plot 'x=0.50BTC_Compare.csv' using 1:2 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 3:4 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 5:6 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 7:8 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 9:10 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 11:12 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 13:14 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 15:16 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 17:18 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 19:20 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 21:22 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 23:24 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 25:26 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 27:28 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 29:30 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 31:32 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 33:34 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 35:36 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 37:38 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 39:40 with lines lw 1 lc rgb "#CCCCCC" title 'Realizations', \
+     'BTC_mean.csv' using 1:2 with lines lw 3 lc rgb "#000000" title 'Mean', \
+     'x=0.50BTC_Compare.csv' using 41:42 with lines lw 3 lc rgb "#FF0000" title 'Upscaled'
 
-# Define line styles
-set style line 1 lc rgb '#cccccc' lw 1.5  # Grey for realizations
-set style line 2 lc rgb '#000000' lw 3.0  # Black for mean
-set style line 3 lc rgb '#d60000' lw 3.0  # Red for upscaled
+# ============================================================
+# Plot 2: x = 1.50
+# ============================================================
+set output 'BTC_compare_x1.50.png'
+set title 'Breakthrough Curve at x = 1.50 m' font 'Arial,32'
 
-# Plot for x=0.50
-set output 'BTC_derivative_compare_x_0_50.png'
-set title 'x=0.50' font "Arial,32"
-plot 'BTC_Derivative_Compare.csv' using 1:2 with lines ls 1 notitle, \
-     '' using 1:8 with lines ls 1 notitle, \
-     '' using 1:14 with lines ls 1 notitle, \
-     '' using 1:20 with lines ls 1 notitle, \
-     '' using 1:26 with lines ls 1 notitle, \
-     '' using 1:32 with lines ls 1 notitle, \
-     '' using 1:38 with lines ls 1 notitle, \
-     '' using 1:44 with lines ls 1 notitle, \
-     '' using 1:50 with lines ls 1 notitle, \
-     '' using 1:56 with lines ls 1 notitle, \
-     '' using 1:62 with lines ls 1 notitle, \
-     '' using 1:68 with lines ls 1 notitle, \
-     '' using 1:74 with lines ls 1 notitle, \
-     '' using 1:80 with lines ls 1 notitle, \
-     '' using 1:86 with lines ls 1 notitle, \
-     '' using 1:92 with lines ls 1 notitle, \
-     '' using 1:98 with lines ls 1 notitle, \
-     '' using 1:104 with lines ls 1 notitle, \
-     '' using 1:110 with lines ls 1 notitle, \
-     '' using 1:116 with lines ls 1 title 'Realizations', \
-     '' using 1:122 with lines ls 2 title 'Mean', \
-     '' using 1:128 with lines ls 3 title 'Upscaled'
+plot 'x=1.50BTC_Compare.csv' using 1:2 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 3:4 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 5:6 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 7:8 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 9:10 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 11:12 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 13:14 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 15:16 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 17:18 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 19:20 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 21:22 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 23:24 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 25:26 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 27:28 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 29:30 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 31:32 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 33:34 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 35:36 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 37:38 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 39:40 with lines lw 1 lc rgb "#CCCCCC" title 'Realizations', \
+     'BTC_mean.csv' using 3:4 with lines lw 3 lc rgb "#000000" title 'Mean', \
+     'x=1.50BTC_Compare.csv' using 41:42 with lines lw 3 lc rgb "#FF0000" title 'Upscaled'
 
-# Plot for x=1.50
-set output 'BTC_derivative_compare_x_1_50.png'
-set title 'x=1.50' font "Arial,32"
-plot 'BTC_Derivative_Compare.csv' using 1:4 with lines ls 1 notitle, \
-     '' using 1:10 with lines ls 1 notitle, \
-     '' using 1:16 with lines ls 1 notitle, \
-     '' using 1:22 with lines ls 1 notitle, \
-     '' using 1:28 with lines ls 1 notitle, \
-     '' using 1:34 with lines ls 1 notitle, \
-     '' using 1:40 with lines ls 1 notitle, \
-     '' using 1:46 with lines ls 1 notitle, \
-     '' using 1:52 with lines ls 1 notitle, \
-     '' using 1:58 with lines ls 1 notitle, \
-     '' using 1:64 with lines ls 1 notitle, \
-     '' using 1:70 with lines ls 1 notitle, \
-     '' using 1:76 with lines ls 1 notitle, \
-     '' using 1:82 with lines ls 1 notitle, \
-     '' using 1:88 with lines ls 1 notitle, \
-     '' using 1:94 with lines ls 1 notitle, \
-     '' using 1:100 with lines ls 1 notitle, \
-     '' using 1:106 with lines ls 1 notitle, \
-     '' using 1:112 with lines ls 1 notitle, \
-     '' using 1:118 with lines ls 1 title 'Realizations', \
-     '' using 1:124 with lines ls 2 title 'Mean', \
-     '' using 1:130 with lines ls 3 title 'Upscaled'
+# ============================================================
+# Plot 3: x = 2.50
+# ============================================================
+set output 'BTC_compare_x2.50.png'
+set title 'Breakthrough Curve at x = 2.50 m' font 'Arial,32'
 
-# Plot for x=2.50
-set output 'BTC_derivative_compare_x_2_50.png'
-set title 'x=2.50' font "Arial,32"
-plot 'BTC_Derivative_Compare.csv' using 1:6 with lines ls 1 notitle, \
-     '' using 1:12 with lines ls 1 notitle, \
-     '' using 1:18 with lines ls 1 notitle, \
-     '' using 1:24 with lines ls 1 notitle, \
-     '' using 1:30 with lines ls 1 notitle, \
-     '' using 1:36 with lines ls 1 notitle, \
-     '' using 1:42 with lines ls 1 notitle, \
-     '' using 1:48 with lines ls 1 notitle, \
-     '' using 1:54 with lines ls 1 notitle, \
-     '' using 1:60 with lines ls 1 notitle, \
-     '' using 1:66 with lines ls 1 notitle, \
-     '' using 1:72 with lines ls 1 notitle, \
-     '' using 1:78 with lines ls 1 notitle, \
-     '' using 1:84 with lines ls 1 notitle, \
-     '' using 1:90 with lines ls 1 notitle, \
-     '' using 1:96 with lines ls 1 notitle, \
-     '' using 1:102 with lines ls 1 notitle, \
-     '' using 1:108 with lines ls 1 notitle, \
-     '' using 1:114 with lines ls 1 notitle, \
-     '' using 1:120 with lines ls 1 title 'Realizations', \
-     '' using 1:126 with lines ls 2 title 'Mean', \
-     '' using 1:132 with lines ls 3 title 'Upscaled'
-
-unset output
+plot 'x=2.50BTC_Compare.csv' using 1:2 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 3:4 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 5:6 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 7:8 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 9:10 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 11:12 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 13:14 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 15:16 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 17:18 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 19:20 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 21:22 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 23:24 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 25:26 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 27:28 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 29:30 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 31:32 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 33:34 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 35:36 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 37:38 with lines lw 1 lc rgb "#CCCCCC" notitle, \
+     '' using 39:40 with lines lw 1 lc rgb "#CCCCCC" title 'Realizations', \
+     'BTC_mean.csv' using 5:6 with lines lw 3 lc rgb "#000000" title 'Mean', \
+     'x=2.50BTC_Compare.csv' using 41:42 with lines lw 3 lc rgb "#FF0000" title 'Upscaled'

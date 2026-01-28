@@ -75,8 +75,6 @@ int main(int argc, char** argv) {
     TBaseMode tbase_mode = TBaseMode::Fixed;     // --tbase (default), --t-upscaled, --t-fine
     AlignMode align_mode = AlignMode::Resample;  // --resample (default), --make-uniform
 
-    upscale_only = false;
-
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -137,7 +135,7 @@ int main(int argc, char** argv) {
     double correlation_ls_y = 0.1;
     double stdev = 2.0;
     double g_mean = 0;
-    double Diffusion_coefficient = 0.00; // new
+    double Diffusion_coefficient = 0.01; // new
     double t_end_pdf = 20;
 
     // -----------------------------
