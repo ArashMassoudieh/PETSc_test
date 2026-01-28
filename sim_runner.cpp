@@ -33,28 +33,29 @@ std::string prepare_run_dir_mpi(
         createDirectory(output_dir);
 
         if (opts.upscale_only) {
-            if (opts.hardcoded_mean) {
-                // hardcoded mode: can use existing run_dir if it exists, otherwise create new
-                if (!resume_run_dir.empty() && dirExists(resume_run_dir)) {
-                    run_dir = resume_run_dir;
-                    std::cout << "Hardcoded-mean upscaled-only: using run_dir: " << run_dir << "\n";
-                } else {
+            if (opts.upscale_only) {
+                if (opts.hardcoded_mean) {
+
+                    // ALWAYS create a fresh run directory
                     run_dir = joinPath(output_dir, "run_" + makeTimestamp());
                     createDirectory(run_dir);
-                    std::cout << "Hardcoded-mean upscaled-only: created run_dir: " << run_dir << "\n";
+
+                    std::cout << "Hardcoded-mean upscaled-only: created NEW run_dir: "
+                              << run_dir << "\n";
                 }
-            } else {
-                // strict upscale-only: must point to existing run dir
-                if (resume_run_dir.empty()) {
-                    std::cerr << "ERROR: --upscale-only requires --run-dir=/path/to/run_YYYYMMDD_HHMMSS\n";
-                    MPI_Abort(PETSC_COMM_WORLD, 1);
+                else {
+                    // strict upscale-only: must point to existing run dir
+                    if (resume_run_dir.empty()) {
+                        std::cerr << "ERROR: --upscale-only requires --run-dir=/path/to/run_YYYYMMDD_HHMMSS\n";
+                        MPI_Abort(PETSC_COMM_WORLD, 1);
+                    }
+                    run_dir = resume_run_dir;
+                    if (!dirExists(run_dir)) {
+                        std::cerr << "ERROR: run_dir does not exist: " << run_dir << "\n";
+                        MPI_Abort(PETSC_COMM_WORLD, 2);
+                    }
+                    std::cout << "Upscale-only: using run_dir: " << run_dir << "\n";
                 }
-                run_dir = resume_run_dir;
-                if (!dirExists(run_dir)) {
-                    std::cerr << "ERROR: run_dir does not exist: " << run_dir << "\n";
-                    MPI_Abort(PETSC_COMM_WORLD, 2);
-                }
-                std::cout << "Upscale-only: using run_dir: " << run_dir << "\n";
             }
         } else {
             run_dir = joinPath(output_dir, "run_" + makeTimestamp());

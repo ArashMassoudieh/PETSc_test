@@ -38,12 +38,12 @@ int main(int argc, char** argv)
     // -----------------------------
     RunOptions opts;
     opts.upscale_only   = false;
-    opts.hardcoded_mean = false; // IMPORTANT: do NOT default true (otherwise you always skip fine loop)
+    opts.hardcoded_mean = true; // IMPORTANT: do NOT default true (otherwise you always skip fine loop)
     opts.solve_fine_scale_transport = false;
     opts.solve_upscale_transport    = true;
 
     // If you want a default resume folder for upscale-only:
-    std::string resume_run_dir = joinPath(output_dir, "run_20260128_153933");
+    std::string resume_run_dir = joinPath(output_dir, "run_20260128_164011");
 
     // If you want to hardcode the qx inverse-CDF path from main (OPTIONAL):
     // (This file exists in the run folder you showed.)
