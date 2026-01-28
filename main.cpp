@@ -128,16 +128,16 @@ int main(int argc, char** argv) {
     // -----------------------------
     // Domain / grid resolution
     // -----------------------------
-    int nx = 30;
-    int nu = 10;
-    int ny = 10;
+    int nx = 300;
+    int nu = 100;
+    int ny = 100;
     double Lx = 3.0;
     double Ly = 1.0;
-    double correlation_ls_x = 1;
-    double correlation_ls_y = 0.1;
+    double correlation_ls_x = 0.3;
+    double correlation_ls_y = 0.3;
     double stdev = 2.0;
     double g_mean = 0;
-    double Diffusion_coefficient = 0.01;
+    double Diffusion_coefficient = 0.00; // new
 
     // -----------------------------
     // Realizations

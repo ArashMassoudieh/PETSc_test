@@ -12,13 +12,15 @@ set xlabel 't' font "Arial,32"
 set ylabel 'c/c_0' font "Arial,32"
 
 # Set logarithmic scale for y-axis
-set logscale y
+set yrange [1e-4:*]
+set ytics (1e-4, 1e-3, 1e-2, 1e-1, 1)
+set mytics 10
 
 # Format y-axis labels with superscript notation
 set format y "10^{%T}"
 
 # Set y-axis range with minimum of 1e-6
-#set autoscale fix
+set autoscale fix y
 set yrange [1e-4:*]
 
 # Legend position
