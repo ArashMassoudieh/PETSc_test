@@ -38,29 +38,15 @@ int main(int argc, char** argv)
     // -----------------------------
     RunOptions opts;
     opts.upscale_only   = false;
-    opts.hardcoded_mean = true; // IMPORTANT: do NOT default true (otherwise you always skip fine loop)
+    opts.hardcoded_mean = true; // (your current setting)
     opts.solve_fine_scale_transport = false;
     opts.solve_upscale_transport    = true;
 
-    // If you want a default resume folder for upscale-only:
+    // Default resume folder (used when upscale-only OR hardcoded-mean)
     std::string resume_run_dir = joinPath(output_dir, "run_20260129_093954_params");
 
-    // If you want to hardcode the qx inverse-CDF path from main (OPTIONAL):
-    // (This file exists in the run folder you showed.)
-    // If qx_inverse_cdfs.txt exists, build mean_qx_inverse_cdf.txt and use it
-    {
-        const std::string multi = joinPath(resume_run_dir, "qx_inverse_cdfs.txt");
-        const std::string meanf = joinPath(resume_run_dir, "mean_qx_inverse_cdf.txt");
-
-        if (fileExists(multi)) {
-            // always rebuild (safe), or change to "!fileExists(meanf)" if you prefer
-            build_mean_qx_inverse_cdf_from_multi(multi, meanf);
-        }
-
-        if (fileExists(meanf)) {
-            opts.hardcoded_qx_cdf_path = meanf;
-        }
-    }
+    // Track whether user explicitly set --qx-cdf
+    bool user_set_qx_cdf = false;
 
     // -----------------------------
     // Plot options (kept in main only)
@@ -82,7 +68,10 @@ int main(int argc, char** argv)
         else if (a.rfind("--run-dir=", 0) == 0) resume_run_dir = a.substr(std::string("--run-dir=").size());
 
         // --- hardcoded qx inverse-CDF path (u,v csv; header optional) ---
-        else if (a.rfind("--qx-cdf=", 0) == 0) opts.hardcoded_qx_cdf_path = a.substr(std::string("--qx-cdf=").size());
+        else if (a.rfind("--qx-cdf=", 0) == 0) {
+            opts.hardcoded_qx_cdf_path = a.substr(std::string("--qx-cdf=").size());
+            user_set_qx_cdf = true;
+        }
 
         // --- transport toggles ---
         else if (a == "--no-fine-transport") opts.solve_fine_scale_transport = false;
@@ -107,6 +96,15 @@ int main(int argc, char** argv)
     // Your rule: hardcoded mean implies upscale-only
     if (opts.hardcoded_mean) opts.upscale_only = true;
 
+    // If user did NOT provide --qx-cdf, point to the "expected" mean file in resume_run_dir.
+    // sim_runner.cpp will:
+    //   - use it if it exists
+    //   - else compute it from qx_inverse_cdfs.txt if present
+    //   - else fallback to H.qx_const
+    if (!user_set_qx_cdf) {
+        opts.hardcoded_qx_cdf_path = joinPath(resume_run_dir, "mean_qx_inverse_cdf.txt");
+    }
+
     // -----------------------------
     // Params (kept here)
     // -----------------------------
@@ -130,24 +128,32 @@ int main(int argc, char** argv)
 
     P.xLocations = {0.5, 1.5, 2.5};
 
+    // -----------------------------
     // Hardcoded means (used only when --hardcoded-mean)
+    // -----------------------------
     HardcodedMean H;
     H.lc_mean  = 0.396413;
     H.lx_mean  = 1.24365;
     H.ly_mean  = 0.124846;
     H.dt_mean  = 7.31122e-05;
 
-    // Optional overwrite from file (if present)
+    // Optional overwrite from mean_params.txt (if present)
     {
         const std::string mean_path = joinPath(resume_run_dir, "mean_params.txt");
         if (fileExists(mean_path)) {
-            if (load_hardcoded_mean_from_file(mean_path, H) && rank == 0) {
-                std::cout << "Loaded mean params: " << mean_path << "\n";
+            double lc = H.lc_mean, lx = H.lx_mean, ly = H.ly_mean, dt = H.dt_mean;
+            if (read_mean_params_txt(mean_path, lc, lx, ly, dt)) {
+                H.lc_mean = lc;
+                H.lx_mean = lx;
+                H.ly_mean = ly;
+                H.dt_mean = dt;
+
+                if (rank == 0) std::cout << "Loaded mean params: " << mean_path << "\n";
             }
         }
     }
 
-    // fallback only if --qx-cdf not provided or load fails
+    // constant fallback if no mean qx could be loaded / computed
     H.qx_const = 1.0;
 
     // -----------------------------
@@ -203,10 +209,11 @@ int main(int argc, char** argv)
 
         if (opts.hardcoded_mean) {
             if (!opts.hardcoded_qx_cdf_path.empty()) {
-                std::cout << "Hardcoded mean mode: qx inverse-CDF path = "
+                std::cout << "Hardcoded mean mode: qx inverse-CDF path (preferred mean file) = "
                           << opts.hardcoded_qx_cdf_path << "\n";
+                std::cout << "If missing, runner will compute from qx_inverse_cdfs.txt or use constant fallback.\n";
             } else {
-                std::cout << "Hardcoded mean mode: no --qx-cdf provided; using constant qx fallback.\n";
+                std::cout << "Hardcoded mean mode: no qx path set; using constant qx fallback.\n";
             }
         }
     }
@@ -214,3 +221,4 @@ int main(int argc, char** argv)
     MPI_Barrier(PETSC_COMM_WORLD);
     return 0;
 }
+

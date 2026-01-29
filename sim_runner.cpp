@@ -33,29 +33,26 @@ std::string prepare_run_dir_mpi(
         createDirectory(output_dir);
 
         if (opts.upscale_only) {
-            if (opts.upscale_only) {
-                if (opts.hardcoded_mean) {
+            if (opts.hardcoded_mean) {
+                // ALWAYS create a fresh run directory
+                run_dir = joinPath(output_dir, "run_" + makeTimestamp());
+                createDirectory(run_dir);
 
-                    // ALWAYS create a fresh run directory
-                    run_dir = joinPath(output_dir, "run_" + makeTimestamp());
-                    createDirectory(run_dir);
-
-                    std::cout << "Hardcoded-mean upscaled-only: created NEW run_dir: "
-                              << run_dir << "\n";
+                std::cout << "Hardcoded-mean upscaled-only: created NEW run_dir: "
+                          << run_dir << "\n";
+            }
+            else {
+                // strict upscale-only: must point to existing run dir
+                if (resume_run_dir.empty()) {
+                    std::cerr << "ERROR: --upscale-only requires --run-dir=/path/to/run_YYYYMMDD_HHMMSS\n";
+                    MPI_Abort(PETSC_COMM_WORLD, 1);
                 }
-                else {
-                    // strict upscale-only: must point to existing run dir
-                    if (resume_run_dir.empty()) {
-                        std::cerr << "ERROR: --upscale-only requires --run-dir=/path/to/run_YYYYMMDD_HHMMSS\n";
-                        MPI_Abort(PETSC_COMM_WORLD, 1);
-                    }
-                    run_dir = resume_run_dir;
-                    if (!dirExists(run_dir)) {
-                        std::cerr << "ERROR: run_dir does not exist: " << run_dir << "\n";
-                        MPI_Abort(PETSC_COMM_WORLD, 2);
-                    }
-                    std::cout << "Upscale-only: using run_dir: " << run_dir << "\n";
+                run_dir = resume_run_dir;
+                if (!dirExists(run_dir)) {
+                    std::cerr << "ERROR: run_dir does not exist: " << run_dir << "\n";
+                    MPI_Abort(PETSC_COMM_WORLD, 2);
                 }
+                std::cout << "Upscale-only: using run_dir: " << run_dir << "\n";
             }
         } else {
             run_dir = joinPath(output_dir, "run_" + makeTimestamp());
@@ -99,45 +96,6 @@ static inline std::string to_lower_copy(std::string s)
     return s;
 }
 
-bool load_hardcoded_mean_from_file(const std::string& path,
-                                   HardcodedMean& H)
-{
-    std::ifstream f(path);
-    if (!f) return false;
-
-    bool touched = false;
-    std::string line;
-
-    while (std::getline(f, line)) {
-        line = trim_copy(line);
-        if (line.empty()) continue;
-        if (line[0] == '#' || line[0] == ';') continue;
-
-        const auto eq = line.find('=');
-        if (eq == std::string::npos) continue;
-
-        std::string key = to_lower_copy(trim_copy(line.substr(0, eq)));
-        std::string val = trim_copy(line.substr(eq + 1));
-        if (val.empty()) continue;
-
-        try {
-            if (key == "lc_mean" || key == "lc") {
-                H.lc_mean = std::stod(val); touched = true;
-            }
-            else if (key == "lx_mean" || key == "lambda_x_mean" || key == "lx") {
-                H.lx_mean = std::stod(val); touched = true;
-            }
-            else if (key == "ly_mean" || key == "lambda_y_mean" || key == "ly") {
-                H.ly_mean = std::stod(val); touched = true;
-            }
-            else if (key == "dt_mean" || key == "dt") {
-                H.dt_mean = std::stod(val); touched = true;
-            }
-        } catch (...) {}
-    }
-    return touched;
-}
-
 // Load an inverse CDF from a file, tolerant to header/no-header.
 static bool try_load_hardcoded_invcdf(TimeSeries<double>& invcdf_mean, const std::string& path)
 {
@@ -152,7 +110,15 @@ static bool try_load_hardcoded_invcdf(TimeSeries<double>& invcdf_mean, const std
     return true;
 }
 
-bool build_mean_qx_inverse_cdf_from_multi(
+static inline std::string dirname_of(std::string path)
+{
+    const auto pos = path.find_last_of("/\\");
+    if (pos == std::string::npos) return std::string();
+    return path.substr(0, pos);
+}
+
+// Build mean inverse-CDF from the multi-series output (qx_inverse_cdfs.txt)
+static bool build_mean_qx_inverse_cdf_from_multi(
     const std::string& in_multi_path,
     const std::string& out_mean_path
 ){
@@ -171,7 +137,7 @@ bool build_mean_qx_inverse_cdf_from_multi(
 
     std::string line;
     while (std::getline(f, line)) {
-        line = trim_copy(line);               // if you don't have trim_copy globally, replace with your local trim
+        line = trim_copy(line);
         if (line.empty()) continue;
 
         const auto tok = split_line_delim(line, delim);
@@ -191,7 +157,6 @@ bool build_mean_qx_inverse_cdf_from_multi(
             if (!try_parse_double(tok[2*k + 1], q)) continue;
 
             if (k == 0) t_ref = t;
-            // ignore inconsistent t columns silently, but you can tighten if you want
             if (std::abs(t - t_ref) > 1e-10) continue;
 
             if (is_finite_number(q)) {
@@ -489,14 +454,42 @@ static bool build_mean_for_upscaled(
         ly_mean = H.ly_mean;
         dt_mean = H.dt_mean;
 
-        // prefer loading invcdf from file if provided; fallback to constant
-        const bool loaded = try_load_hardcoded_invcdf(invcdf_mean, opts.hardcoded_qx_cdf_path);
+        // --------------------------------------------
+        // qx inverse-CDF ladder:
+        // 1) load mean_qx_inverse_cdf.txt (opts.hardcoded_qx_cdf_path)
+        // 2) if missing, compute from qx_inverse_cdfs.txt in the same folder
+        // 3) else flat constant
+        // --------------------------------------------
+        bool loaded = false;
+
+        // (1) Try load preferred mean file
+        loaded = try_load_hardcoded_invcdf(invcdf_mean, opts.hardcoded_qx_cdf_path);
+
+        // (2) If mean missing, compute from qx_inverse_cdfs.txt (if exists)
+        if (!loaded && !opts.hardcoded_qx_cdf_path.empty()) {
+            const std::string src_dir = dirname_of(opts.hardcoded_qx_cdf_path);
+            if (!src_dir.empty()) {
+                const std::string meanf = joinPath(src_dir, "mean_qx_inverse_cdf.txt");
+                const std::string multi = joinPath(src_dir, "qx_inverse_cdfs.txt");
+
+                if (!fileExists(meanf) && fileExists(multi)) {
+                    if (build_mean_qx_inverse_cdf_from_multi(multi, meanf)) {
+                        loaded = try_load_hardcoded_invcdf(invcdf_mean, meanf);
+                    }
+                }
+                // If mean file exists now (maybe created earlier), try load it anyway
+                if (!loaded && fileExists(meanf)) {
+                    loaded = try_load_hardcoded_invcdf(invcdf_mean, meanf);
+                }
+            }
+        }
+
+        // (3) Flat fallback
         if (!loaded) {
             build_flat_invcdf(invcdf_mean, H.qx_const);
         }
 
-        // IMPORTANT: always write a copy into *this* run_dir
-        // so user can find it next to mean_params_used.txt
+        // Always write a copy into this NEW run_dir
         invcdf_mean.writefile(run_cdf_copy_path);
 
         std::ofstream f(joinPath(run_dir, "mean_params_used.txt"));
@@ -505,15 +498,14 @@ static bool build_mean_for_upscaled(
         f << "lambda_y_mean=" << ly_mean << "\n";
         f << "dt_mean=" << dt_mean << "\n";
         f << "mean_qx_inverse_cdf_written_to=" << run_cdf_copy_path << "\n";
-        f << "qx_cdf_source_path=" << opts.hardcoded_qx_cdf_path << "\n";
+        f << "qx_cdf_preferred_path=" << opts.hardcoded_qx_cdf_path << "\n";
         if (!loaded) f << "qx_const=" << H.qx_const << "\n";
 
         if (loaded) {
-            std::cout << "Using HARD-CODED mean params + LOADED qx inverse CDF: "
-                      << opts.hardcoded_qx_cdf_path << "\n";
-            std::cout << "Also copied to: " << run_cdf_copy_path << "\n";
+            std::cout << "Using HARD-CODED mean params + qx inverse CDF (loaded/derived)\n";
+            std::cout << "Copied to: " << run_cdf_copy_path << "\n";
         } else {
-            std::cout << "Using HARD-CODED mean params + CONSTANT qx (no --qx-cdf or failed load).\n";
+            std::cout << "Using HARD-CODED mean params + CONSTANT qx (no mean/multi files).\n";
             std::cout << "Wrote flat CDF to: " << run_cdf_copy_path << "\n";
         }
         return true;
@@ -740,3 +732,4 @@ bool run_simulation_blocks(
 
     return true;
 }
+

@@ -8,8 +8,13 @@
 // Keep sim_runner.h LIGHT.
 // Do NOT include grid.h here (it causes heavy include chains / incomplete type issues).
 // Only include what we must for types used in signatures.
-#include "TimeSeries.h"     // TimeSeries<T>, TimeSeriesSet<T>
-#include "sim_helpers.h"    // FS helpers + mean_of + fmt_x + read_mean_params_txt, etc.
+#include "TimeSeries.h"  // TimeSeries<T>, TimeSeriesSet<T>
+
+// NOTE:
+// Do NOT include sim_helpers.h here.
+// sim_runner.cpp can include sim_helpers.h as needed.
+// This avoids circular / heavy include chains (plotter.cpp includes sim_helpers.h).
+// sim_runner.h is meant to stay lightweight.
 
 // -----------------------------
 // Simulation switches / options
@@ -18,14 +23,18 @@ struct RunOptions
 {
     // run modes
     bool upscale_only   = false;   // skip fine loop; do only upscaled (requires run_dir unless hardcoded_mean)
-    bool hardcoded_mean = false;    // use hardcoded lc/lx/ly/dt; and optionally load qx inverse-CDF from file
+    bool hardcoded_mean = false;   // use hardcoded lc/lx/ly/dt; and optionally load qx inverse-CDF from file
 
     // transport toggles
     bool solve_fine_scale_transport = true;
     bool solve_upscale_transport    = true;
 
     // When hardcoded_mean=true, you can supply a qx inverse-CDF file (u,v).
-    // If empty or load fails -> fallback to HardcodedMean::qx_const.
+    // Priority used by sim_runner.cpp (hardcoded_mean case):
+    //   1) load mean_qx_inverse_cdf.txt from this path (if exists / valid)
+    //   2) else, if "qx_inverse_cdfs.txt" exists next to it, compute mean_qx_inverse_cdf.txt and load it
+    //   3) else fallback to HardcodedMean::qx_const
+    //
     // NOTE: sim_runner.cpp will ALSO copy/write mean_qx_inverse_cdf.txt into the new run_dir.
     std::string hardcoded_qx_cdf_path;
 };
@@ -43,19 +52,6 @@ struct HardcodedMean
     // fallback only when RunOptions::hardcoded_qx_cdf_path is not provided or load fails
     double qx_const = 0.0;
 };
-
-// --- mean params loader (key=value) ---
-// Updates ONLY H.{lc_mean,lx_mean,ly_mean,dt_mean} if keys exist.
-// Returns true if at least one of those keys was loaded.
-bool load_hardcoded_mean_from_file(const std::string& path, HardcodedMean& H);
-
-// Build mean inverse-CDF from a multi-series table:
-// input:  t,q1,t,q2,t,q3,...   (or whitespace/comma delimited)
-// output: u,v   (two columns)
-bool build_mean_qx_inverse_cdf_from_multi(
-    const std::string& in_multi_path,
-    const std::string& out_mean_path
-);
 
 // -----------------------------
 // Simulation parameters (input)
@@ -124,3 +120,4 @@ bool run_simulation_blocks(
     const HardcodedMean& H,
     RunOutputs& out,
     int rank);
+
