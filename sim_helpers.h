@@ -11,6 +11,7 @@
 #include <sstream>
 #include <ctime>
 #include <TimeSeries.h>
+#include <TimeSeriesSet.h>
 
 #include <petscsys.h>   // PetscInt
 
@@ -91,6 +92,71 @@ bool write_comparison_csv(
     const std::vector<std::string>& out_colnames,
     const std::vector<std::vector<double>>& out_cols
 );
+
+inline bool load_csv_time_only(const std::string& path, std::vector<double>& t_out)
+{
+    std::vector<double> t;
+    std::vector<std::string> names;
+    std::vector<std::vector<double>> cols;
+    if (!read_time_series_table_csv(path, t, names, cols)) return false;
+    if (t.empty()) return false;
+    t_out = std::move(t);
+    return true;
+}
+
+// Accepts either:
+//   u,v
+//   0.0,1.2
+// or no header:
+//   0.0,1.2
+// Also accepts whitespace separated "0.0 1.2"
+static inline bool read_inverse_cdf_any_format(const std::string& path, TimeSeries<double>& out)
+{
+    std::ifstream f(path);
+    if (!f) return false;
+
+    out.clear();
+
+    std::string line;
+    bool header_checked = false;
+
+    auto trim = [](std::string& s) {
+        auto isspace_ = [](unsigned char c){ return std::isspace(c); };
+        s.erase(s.begin(), std::find_if(s.begin(), s.end(), [&](unsigned char c){ return !isspace_(c); }));
+        s.erase(std::find_if(s.rbegin(), s.rend(), [&](unsigned char c){ return !isspace_(c); }).base(), s.end());
+    };
+
+    while (std::getline(f, line)) {
+        trim(line);
+        if (line.empty()) continue;
+
+        // detect + skip header once (optional)
+        if (!header_checked) {
+            header_checked = true;
+            std::string low = line;
+            std::transform(low.begin(), low.end(), low.begin(),
+                           [](unsigned char c){ return (unsigned char)std::tolower(c); });
+            // crude but effective: header contains u and v and a delimiter
+            if ((low.find('u') != std::string::npos) &&
+                (low.find('v') != std::string::npos) &&
+                (low.find(',') != std::string::npos || low.find(' ') != std::string::npos))
+            {
+                continue;
+            }
+        }
+
+        // normalize delimiter: commas -> spaces
+        for (char& c : line) if (c == ',') c = ' ';
+
+        std::stringstream ss(line);
+        double u = 0.0, v = 0.0;
+        if (!(ss >> u >> v)) continue;
+
+        out.append(u, v);
+    }
+
+    return out.size() >= 2;
+}
 
 // --------------------
 // resampling
