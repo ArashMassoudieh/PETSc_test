@@ -31,6 +31,9 @@ void PETScMatrix::create(PetscInt m, PetscInt n, PetscInt nzPerRow) {
 
     // Force GPU AIJ (MPI vs SEQ decided by communicator size)
     int size=1; MPI_Comm_size(PETSC_COMM_WORLD, &size);
+    PetscCallAbort(PETSC_COMM_WORLD, MatSetType(A_, size>1 ? MATMPIAIJ : MATSEQAIJ));
+    /*
+    int size=1; MPI_Comm_size(PETSC_COMM_WORLD, &size);
 #if defined(PETSC_HAVE_CUDA)
     PetscCallAbort(PETSC_COMM_WORLD, MatSetType(A_, size>1 ? MATMPIAIJCUSPARSE : MATSEQAIJCUSPARSE));
 #elif defined(PETSC_HAVE_HIP)
@@ -40,6 +43,7 @@ void PETScMatrix::create(PetscInt m, PetscInt n, PetscInt nzPerRow) {
 #else
     PetscCallAbort(PETSC_COMM_WORLD, MatSetType(A_, size>1 ? MATMPIAIJ : MATSEQAIJ));
 #endif
+*/
 
     // Let options still override if you pass -mat_type later
     PetscCallAbort(PETSC_COMM_WORLD, MatSetFromOptions(A_));
