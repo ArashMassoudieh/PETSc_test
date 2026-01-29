@@ -44,6 +44,11 @@ struct HardcodedMean
     double qx_const = 0.0;
 };
 
+// --- mean params loader (key=value) ---
+// Updates ONLY H.{lc_mean,lx_mean,ly_mean,dt_mean} if keys exist.
+// Returns true if at least one of those keys was loaded.
+bool load_hardcoded_mean_from_file(const std::string& path, HardcodedMean& H);
+
 // -----------------------------
 // Simulation parameters (input)
 // -----------------------------
