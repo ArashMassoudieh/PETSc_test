@@ -47,7 +47,20 @@ int main(int argc, char** argv)
 
     // If you want to hardcode the qx inverse-CDF path from main (OPTIONAL):
     // (This file exists in the run folder you showed.)
-     opts.hardcoded_qx_cdf_path = joinPath(resume_run_dir, "mean_qx_inverse_cdf.txt");
+    // If qx_inverse_cdfs.txt exists, build mean_qx_inverse_cdf.txt and use it
+    {
+        const std::string multi = joinPath(resume_run_dir, "qx_inverse_cdfs.txt");
+        const std::string meanf = joinPath(resume_run_dir, "mean_qx_inverse_cdf.txt");
+
+        if (fileExists(multi)) {
+            // always rebuild (safe), or change to "!fileExists(meanf)" if you prefer
+            build_mean_qx_inverse_cdf_from_multi(multi, meanf);
+        }
+
+        if (fileExists(meanf)) {
+            opts.hardcoded_qx_cdf_path = meanf;
+        }
+    }
 
     // -----------------------------
     // Plot options (kept in main only)

@@ -152,6 +152,73 @@ static bool try_load_hardcoded_invcdf(TimeSeries<double>& invcdf_mean, const std
     return true;
 }
 
+bool build_mean_qx_inverse_cdf_from_multi(
+    const std::string& in_multi_path,
+    const std::string& out_mean_path
+){
+    std::ifstream f(in_multi_path);
+    if (!f) return false;
+
+    std::string header;
+    if (!std::getline(f, header)) return false;
+
+    const char delim = detect_delim(header);
+
+    std::vector<double> u_out;
+    std::vector<double> v_out;
+    u_out.reserve(4096);
+    v_out.reserve(4096);
+
+    std::string line;
+    while (std::getline(f, line)) {
+        line = trim_copy(line);               // if you don't have trim_copy globally, replace with your local trim
+        if (line.empty()) continue;
+
+        const auto tok = split_line_delim(line, delim);
+        if (tok.size() < 2) continue;
+
+        // Expect pairs: (t,q), (t,q), ...
+        const size_t npairs = tok.size() / 2;
+        if (npairs < 1) continue;
+
+        double t_ref = 0.0;
+        double sum_q = 0.0;
+        int    cnt_q = 0;
+
+        for (size_t k = 0; k < npairs; ++k) {
+            double t = 0.0, q = 0.0;
+            if (!try_parse_double(tok[2*k + 0], t)) continue;
+            if (!try_parse_double(tok[2*k + 1], q)) continue;
+
+            if (k == 0) t_ref = t;
+            // ignore inconsistent t columns silently, but you can tighten if you want
+            if (std::abs(t - t_ref) > 1e-10) continue;
+
+            if (is_finite_number(q)) {
+                sum_q += q;
+                cnt_q++;
+            }
+        }
+
+        if (cnt_q <= 0) continue;
+
+        u_out.push_back(t_ref);
+        v_out.push_back(sum_q / (double)cnt_q);
+    }
+
+    if (u_out.size() < 2) return false;
+
+    std::ofstream o(out_mean_path);
+    if (!o) return false;
+
+    o << "u,v\n";
+    o << std::setprecision(15);
+    for (size_t i = 0; i < u_out.size(); ++i) {
+        o << u_out[i] << "," << v_out[i] << "\n";
+    }
+    return true;
+}
+
 static bool run_fine_loop_collect(
     const SimParams& P,
     const RunOptions& opts,

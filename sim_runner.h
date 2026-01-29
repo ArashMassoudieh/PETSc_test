@@ -49,6 +49,14 @@ struct HardcodedMean
 // Returns true if at least one of those keys was loaded.
 bool load_hardcoded_mean_from_file(const std::string& path, HardcodedMean& H);
 
+// Build mean inverse-CDF from a multi-series table:
+// input:  t,q1,t,q2,t,q3,...   (or whitespace/comma delimited)
+// output: u,v   (two columns)
+bool build_mean_qx_inverse_cdf_from_multi(
+    const std::string& in_multi_path,
+    const std::string& out_mean_path
+);
+
 // -----------------------------
 // Simulation parameters (input)
 // -----------------------------
