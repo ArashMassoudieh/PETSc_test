@@ -158,6 +158,11 @@ static inline bool read_inverse_cdf_any_format(const std::string& path, TimeSeri
     return out.size() >= 2;
 }
 
+// --- mean params loader (key=value) ---
+// Updates ONLY H.{lc_mean,lx_mean,ly_mean,dt_mean} if keys exist.
+// Returns true if at least one of those keys was loaded.
+bool load_hardcoded_mean_from_file(const std::string& path, HardcodedMean& H);
+
 // --------------------
 // resampling
 // --------------------

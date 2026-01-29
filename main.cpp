@@ -38,12 +38,12 @@ int main(int argc, char** argv)
     // -----------------------------
     RunOptions opts;
     opts.upscale_only   = false;
-    opts.hardcoded_mean = true; // IMPORTANT: do NOT default true (otherwise you always skip fine loop)
-    opts.solve_fine_scale_transport = false;
+    opts.hardcoded_mean = false; // IMPORTANT: do NOT default true (otherwise you always skip fine loop)
+    opts.solve_fine_scale_transport = true;
     opts.solve_upscale_transport    = true;
 
     // If you want a default resume folder for upscale-only:
-    std::string resume_run_dir = joinPath(output_dir, "run_20260128_164011");
+    std::string resume_run_dir = joinPath(output_dir, "run_20260129_093954_params");
 
     // If you want to hardcode the qx inverse-CDF path from main (OPTIONAL):
     // (This file exists in the run folder you showed.)
@@ -112,7 +112,7 @@ int main(int argc, char** argv)
     P.Diffusion_coefficient = 0.01;
     P.t_end_pdf = 20.0;
 
-    P.nReal_default = 20;
+    P.nReal_default = 1;
     P.run_seed = 20260115UL;
 
     P.xLocations = {0.5, 1.5, 2.5};
@@ -123,6 +123,16 @@ int main(int argc, char** argv)
     H.lx_mean  = 1.25394;
     H.ly_mean  = 0.125017;
     H.dt_mean  = 7.31122e-05;
+
+    // Optional overwrite from file (if present)
+    {
+        const std::string mean_path = joinPath(resume_run_dir, "mean_params.txt");
+        if (fileExists(mean_path)) {
+            if (load_hardcoded_mean_from_file(mean_path, H) && rank == 0) {
+                std::cout << "Loaded mean params: " << mean_path << "\n";
+            }
+        }
+    }
 
     // fallback only if --qx-cdf not provided or load fails
     H.qx_const = 1.0;

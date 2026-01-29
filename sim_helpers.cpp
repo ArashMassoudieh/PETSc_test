@@ -249,6 +249,62 @@ bool write_comparison_csv(const std::string& out_path,
     return true;
 }
 
+static inline std::string trim_copy(std::string s)
+{
+    auto not_space = [](unsigned char ch){ return !std::isspace(ch); };
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
+    s.erase(std::find_if(s.rbegin(), s.rend(), not_space).base(), s.end());
+    return s;
+}
+
+static inline std::string to_lower_copy(std::string s)
+{
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c){ return (unsigned char)std::tolower(c); });
+    return s;
+}
+
+bool load_hardcoded_mean_from_file(const std::string& path, HardcodedMean& H)
+{
+    std::ifstream f(path);
+    if (!f) return false;
+
+    bool touched = false;
+    std::string line;
+
+    while (std::getline(f, line)) {
+        line = trim_copy(line);
+        if (line.empty()) continue;
+        if (line[0] == '#' || line[0] == ';') continue;
+
+        const auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+
+        std::string key = to_lower_copy(trim_copy(line.substr(0, eq)));
+        std::string val = trim_copy(line.substr(eq + 1));
+        if (val.empty()) continue;
+
+        try {
+            if (key == "lc_mean" || key == "lc") {
+                H.lc_mean = std::stod(val); touched = true;
+            }
+            else if (key == "lx_mean" || key == "lambda_x_mean" || key == "lx") {
+                H.lx_mean = std::stod(val); touched = true;
+            }
+            else if (key == "ly_mean" || key == "lambda_y_mean" || key == "ly") {
+                H.ly_mean = std::stod(val); touched = true;
+            }
+            else if (key == "dt_mean" || key == "dt") {
+                H.dt_mean = std::stod(val); touched = true;
+            }
+        } catch (...) {
+            // ignore bad line
+        }
+    }
+
+    return touched;
+}
+
 // ============================================================
 // resampling
 // ============================================================
