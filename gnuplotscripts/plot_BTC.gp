@@ -13,15 +13,15 @@ set datafile separator ','
 set datafile missing ''
 
 # Logarithmic y-axis with superscript notation
-set logscale y
-set format y "10^{%T}"
-set yrange [1e-6:*]
-set xrange [0:20]
+#set logscale y
+set format y "%.1f"
+set yrange [0:*]
+set xrange [0:5]
 
 # ============================================================
 # Plot 1: x = 0.50
 # ============================================================
-set output 'BTC_compare_x0.50.png'
+set output 'BTC_compare_x0_reg.50.png'
 set title 'Breakthrough Curve at x = 0.50 m' font 'Arial,32'
 
 plot 'x=0.50BTC_Compare.csv' using 1:2 with lines lw 1 lc rgb "#CCCCCC" notitle, \
@@ -50,7 +50,7 @@ plot 'x=0.50BTC_Compare.csv' using 1:2 with lines lw 1 lc rgb "#CCCCCC" notitle,
 # ============================================================
 # Plot 2: x = 1.50
 # ============================================================
-set output 'BTC_compare_x1.50.png'
+set output 'BTC_compare_x1.50_reg.png'
 set title 'Breakthrough Curve at x = 1.50 m' font 'Arial,32'
 
 plot 'x=1.50BTC_Compare.csv' using 1:2 with lines lw 1 lc rgb "#CCCCCC" notitle, \
@@ -79,7 +79,7 @@ plot 'x=1.50BTC_Compare.csv' using 1:2 with lines lw 1 lc rgb "#CCCCCC" notitle,
 # ============================================================
 # Plot 3: x = 2.50
 # ============================================================
-set output 'BTC_compare_x2.50.png'
+set output 'BTC_compare_x2.50_reg.png'
 set title 'Breakthrough Curve at x = 2.50 m' font 'Arial,32'
 
 plot 'x=2.50BTC_Compare.csv' using 1:2 with lines lw 1 lc rgb "#CCCCCC" notitle, \
