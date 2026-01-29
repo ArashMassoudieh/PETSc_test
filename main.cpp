@@ -38,8 +38,8 @@ int main(int argc, char** argv)
     // -----------------------------
     RunOptions opts;
     opts.upscale_only   = false;
-    opts.hardcoded_mean = true; // IMPORTANT: do NOT default true (otherwise you always skip fine loop)
-    opts.solve_fine_scale_transport = false;
+    opts.hardcoded_mean = false; // IMPORTANT: do NOT default true (otherwise you always skip fine loop)
+    opts.solve_fine_scale_transport = true;
     opts.solve_upscale_transport    = true;
 
     // If you want a default resume folder for upscale-only:
@@ -109,7 +109,7 @@ int main(int argc, char** argv)
     P.stdev = 2.0;
     P.g_mean = 0.0;
 
-    P.Diffusion_coefficient = 0.01;
+    P.Diffusion_coefficient = 0.1;
     P.t_end_pdf = 20.0;
 
     P.nReal_default = 20;
