@@ -43,8 +43,10 @@ int main(int argc, char** argv)
     opts.solve_upscale_transport    = true;
 
     // Default resume folder (used when upscale-only OR hardcoded-mean)
-    std::string resume_run_dir = joinPath(output_dir, "run_20260129_093954_params");
-
+    // Uncomment one of following lines for std=1 or std=2
+    //std::string resume_run_dir = joinPath(output_dir, "run_20260129_093954_A_std1_params");
+    std::string resume_run_dir = joinPath(output_dir, "run_20260129_140400_A_std2_params");
+    
     // Track whether user explicitly set --qx-cdf
     bool user_set_qx_cdf = false;
 
