@@ -44,8 +44,8 @@ int main(int argc, char** argv)
 
     // Default resume folder (used when upscale-only OR hardcoded-mean)
     // Uncomment one of following lines for std=1 or std=2
-    //std::string resume_run_dir = joinPath(output_dir, "run_20260129_093954_A_std2_params");
-    std::string resume_run_dir = joinPath(output_dir, "run_20260129_140400_A_std1_params");
+    std::string resume_run_dir = joinPath(output_dir, "run_20260129_093954_A_std2_params");
+    //std::string resume_run_dir = joinPath(output_dir, "run_20260129_140400_A_std1_params");
 
     // Track whether user explicitly set --qx-cdf
     bool user_set_qx_cdf = false;
@@ -119,10 +119,10 @@ int main(int argc, char** argv)
 
     P.correlation_ls_x = 1;
     P.correlation_ls_y = 0.1;
-    P.stdev = 1.0;
+    P.stdev = 2.0;
     P.g_mean = 0.0;
 
-    P.Diffusion_coefficient = 0.05;
+    P.Diffusion_coefficient = 0.1;
     P.t_end_pdf = 20.0;
 
     P.nReal_default = 20;
