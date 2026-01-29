@@ -56,7 +56,7 @@ struct SimParams
     double Lx = 0.0;
     double Ly = 0.0;
 
-    int nReal_default = 1;
+    int nReal_default = 20;
 
     // random field params
     double correlation_ls_x = 0.0;

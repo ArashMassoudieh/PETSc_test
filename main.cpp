@@ -112,7 +112,7 @@ int main(int argc, char** argv)
     P.Diffusion_coefficient = 0.01;
     P.t_end_pdf = 20.0;
 
-    P.nReal_default = 1;
+    P.nReal_default = 20;
     P.run_seed = 20260115UL;
 
     P.xLocations = {0.5, 1.5, 2.5};
