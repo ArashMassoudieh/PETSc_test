@@ -119,9 +119,9 @@ int main(int argc, char** argv)
 
     // Hardcoded means (used only when --hardcoded-mean)
     HardcodedMean H;
-    H.lc_mean  = 0.39753;
-    H.lx_mean  = 1.25394;
-    H.ly_mean  = 0.125017;
+    H.lc_mean  = 0.396413;
+    H.lx_mean  = 1.24365;
+    H.ly_mean  = 0.124846;
     H.dt_mean  = 7.31122e-05;
 
     // Optional overwrite from file (if present)
