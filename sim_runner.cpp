@@ -1,6 +1,7 @@
 // sim_runner.cpp
 
 #include "sim_runner.h"
+#include "sim_helpers.h"
 
 #include <mpi.h>
 #include <fstream>

@@ -8,7 +8,8 @@
 // Keep sim_runner.h LIGHT.
 // Do NOT include grid.h here (it causes heavy include chains / incomplete type issues).
 // Only include what we must for types used in signatures.
-#include "TimeSeries.h"  // TimeSeries<T>, TimeSeriesSet<T>
+#include "TimeSeries.h"
+#include "TimeSeriesSet.h"
 
 // NOTE:
 // Do NOT include sim_helpers.h here.
