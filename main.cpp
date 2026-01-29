@@ -38,8 +38,8 @@ int main(int argc, char** argv)
     // -----------------------------
     RunOptions opts;
     opts.upscale_only   = false;
-    opts.hardcoded_mean = true; // (your current setting)
-    opts.solve_fine_scale_transport = false;
+    opts.hardcoded_mean = false; // (your current setting)
+    opts.solve_fine_scale_transport = true;
     opts.solve_upscale_transport    = true;
 
     // Default resume folder (used when upscale-only OR hardcoded-mean)
@@ -115,12 +115,12 @@ int main(int argc, char** argv)
     P.Lx = 3.0;
     P.Ly = 1.0;
 
-    P.correlation_ls_x = 1.0;
+    P.correlation_ls_x = 1;
     P.correlation_ls_y = 0.1;
-    P.stdev = 1.0;
+    P.stdev = 2.0;
     P.g_mean = 0.0;
 
-    P.Diffusion_coefficient = 0;
+    P.Diffusion_coefficient = 0.01;
     P.t_end_pdf = 20.0;
 
     P.nReal_default = 20;
