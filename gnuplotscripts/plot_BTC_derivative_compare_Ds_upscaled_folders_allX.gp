@@ -17,13 +17,13 @@ set key right top
 # ===============================
 # Line styles (all red, different dash types per D)
 # ===============================
-set style line 31 lc rgb '#d60000' lw 3.5 dt 1
-set style line 32 lc rgb '#d60000' lw 3.5 dt 2
-set style line 33 lc rgb '#d60000' lw 3.5 dt 3
-set style line 34 lc rgb '#d60000' lw 3.5 dt 4
-set style line 35 lc rgb '#d60000' lw 3.5 dt 5
-set style line 36 lc rgb '#d60000' lw 3.5 dt 6
-set style line 37 lc rgb '#d60000' lw 3.5 dt 7
+set style line 31 lc rgb '#000000' lw 3.5 dt 1
+set style line 32 lc rgb '#000000' lw 3.5 dt 2
+set style line 33 lc rgb '#000000' lw 3.5 dt 3
+set style line 34 lc rgb '#000000' lw 3.5 dt 4
+set style line 35 lc rgb '#000000' lw 3.5 dt 5
+set style line 36 lc rgb '#000000' lw 3.5 dt 6
+set style line 37 lc rgb '#000000' lw 3.5 dt 7
 
 # ===============================
 # Parameters
