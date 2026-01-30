@@ -7,6 +7,7 @@
 #include <iostream>
 #include <string>
 #include <mpi.h>
+#include <cmath>        // std::round, std::abs
 
 #include "sim_helpers.h"
 #include "plotter.h"     // TBaseMode, AlignMode, run_final_aggregation_and_plots
@@ -38,17 +39,15 @@ int main(int argc, char** argv)
     // -----------------------------
     RunOptions opts;
     opts.upscale_only   = false;
-    opts.hardcoded_mean = false; // (your current setting)
+    opts.hardcoded_mean = true;
     opts.solve_fine_scale_transport = false;
-    opts.solve_upscale_transport    = false;
-
-    // Default resume folder (used when upscale-only OR hardcoded-mean)
-    // Uncomment one of following lines for std=1 or std=2
-    //std::string resume_run_dir = joinPath(output_dir, "run_20260129_093954_A_std2_params");
-    std::string resume_run_dir = joinPath(output_dir, "run_20260129_140400_A_std1_params");
+    opts.solve_upscale_transport    = true;
 
     // Track whether user explicitly set --qx-cdf
     bool user_set_qx_cdf = false;
+
+    // Default/override resume folder (set after params unless user provides --run-dir)
+    std::string resume_run_dir; // empty means "use default later"
 
     // -----------------------------
     // Plot options (kept in main only)
@@ -67,7 +66,8 @@ int main(int argc, char** argv)
         // --- run selection ---
         if (a == "--upscale-only") opts.upscale_only = true;
         else if (a == "--hardcoded-mean") opts.hardcoded_mean = true;
-        else if (a.rfind("--run-dir=", 0) == 0) resume_run_dir = a.substr(std::string("--run-dir=").size());
+        else if (a.rfind("--run-dir=", 0) == 0)
+            resume_run_dir = a.substr(std::string("--run-dir=").size());
 
         // --- hardcoded qx inverse-CDF path (u,v csv; header optional) ---
         else if (a.rfind("--qx-cdf=", 0) == 0) {
@@ -98,15 +98,6 @@ int main(int argc, char** argv)
     // Your rule: hardcoded mean implies upscale-only
     if (opts.hardcoded_mean) opts.upscale_only = true;
 
-    // If user did NOT provide --qx-cdf, point to the "expected" mean file in resume_run_dir.
-    // sim_runner.cpp will:
-    //   - use it if it exists
-    //   - else compute it from qx_inverse_cdfs.txt if present
-    //   - else fallback to H.qx_const
-    if (!user_set_qx_cdf) {
-        opts.hardcoded_qx_cdf_path = joinPath(resume_run_dir, "mean_qx_inverse_cdf.txt");
-    }
-
     // -----------------------------
     // Params (kept here)
     // -----------------------------
@@ -119,16 +110,43 @@ int main(int argc, char** argv)
 
     P.correlation_ls_x = 1;
     P.correlation_ls_y = 0.1;
-    P.stdev = 2.0;
+    P.stdev = 2.0;   // <--- you set it here
     P.g_mean = 0.0;
 
-    P.Diffusion_coefficient = 0;
+    P.Diffusion_coefficient = 0.001;
     P.t_end_pdf = 20.0;
 
     P.nReal_default = 20;
     P.run_seed = 20260115UL;
 
     P.xLocations = {0.5, 1.5, 2.5};
+
+    // -----------------------------
+    // Default resume folder (used when upscale-only OR hardcoded-mean)
+    // Example: P.stdev = 2.0 -> run_A_std2_params
+    // -----------------------------
+    const int std_int = static_cast<int>(std::round(P.stdev));
+    if (std::abs(P.stdev - std_int) > 1e-12) {
+        if (rank == 0) {
+            std::cerr << "ERROR: P.stdev must be an integer value (e.g., 1 or 2). Got "
+                      << P.stdev << "\n";
+        }
+        MPI_Abort(PETSC_COMM_WORLD, 1);
+    }
+
+    // If user didn't pass --run-dir=..., compute default using std_int
+    if (resume_run_dir.empty()) {
+        resume_run_dir = joinPath(output_dir, "run_A_std" + std::to_string(std_int) + "_params");
+    }
+
+    // If user did NOT provide --qx-cdf, point to the expected mean file in resume_run_dir.
+    // sim_runner.cpp will:
+    //   - use it if it exists
+    //   - else compute it from qx_inverse_cdfs.txt if present
+    //   - else fallback to H.qx_const
+    if (!user_set_qx_cdf) {
+        opts.hardcoded_qx_cdf_path = joinPath(resume_run_dir, "mean_qx_inverse_cdf.txt");
+    }
 
     // -----------------------------
     // Hardcoded means (used only when --hardcoded-mean)
