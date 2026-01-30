@@ -119,7 +119,7 @@ int main(int argc, char** argv)
 
     P.correlation_ls_x = 1;
     P.correlation_ls_y = 0.1;
-    P.stdev = 1.0;
+    P.stdev = 2.0;
     P.g_mean = 0.0;
 
     P.Diffusion_coefficient = 0;
