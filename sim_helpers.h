@@ -15,6 +15,9 @@
 
 #include <petscsys.h>   // PetscInt
 
+// Forward declaration (avoid including sim_runner.h here)
+struct SimParams;
+
 // --------------------
 // FS / path helpers
 // --------------------
@@ -29,6 +32,37 @@ std::string joinPath(const std::string& dir, const std::string& filename);
 std::string makeTimestamp();            // YYYYMMDD_HHMMSS
 std::string makeRealLabel(int r1);      // r0001, r0002, ...
 std::string makeFineFolder(int r1);     // fine_r0001, ...
+
+// --------------------
+// run folder tag helpers
+// --------------------
+// Compact, filesystem-safe formatting for tags:
+//   0.001  -> "1e-3"
+//   0.125  -> "0p125"
+//   2.0    -> "2"
+std::string fmt_compact_double_tag(double v);
+
+// Build run tag used for NEW run_dir folder names:
+//   std<stdev>_D<diffusion>_<iso|aniso>
+// Rule: correlation_ls_x == correlation_ls_y => iso, else aniso
+std::string make_run_tag_std_D_aniso(const SimParams& P);
+
+// --------------------------------------------------
+// Resume folder consistency helpers
+// Expected folder style:
+//   "std=2, D=0, aniso"
+// Numeric equivalence is enforced:
+//   0 == 0.0 == 0.00 == ...
+// --------------------------------------------------
+bool parse_resume_std(const std::string& s, int& std_val);
+bool parse_resume_D  (const std::string& s, double& D_val);
+bool parse_resume_aniso(const std::string& s, bool& is_aniso);
+
+// Validate resume_run_dir against simulation parameters.
+// Returns false and fills err_msg if mismatch.
+bool validate_resume_run_dir(const std::string& resume_run_dir,
+                             const SimParams& P,
+                             std::string& err_msg);
 
 double mean_of(const std::vector<double>& v);
 

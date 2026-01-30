@@ -1,5 +1,6 @@
 // sim_helpers.cpp
 #include "sim_helpers.h"
+#include "sim_runner.h" // for SimParams (used by run-tag helpers)
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -79,6 +80,160 @@ std::string makeFineFolder(int r1)
 {
     return std::string("fine_") + makeRealLabel(r1);
 }
+
+// --------------------------------------------------
+// Resume folder parsing helpers
+// --------------------------------------------------
+static bool extract_token(const std::string& s,
+                          const std::string& key,
+                          std::string& token)
+{
+    const auto pos = s.find(key);
+    if (pos == std::string::npos) return false;
+
+    const size_t start = pos + key.size();
+    size_t end = start;
+
+    while (end < s.size() && s[end] != ',' &&
+           !std::isspace(static_cast<unsigned char>(s[end])))
+        ++end;
+
+    token = s.substr(start, end - start);
+    return !token.empty();
+}
+
+bool parse_resume_std(const std::string& s, int& std_val)
+{
+    std::string tok;
+    if (!extract_token(s, "std=", tok)) return false;
+
+    try {
+        std_val = std::stoi(tok);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parse_resume_D(const std::string& s, double& D_val)
+{
+    std::string tok;
+    if (!extract_token(s, "D=", tok)) return false;
+
+    try {
+        D_val = std::stod(tok);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parse_resume_aniso(const std::string& s, bool& is_aniso)
+{
+    if (s.find("aniso") != std::string::npos) {
+        is_aniso = true;
+        return true;
+    }
+    if (s.find("iso") != std::string::npos) {
+        is_aniso = false;
+        return true;
+    }
+    return false;
+}
+
+bool validate_resume_run_dir(const std::string& resume_run_dir,
+                             const SimParams& P,
+                             std::string& err_msg)
+{
+    int std_folder;
+    double D_folder;
+    bool aniso_folder;
+
+    if (!parse_resume_std(resume_run_dir, std_folder) ||
+        !parse_resume_D(resume_run_dir, D_folder) ||
+        !parse_resume_aniso(resume_run_dir, aniso_folder)) {
+
+        err_msg =
+            "Could not parse resume_run_dir. Expected format:\n"
+            "  \"std=<int>, D=<number>, iso|aniso\"\n"
+            "Got:\n  " + resume_run_dir;
+        return false;
+    }
+
+    const int std_param = static_cast<int>(std::round(P.stdev));
+    if (std_folder != std_param) {
+        err_msg =
+            "stdev mismatch:\n"
+            "  Folder std = " + std::to_string(std_folder) +
+            "\n  Param  std = " + std::to_string(std_param);
+        return false;
+    }
+
+    const double tol = 1e-12;
+    if (std::abs(D_folder - P.Diffusion_coefficient) > tol) {
+        std::ostringstream os;
+        os << "Diffusion coefficient mismatch:\n"
+           << "  Folder D = " << D_folder << "\n"
+           << "  Param  D = " << P.Diffusion_coefficient;
+        err_msg = os.str();
+        return false;
+    }
+
+    const bool aniso_param =
+        (std::abs(P.correlation_ls_x - P.correlation_ls_y) > 1e-12);
+
+    if (aniso_folder != aniso_param) {
+        err_msg =
+            std::string("iso/aniso mismatch:\n  Folder = ") +
+            (aniso_folder ? "aniso" : "iso") +
+            "\n  Param  = " +
+            (aniso_param ? "aniso" : "iso");
+        return false;
+    }
+
+    return true;
+}
+
+// ============================================================
+// run folder tag helpers
+// ============================================================
+std::string fmt_compact_double_tag(double v)
+{
+    // Goal:
+    //   0       -> "0"
+    //   0.0     -> "0"
+    //   0.001   -> "0.001"
+    //   1.2500  -> "1.25"
+
+    std::ostringstream os;
+    os.setf(std::ios::fixed);
+    os << std::setprecision(6) << v;   // enough precision for your D values
+
+    std::string s = os.str();
+
+    // trim trailing zeros
+    if (s.find('.') != std::string::npos) {
+        while (!s.empty() && s.back() == '0')
+            s.pop_back();
+        if (!s.empty() && s.back() == '.')
+            s.pop_back();
+    }
+
+    return s;
+}
+
+std::string make_run_tag_std_D_aniso(const SimParams& P)
+{
+    const int std_int = static_cast<int>(std::round(P.stdev));
+
+    // Rule: correlation_ls_x == correlation_ls_y => iso, else aniso
+    const bool aniso = (std::abs(P.correlation_ls_x - P.correlation_ls_y) > 1e-12);
+    const std::string aniso_tag = aniso ? "aniso" : "iso";
+
+    const std::string Dtag = fmt_compact_double_tag(P.Diffusion_coefficient);
+    return "std" + std::to_string(std_int) + "_D" + Dtag + "_" + aniso_tag;
+}
+
 
 double mean_of(const std::vector<double>& v)
 {

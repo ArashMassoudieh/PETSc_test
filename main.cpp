@@ -44,12 +44,12 @@ int main(int argc, char** argv)
     opts.solve_fine_scale_transport = false;
     opts.solve_upscale_transport    = true;
 
-    // Default resume folder (used when upscale-only OR hardcoded-mean)
-    // Uncomment one of following lines for std=1 or std=2
-    bool user_set_qx_cdf = false;
-    std::string resume_run_dir = joinPath(output_dir, "std=2, D=0, aniso");
-    //std::string resume_run_dir = joinPath(output_dir, "run_20260129_140400_A_std1_params");
+    // Resume folder: existing source folder (mean, qx, ...)
+    bool user_set_qx_cdf  = false;
+    bool user_set_run_dir = false;
 
+    // Your existing resume folder naming
+    std::string resume_run_dir = joinPath(output_dir, "std=2, D=0, aniso");
 
     // -----------------------------
     // Plot options (kept in main only)
@@ -68,8 +68,10 @@ int main(int argc, char** argv)
         // --- run selection ---
         if (a == "--upscale-only") opts.upscale_only = true;
         else if (a == "--hardcoded-mean") opts.hardcoded_mean = true;
-        else if (a.rfind("--run-dir=", 0) == 0)
+        else if (a.rfind("--run-dir=", 0) == 0) {
             resume_run_dir = a.substr(std::string("--run-dir=").size());
+            user_set_run_dir = true;
+        }
 
         // --- hardcoded qx inverse-CDF path (u,v csv; header optional) ---
         else if (a.rfind("--qx-cdf=", 0) == 0) {
@@ -112,11 +114,13 @@ int main(int argc, char** argv)
 
     P.correlation_ls_x = 1;
     P.correlation_ls_y = 0.1;
-    P.stdev = 2.0;   // <--- you set it here
+
+    P.stdev = 2.0;
     P.g_mean = 0.0;
 
-
+    // "D" in your naming = diffusion coefficient
     P.Diffusion_coefficient = 0.001;
+
     P.t_end_pdf = 20.0;
 
     P.nReal_default = 30;
@@ -125,8 +129,7 @@ int main(int argc, char** argv)
     P.xLocations = {0.5, 1.5, 2.5};
 
     // -----------------------------
-    // Default resume folder (used when upscale-only OR hardcoded-mean)
-    // Example: P.stdev = 2.0 -> run_A_std2_params
+    // stdev integer check (as before)
     // -----------------------------
     const int std_int = static_cast<int>(std::round(P.stdev));
     if (std::abs(P.stdev - std_int) > 1e-12) {
@@ -137,19 +140,44 @@ int main(int argc, char** argv)
         MPI_Abort(PETSC_COMM_WORLD, 1);
     }
 
-    // If user didn't pass --run-dir=..., compute default using std_int
+    // Resume folder should not be empty in your workflow
     if (resume_run_dir.empty()) {
-        resume_run_dir = joinPath(output_dir, "run_A_std" + std::to_string(std_int) + "_params");
+        if (rank == 0) {
+            std::cerr << "ERROR: resume_run_dir is empty. "
+                      << "Set it in code or pass --run-dir=/path/to/resume_folder\n";
+        }
+        MPI_Abort(PETSC_COMM_WORLD, 66);
     }
 
     // If user did NOT provide --qx-cdf, point to the expected mean file in resume_run_dir.
-    // sim_runner.cpp will:
-    //   - use it if it exists
-    //   - else compute it from qx_inverse_cdfs.txt if present
-    //   - else fallback to H.qx_const
     if (!user_set_qx_cdf) {
         opts.hardcoded_qx_cdf_path = joinPath(resume_run_dir, "mean_qx_inverse_cdf.txt");
     }
+
+    // -----------------------------
+    // WARNING-ONLY sanity check:
+    // resume folder is an *input source* (mean, qx, ...),
+    // run folder is new and based on P.
+    // So mismatch is not fatal: print warning only.
+    // Only do this warning when resume_run_dir was not explicitly overridden.
+    // -----------------------------
+    if (!user_set_run_dir && (opts.upscale_only || opts.hardcoded_mean)) {
+        std::string err;
+        if (!validate_resume_run_dir(resume_run_dir, P, err)) {
+            if (rank == 0) {
+                std::cerr << "\nWARNING: resume_run_dir name does not match current parameters.\n"
+                          << err << "\n"
+                          << "resume_run_dir = " << resume_run_dir << "\n"
+                          << "Continuing anyway (resume folder used as input source).\n\n";
+            }
+        }
+    }
+
+    // -----------------------------
+    // Build run tag for NEW run_dir folder name
+    // Example: std2_D1e-3_aniso
+    // -----------------------------
+    const std::string run_tag = make_run_tag_std_D_aniso(P);
 
     // -----------------------------
     // Hardcoded means (used only when --hardcoded-mean)
@@ -181,9 +209,12 @@ int main(int argc, char** argv)
 
     // -----------------------------
     // Prepare run_dir (MPI-safe)
+    // NOTE: This creates/chooses the OUTPUT run folder.
+    // It must NOT overwrite resume_run_dir.
+    // It should append run_tag only when creating a new run directory.
     // -----------------------------
     RunOutputs out;
-    out.run_dir = prepare_run_dir_mpi(output_dir, resume_run_dir, opts, rank);
+    out.run_dir = prepare_run_dir_mpi(output_dir, resume_run_dir, opts, rank, run_tag);
 
     // -----------------------------
     // Run simulation blocks (fine loop + mean + upscaled)
@@ -228,7 +259,8 @@ int main(int argc, char** argv)
 
     if (rank == 0) {
         std::cout << "\nMixing PDF simulation complete!\n";
-        std::cout << "All outputs saved to: " << out.run_dir << "\n";
+        std::cout << "Resume folder (input source): " << resume_run_dir << "\n";
+        std::cout << "All outputs saved to (new run dir): " << out.run_dir << "\n";
 
         if (opts.hardcoded_mean) {
             if (!opts.hardcoded_qx_cdf_path.empty()) {
@@ -244,4 +276,3 @@ int main(int argc, char** argv)
     MPI_Barrier(PETSC_COMM_WORLD);
     return 0;
 }
-

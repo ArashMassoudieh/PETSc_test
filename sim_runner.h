@@ -111,7 +111,8 @@ std::string prepare_run_dir_mpi(
     const std::string& output_dir,
     const std::string& resume_run_dir,
     const RunOptions& opts,
-    int rank);
+    int rank,
+    const std::string& run_tag = "");
 
 // Runs fine loop (unless upscale_only) + mean building + upscaled run.
 // Requires out.run_dir already set (usually from prepare_run_dir_mpi).

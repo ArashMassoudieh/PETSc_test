@@ -26,7 +26,8 @@ std::string prepare_run_dir_mpi(
     const std::string& output_dir,
     const std::string& resume_run_dir,
     const RunOptions& opts,
-    int rank)
+    int rank,
+    const std::string& run_tag)
 {
     std::string run_dir;
 
@@ -36,7 +37,9 @@ std::string prepare_run_dir_mpi(
         if (opts.upscale_only) {
             if (opts.hardcoded_mean) {
                 // ALWAYS create a fresh run directory
-                run_dir = joinPath(output_dir, "run_" + makeTimestamp());
+                std::string name = "run_" + makeTimestamp();
+                if (!run_tag.empty()) name += "_" + run_tag;
+                run_dir = joinPath(output_dir, name);
                 createDirectory(run_dir);
 
                 std::cout << "Hardcoded-mean upscaled-only: created NEW run_dir: "
@@ -56,7 +59,9 @@ std::string prepare_run_dir_mpi(
                 std::cout << "Upscale-only: using run_dir: " << run_dir << "\n";
             }
         } else {
-            run_dir = joinPath(output_dir, "run_" + makeTimestamp());
+            std::string name = "run_" + makeTimestamp();
+            if (!run_tag.empty()) name += "_" + run_tag;
+            run_dir = joinPath(output_dir, name);
             createDirectory(run_dir);
             std::cout << "Run directory: " << run_dir << "\n";
         }
