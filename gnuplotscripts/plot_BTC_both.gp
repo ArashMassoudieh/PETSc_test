@@ -10,20 +10,19 @@ set datafile missing ''
 # ============================================================
 # Plot 1: x = 0.50
 # ============================================================
-set output 'BTC_x0.50_combined.png'
+set terminal pngcairo size 1200,800 enhanced font 'Arial,28'
+set output 'BTC_compare_x0.50_combined.png'
 
 set multiplot layout 1,1
 
 # --- Main plot (linear) ---
-set terminal pngcairo size 1200,800 enhanced font 'Arial,28'
 set grid
 set key top right
 set xlabel 'Time' font 'Arial,32'
-set ylabel 'Concentration' font 'Arial,32'
+set ylabel 'c/c_0' font 'Arial,32'
 set format y "%.1f"
 set yrange [0:*]
-set xrange [0:5]
-set title 'Breakthrough Curve at x = 0.50 m' font 'Arial,32'
+set xrange [0:10]
 
 plot 'x=0.50BTC_Compare.csv' using 1:2 with lines lw 1 lc rgb "#CCCCCC" notitle, \
      '' using 3:4 with lines lw 1 lc rgb "#CCCCCC" notitle, \
@@ -49,13 +48,12 @@ plot 'x=0.50BTC_Compare.csv' using 1:2 with lines lw 1 lc rgb "#CCCCCC" notitle,
      'x=0.50BTC_Compare.csv' using 41:42 with lines lw 3 lc rgb "#FF0000" title 'Upscaled'
 
 # --- Inset plot (log) ---
-set origin 0.55, 0.50     # Position: right side, top half
-set size 0.40, 0.45       # Size: 40% width, 45% height
-set grid
-set key off               # No legend in inset
-unset title               # No title in inset
-set xlabel 'Time' font 'Arial,18'
-set ylabel 'Conc. (log)' font 'Arial,18'
+set origin 0.40, 0.15
+set size 0.55, 0.65
+set key off
+unset title
+unset xlabel
+unset ylabel
 set tics font 'Arial,16'
 set logscale y
 set format y "10^{%T}"
@@ -88,25 +86,25 @@ plot 'x=0.50BTC_Compare.csv' using 1:2 with lines lw 1 lc rgb "#CCCCCC" notitle,
 unset multiplot
 
 # ============================================================
-# Plot 2: x = 1.50 (similar structure)
+# Plot 2: x = 1.50
 # ============================================================
 reset
 set datafile separator ','
 set datafile missing ''
-set output 'BTC_x1.50_combined.png'
+
+set terminal pngcairo size 1200,800 enhanced font 'Arial,28'
+set output 'BTC_compare_x1.50_combined.png'
 
 set multiplot layout 1,1
 
 # Main plot
-set terminal pngcairo size 1200,800 enhanced font 'Arial,28'
 set grid
-set key top right
+set key off
 set xlabel 'Time' font 'Arial,32'
 set ylabel 'Concentration' font 'Arial,32'
 set format y "%.1f"
 set yrange [0:*]
-set xrange [0:5]
-set title 'Breakthrough Curve at x = 1.50 m' font 'Arial,32'
+set xrange [0:10]
 
 plot 'x=1.50BTC_Compare.csv' using 1:2 with lines lw 1 lc rgb "#CCCCCC" notitle, \
      '' using 3:4 with lines lw 1 lc rgb "#CCCCCC" notitle, \
@@ -132,13 +130,12 @@ plot 'x=1.50BTC_Compare.csv' using 1:2 with lines lw 1 lc rgb "#CCCCCC" notitle,
      'x=1.50BTC_Compare.csv' using 41:42 with lines lw 3 lc rgb "#FF0000" title 'Upscaled'
 
 # Inset
-set origin 0.55, 0.50
-set size 0.40, 0.45
-set grid
+set origin 0.40, 0.30
+set size 0.55, 0.65
 set key off
 unset title
-set xlabel 'Time' font 'Arial,18'
-set ylabel 'Conc. (log)' font 'Arial,18'
+unset xlabel
+unset ylabel
 set tics font 'Arial,16'
 set logscale y
 set format y "10^{%T}"
@@ -176,20 +173,20 @@ unset multiplot
 reset
 set datafile separator ','
 set datafile missing ''
-set output 'BTC_x2.50_combined.png'
+
+set terminal pngcairo size 1200,800 enhanced font 'Arial,28'
+set output 'BTC_compare_x2.50_combined.png'
 
 set multiplot layout 1,1
 
 # Main plot
-set terminal pngcairo size 1200,800 enhanced font 'Arial,28'
 set grid
-set key top right
+set key off
 set xlabel 'Time' font 'Arial,32'
 set ylabel 'Concentration' font 'Arial,32'
 set format y "%.1f"
 set yrange [0:*]
-set xrange [0:5]
-set title 'Breakthrough Curve at x = 2.50 m' font 'Arial,32'
+set xrange [0:10]
 
 plot 'x=2.50BTC_Compare.csv' using 1:2 with lines lw 1 lc rgb "#CCCCCC" notitle, \
      '' using 3:4 with lines lw 1 lc rgb "#CCCCCC" notitle, \
@@ -215,13 +212,12 @@ plot 'x=2.50BTC_Compare.csv' using 1:2 with lines lw 1 lc rgb "#CCCCCC" notitle,
      'x=2.50BTC_Compare.csv' using 41:42 with lines lw 3 lc rgb "#FF0000" title 'Upscaled'
 
 # Inset
-set origin 0.55, 0.50
-set size 0.40, 0.45
-set grid
+set origin 0.40, 0.30
+set size 0.55, 0.65
 set key off
 unset title
-set xlabel 'Time' font 'Arial,18'
-set ylabel 'Conc. (log)' font 'Arial,18'
+unset xlabel
+unset ylabel
 set tics font 'Arial,16'
 set logscale y
 set format y "10^{%T}"
