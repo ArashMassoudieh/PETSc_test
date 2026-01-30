@@ -128,16 +128,26 @@ bool parse_resume_D(const std::string& s, double& D_val)
     }
 }
 
+static bool contains_word_token(const std::string& s, const std::string& word)
+{
+    const auto is_alpha = [](unsigned char c){ return std::isalpha(c) != 0; };
+
+    size_t pos = 0;
+    while ((pos = s.find(word, pos)) != std::string::npos) {
+        const bool left_ok  = (pos == 0) || !is_alpha((unsigned char)s[pos - 1]);
+        const bool right_ok = (pos + word.size() >= s.size()) ||
+                              !is_alpha((unsigned char)s[pos + word.size()]);
+        if (left_ok && right_ok) return true;
+        pos += word.size();
+    }
+    return false;
+}
+
 bool parse_resume_aniso(const std::string& s, bool& is_aniso)
 {
-    if (s.find("aniso") != std::string::npos) {
-        is_aniso = true;
-        return true;
-    }
-    if (s.find("iso") != std::string::npos) {
-        is_aniso = false;
-        return true;
-    }
+    // prefer "aniso" if both somehow appear
+    if (contains_word_token(s, "aniso")) { is_aniso = true;  return true; }
+    if (contains_word_token(s, "iso"))   { is_aniso = false; return true; }
     return false;
 }
 
@@ -145,53 +155,63 @@ bool validate_resume_run_dir(const std::string& resume_run_dir,
                              const SimParams& P,
                              std::string& err_msg)
 {
-    int std_folder;
-    double D_folder;
-    bool aniso_folder;
+    err_msg.clear();
 
-    if (!parse_resume_std(resume_run_dir, std_folder) ||
-        !parse_resume_D(resume_run_dir, D_folder) ||
-        !parse_resume_aniso(resume_run_dir, aniso_folder)) {
+    int std_folder = 0;
+    double D_folder = 0.0;
+    bool aniso_folder = false;
 
-        err_msg =
-            "Could not parse resume_run_dir. Expected format:\n"
-            "  \"std=<int>, D=<number>, iso|aniso\"\n"
-            "Got:\n  " + resume_run_dir;
-        return false;
+    bool ok_std   = parse_resume_std(resume_run_dir, std_folder);
+    bool ok_D     = parse_resume_D(resume_run_dir, D_folder);
+    bool ok_aniso = parse_resume_aniso(resume_run_dir, aniso_folder);
+
+    bool any_error = false;
+
+    if (!ok_std || !ok_D || !ok_aniso) {
+        any_error = true;
+        err_msg += "Could not parse resume_run_dir tokens:\n";
+        if (!ok_std)   err_msg += "  - missing/invalid token: std=<int>\n";
+        if (!ok_D)     err_msg += "  - missing/invalid token: D=<number>\n";
+        if (!ok_aniso) err_msg += "  - missing token: iso or aniso\n";
+        err_msg += "Expected style like: \"std=2, D=0, aniso\"\n";
     }
 
+    // Only compare values if parsed successfully
     const int std_param = static_cast<int>(std::round(P.stdev));
-    if (std_folder != std_param) {
-        err_msg =
-            "stdev mismatch:\n"
-            "  Folder std = " + std::to_string(std_folder) +
-            "\n  Param  std = " + std::to_string(std_param);
-        return false;
+    if (ok_std && (std_folder != std_param)) {
+        any_error = true;
+        err_msg += "stdev mismatch:\n";
+        err_msg += "  Folder std = " + std::to_string(std_folder) + "\n";
+        err_msg += "  Param  std = " + std::to_string(std_param) + "\n";
     }
 
     const double tol = 1e-12;
-    if (std::abs(D_folder - P.Diffusion_coefficient) > tol) {
+    if (ok_D && (std::abs(D_folder - P.Diffusion_coefficient) > tol)) {
+        any_error = true;
         std::ostringstream os;
         os << "Diffusion coefficient mismatch:\n"
            << "  Folder D = " << D_folder << "\n"
-           << "  Param  D = " << P.Diffusion_coefficient;
-        err_msg = os.str();
-        return false;
+           << "  Param  D = " << P.Diffusion_coefficient << "\n";
+        err_msg += os.str();
     }
 
     const bool aniso_param =
         (std::abs(P.correlation_ls_x - P.correlation_ls_y) > 1e-12);
 
-    if (aniso_folder != aniso_param) {
-        err_msg =
-            std::string("iso/aniso mismatch:\n  Folder = ") +
-            (aniso_folder ? "aniso" : "iso") +
-            "\n  Param  = " +
-            (aniso_param ? "aniso" : "iso");
-        return false;
+    if (ok_aniso && (aniso_folder != aniso_param)) {
+        any_error = true;
+        err_msg += "iso/aniso mismatch:\n";
+        err_msg += std::string("  Folder = ") + (aniso_folder ? "aniso" : "iso") + "\n";
+        err_msg += std::string("  Param  = ") + (aniso_param  ? "aniso" : "iso") + "\n";
+        err_msg += "  (Rule: correlation_ls_x == correlation_ls_y => iso, else aniso)\n";
     }
 
-    return true;
+    // add context footer once
+    if (any_error) {
+        err_msg += "resume_run_dir = " + resume_run_dir + "\n";
+    }
+
+    return !any_error;
 }
 
 // ============================================================

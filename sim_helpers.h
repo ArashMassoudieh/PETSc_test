@@ -58,8 +58,6 @@ bool parse_resume_std(const std::string& s, int& std_val);
 bool parse_resume_D  (const std::string& s, double& D_val);
 bool parse_resume_aniso(const std::string& s, bool& is_aniso);
 
-// Validate resume_run_dir against simulation parameters.
-// Returns false and fills err_msg if mismatch.
 bool validate_resume_run_dir(const std::string& resume_run_dir,
                              const SimParams& P,
                              std::string& err_msg);

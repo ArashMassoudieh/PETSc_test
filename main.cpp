@@ -161,13 +161,12 @@ int main(int argc, char** argv)
     // So mismatch is not fatal: print warning only.
     // Only do this warning when resume_run_dir was not explicitly overridden.
     // -----------------------------
-    if (!user_set_run_dir && (opts.upscale_only || opts.hardcoded_mean)) {
+    if (opts.upscale_only || opts.hardcoded_mean) {
         std::string err;
         if (!validate_resume_run_dir(resume_run_dir, P, err)) {
             if (rank == 0) {
                 std::cerr << "\nWARNING: resume_run_dir name does not match current parameters.\n"
-                          << err << "\n"
-                          << "resume_run_dir = " << resume_run_dir << "\n"
+                          << err
                           << "Continuing anyway (resume folder used as input source).\n\n";
             }
         }
