@@ -8,7 +8,7 @@ set datafile separator ','
 set grid
 set logscale y
 set format y "10^{%T}"
-set yrange [1e-4:*]
+set yrange [1e-6:*]
 
 set xlabel 't' font "Arial,32"
 set ylabel 'c/c_0' font "Arial,32"
