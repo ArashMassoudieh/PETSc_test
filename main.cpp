@@ -122,7 +122,7 @@ int main(int argc, char** argv)
     P.stdev = 1.0;
     P.g_mean = 0.0;
 
-    P.Diffusion_coefficient = 0.1;
+    P.Diffusion_coefficient = 0.2;
     P.t_end_pdf = 20.0;
 
     P.nReal_default = 20;
