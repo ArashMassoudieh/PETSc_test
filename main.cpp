@@ -38,18 +38,18 @@ int main(int argc, char** argv)
     // Simulation options (passed to sim_runner)
     // -----------------------------
     RunOptions opts;
-    opts.upscale_only   = false;
-    opts.hardcoded_mean = false; // (your current setting)
-    opts.solve_fine_scale_transport = true;
-    opts.hardcoded_mean = true;
+
+    opts.upscale_only   = true;
+    opts.hardcoded_mean = true; // (your current setting)
     opts.solve_fine_scale_transport = false;
     opts.solve_upscale_transport    = true;
 
-    // Track whether user explicitly set --qx-cdf
+    // Default resume folder (used when upscale-only OR hardcoded-mean)
+    // Uncomment one of following lines for std=1 or std=2
     bool user_set_qx_cdf = false;
+    std::string resume_run_dir = joinPath(output_dir, "std=2, D=0, aniso");
+    //std::string resume_run_dir = joinPath(output_dir, "run_20260129_140400_A_std1_params");
 
-    // Default/override resume folder (set after params unless user provides --run-dir)
-    std::string resume_run_dir; // empty means "use default later"
 
     // -----------------------------
     // Plot options (kept in main only)
@@ -115,7 +115,7 @@ int main(int argc, char** argv)
     P.stdev = 2.0;   // <--- you set it here
     P.g_mean = 0.0;
 
-    P.Diffusion_coefficient = 0.01;
+
     P.Diffusion_coefficient = 0.001;
     P.t_end_pdf = 20.0;
 
