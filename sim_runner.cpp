@@ -313,6 +313,7 @@ static bool run_fine_loop_collect(
 
         g.SetVal("diffusion", P.Diffusion_coefficient);
         g.assignConstant("D_y", Grid2D::ArrayKind::Fy, P.Diffusion_coefficient);
+        g.writeNamedVTI("D_y",Grid2D::ArrayKind::Fy, joinPath(fine_dir, pfx + "D_y.vti"));
         g.SetVal("porosity", 1.0);
         g.SetVal("c_left", 1.0);
 
