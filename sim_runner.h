@@ -73,6 +73,7 @@ struct SimParams
     double correlation_ls_y = 0.0;
     double stdev = 0.0;
     double g_mean = 0.0;
+    double lambda_y_multiplier = 1;
 
     unsigned long run_seed = 0UL;
 

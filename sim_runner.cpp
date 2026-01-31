@@ -297,7 +297,7 @@ static bool run_fine_loop_collect(
         }
         corr_y.writefile(joinPath(fine_dir, pfx + "velocity_correlation_y.txt"));
         lambda_y_correlations.append(corr_y, "Realization" + aquiutils::numbertostring(r + 1));
-        double lambda_y_emp = corr_y.fitExponentialDecay();
+        double lambda_y_emp = P.lambda_y_multiplier*corr_y.fitExponentialDecay();
 
         // inverse CDF + pdf
         TimeSeries<double> qx_inverse_cdf = g.extractFieldCDF("qx", Grid2D::ArrayKind::Fx, 100, 1e-6);

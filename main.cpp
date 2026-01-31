@@ -39,9 +39,9 @@ int main(int argc, char** argv)
     // -----------------------------
     RunOptions opts;
 
-    opts.upscale_only   = true;
-    opts.hardcoded_mean = true; // (your current setting)
-    opts.solve_fine_scale_transport = false;
+    opts.upscale_only   = false;
+    opts.hardcoded_mean = false; // (your current setting)
+    opts.solve_fine_scale_transport = true;
     opts.solve_upscale_transport    = true;
 
     // Resume folder: existing source folder (mean, qx, ...)
@@ -114,16 +114,16 @@ int main(int argc, char** argv)
 
     P.correlation_ls_x = 1;
     P.correlation_ls_y = 0.1;
-
+    P.lambda_y_multiplier = 3.0;
     P.stdev = 2.0;
     P.g_mean = 0.0;
 
     // "D" in your naming = diffusion coefficient
-    P.Diffusion_coefficient = 0.001;
+    P.Diffusion_coefficient = 0.01;
 
     P.t_end_pdf = 20.0;
 
-    P.nReal_default = 30;
+    P.nReal_default = 20;
     P.run_seed = 20260115UL;
 
     P.xLocations = {0.5, 1.5, 2.5};
