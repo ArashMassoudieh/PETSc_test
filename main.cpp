@@ -117,9 +117,10 @@ int main(int argc, char** argv)
     P.lambda_y_multiplier = 3.0;
     P.stdev = 2.0;
     P.g_mean = 0.0;
+    P.CorrelationModel = SimParams::correlationmode::exponentialfit;
 
     // "D" in your naming = diffusion coefficient
-    P.Diffusion_coefficient = 0.0;
+    P.Diffusion_coefficient = 0.01;
 
     P.t_end_pdf = 20.0;
 

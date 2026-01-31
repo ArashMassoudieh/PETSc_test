@@ -288,7 +288,6 @@ static bool run_fine_loop_collect(
         g.writeNamedVTI("qx_normal_score", Grid2D::ArrayKind::Fx, joinPath(fine_dir, pfx + "qx_normal_score.vti"));
 
         // velocity autocorrelation (X,Y) via perturbation
-        double delta_min = 0.001, delta_max = 0.2;
         int num_deltas = 30;
         int num_samples_per_delta = 10000;
 
@@ -296,7 +295,7 @@ static bool run_fine_loop_collect(
 
         for (int i = 0; i < num_deltas; ++i) {
             double exponent = static_cast<double>(i) / (num_deltas - 1);
-            double delta = delta_min * std::pow(delta_max / delta_min, exponent);
+            double delta = P.correlation_x_range.first * std::pow(P.correlation_x_range.second / P.correlation_x_range.first, exponent);
             try {
                 TimeSeries<double> samples = g.sampleGaussianPerturbation(
                     "qx_normal_score", Grid2D::ArrayKind::Fx,
@@ -306,11 +305,16 @@ static bool run_fine_loop_collect(
         }
         corr_x.writefile(joinPath(fine_dir, pfx + "velocity_correlation_x.txt"));
         lambda_x_correlations.append(corr_x, "Realization" + aquiutils::numbertostring(r + 1));
-        double lambda_x_emp = corr_x.fitExponentialDecay();
+        double lambda_x_emp;
+        if (P.CorrelationModel == SimParams::correlationmode::exponentialfit)
+            lambda_x_emp= corr_x.fitExponentialDecay();
+        else
+            lambda_x_emp= corr_x.getTime(0)/(1.0-corr_x.getValue(0));
+
 
         for (int i = 0; i < num_deltas; ++i) {
             double exponent = static_cast<double>(i) / (num_deltas - 1);
-            double delta = delta_min * std::pow(delta_max / delta_min, exponent);
+            double delta = P.correlation_y_range.first * std::pow(P.correlation_y_range.second / P.correlation_y_range.first, exponent);
             try {
                 TimeSeries<double> samples = g.sampleGaussianPerturbation(
                     "qx_normal_score", Grid2D::ArrayKind::Fx,
@@ -320,7 +324,12 @@ static bool run_fine_loop_collect(
         }
         corr_y.writefile(joinPath(fine_dir, pfx + "velocity_correlation_y.txt"));
         lambda_y_correlations.append(corr_y, "Realization" + aquiutils::numbertostring(r + 1));
-        double lambda_y_emp = P.lambda_y_multiplier*corr_y.fitExponentialDecay();
+
+        double lambda_y_emp;
+        if (P.CorrelationModel == SimParams::correlationmode::exponentialfit)
+            lambda_y_emp= P.lambda_y_multiplier*corr_y.fitExponentialDecay();
+        else
+            lambda_y_emp= corr_y.getTime(0)/(1.0-corr_y.getValue(0));
 
         // inverse CDF + pdf
         TimeSeries<double> qx_inverse_cdf = g.extractFieldCDF("qx", Grid2D::ArrayKind::Fx, 100, 1e-6);
