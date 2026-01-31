@@ -114,11 +114,12 @@ int main(int argc, char** argv)
 
     P.correlation_ls_x = 1;
     P.correlation_ls_y = 0.1;
-    P.lambda_y_multiplier = 3.0;
+    P.lambda_y_multiplier = 1;
     P.stdev = 2.0;
     P.g_mean = 0.0;
     P.CorrelationModel = SimParams::correlationmode::exponentialfit;
-
+    P.correlation_x_range = {0.001,0.1};
+    P.correlation_y_range = {0.001,0.06};
     // "D" in your naming = diffusion coefficient
     P.Diffusion_coefficient = 0.01;
 

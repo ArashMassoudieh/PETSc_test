@@ -13,7 +13,7 @@ set style line 2 lc rgb '#000000' lw 3.0  # Black thick for fit
 # Axis labels
 set xlabel '{/Symbol D}y' font "Arial,32"
 set ylabel 'E[{/Symbol w}(y){/Symbol w}(y+{/Symbol D}y)]' font "Arial,32"
-
+set yrange [0.5:1]
 # Set logarithmic scale for y-axis
 set logscale y
 
@@ -27,7 +27,7 @@ set key bottom left
 set datafile separator ","
 
 # Define the exponential fit function
-fit_func(x) = exp(-x/0.126758)
+fit_func(x) = exp(-x/0.354109)
 
 # Plot all 20 realizations in grey and the fit function in black
 plot 'fine_r0001/r0001_velocity_correlation_y.txt' u 1:2 w l ls 1 notitle, \

@@ -13,7 +13,7 @@ set style line 2 lc rgb '#000000' lw 3.0  # Black thick for fit
 # Axis labels
 set xlabel '{/Symbol D}x' font "Arial,32"
 set ylabel 'E[{/Symbol w}(x){/Symbol w}(x+{/Symbol D}x)]' font "Arial,32"
-
+set yrange [0.9:1]
 # Set logarithmic scale for y-axis
 set logscale y
 
@@ -27,7 +27,7 @@ set key bottom left
 set datafile separator ","
 
 # Define the exponential fit function with lambda_x = 1.08417
-fit_func(x) = exp(-x/1.08417)
+fit_func(x) = exp(-x/1.35685)
 
 # Plot all 20 realizations in grey (skip header, columns 1-40 contain pairs)
 # Using column numbers: 1,2 for first realization, 3,4 for second, etc.
