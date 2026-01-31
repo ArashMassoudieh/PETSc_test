@@ -259,6 +259,29 @@ static bool run_fine_loop_collect(
         g.writeNamedVTI("qx", Grid2D::ArrayKind::Fx, joinPath(fine_dir, pfx + "qx.vti"));
         g.writeNamedVTI("qy", Grid2D::ArrayKind::Fy, joinPath(fine_dir, pfx + "qy.vti"));
 
+
+        g.computeMassBalanceError("div_q");
+
+        // Find cells with non-zero divergence
+        const auto& div_q = g.field("div_q");
+        double max_div = 0.0;
+        int worst_i = -1, worst_j = -1;
+
+        for (int j = 0; j < g.ny(); ++j) {
+            for (int i = 0; i < g.nx(); ++i) {
+                double div = div_q[g.cellIndex(i,j)];
+                if (std::abs(div) > std::abs(max_div)) {
+                    max_div = div;
+                    worst_i = i;
+                    worst_j = j;
+                }
+            }
+        }
+
+        std::cout << "Max divergence: " << max_div
+                  << " at cell (" << worst_i << "," << worst_j << ")" << std::endl;
+
+
         TimeSeries<double> AllQxValues = g.exportFieldToTimeSeries("qx", Grid2D::ArrayKind::Fx);
         TimeSeries<double> QxNormalScores = AllQxValues.ConvertToNormalScore();
         g.assignFromTimeSeries(QxNormalScores, "qx_normal_score", Grid2D::ArrayKind::Fx);

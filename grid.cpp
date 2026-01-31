@@ -1219,7 +1219,8 @@ void Grid2D::addTransportXTerms(int i, int j, double dt, double D, double porosi
     const double inv_dx2 = 1.0 / (DX*DX);
 
     // face velocities
-    double u_west = (i > 0)      ? getVelocityX(i, j, porosity)   : 0.0;
+    double u_west = (i > 0) ? getVelocityX(i, j, porosity)
+                            : getVelocityX(0, j, porosity);
     double u_east = (i < NX - 1) ? getVelocityX(i+1, j, porosity) : 0.0;
 
     // ---- Interior ----
@@ -1240,9 +1241,10 @@ void Grid2D::addTransportXTerms(int i, int j, double dt, double D, double porosi
     // --------------------
     else if (i == 0) {
         // Diagonal: east outflow + contribution from ghost (-c0 term) + diffusion
-        diag += std::max(u_east, 0.0) * inv_dx    // outflow east
-                - std::min(u_west, 0.0) * inv_dx    // inflow from west ghost
-                + 3.0 * D * inv_dx2;                // diffusion: (2cL - c0 - 2c0 + c1)
+        diag += std::max(u_east, 0.0) * inv_dx          // outflow east
+                + std::max(u_west, 0.0) * inv_dx        // inflow from boundary (factor of 1 for advection!)
+                - std::min(u_west, 0.0) * inv_dx        // outflow to west (reverse flow)
+                + 3.0 * D * inv_dx2;                    // diffusion (factor of 2 applies here)
 
         // East neighbor (negative)
         if (NX > 1) {
@@ -1404,6 +1406,7 @@ void Grid2D::assembleTransportRHS(PETScVector& b,
         if (i == 0) {
             double u_west = getVelocityX(0, j, porosity_);
             // Advection inflow contribution
+            // rhs += (std::max(u_west,0.0) * inv_dx) * c_left_; old
             rhs += (std::max(u_west,0.0) * inv_dx) * c_left_;
             // Diffusion ghost contribution
             if (diffusion_coeff_ > 0.0) {
@@ -1444,7 +1447,7 @@ void Grid2D::assembleTransportRHS(PETScVector& b,
         // --- West boundary: inject boundary concentration ---
         if (i == 0) {
             double u_west = getVelocityX(0, j, porosity_);
-            rhs += (std::max(u_west,0.0) * inv_dx) * c_left_;
+            rhs += (2.0 * std::max(u_west,0.0) * inv_dx) * c_left_;
             if (diffusion_coeff_ > 0.0) {
                 rhs += (2.0 * diffusion_coeff_ * inv_dx2) * c_left_;
             }

@@ -119,7 +119,7 @@ int main(int argc, char** argv)
     P.g_mean = 0.0;
 
     // "D" in your naming = diffusion coefficient
-    P.Diffusion_coefficient = 0.01;
+    P.Diffusion_coefficient = 0.0;
 
     P.t_end_pdf = 20.0;
 
