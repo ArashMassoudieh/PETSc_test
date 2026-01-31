@@ -41,7 +41,7 @@ int main(int argc, char** argv)
 
     opts.upscale_only   = false;
     opts.hardcoded_mean = false; // (your current setting)
-    opts.solve_fine_scale_transport = true;
+    opts.solve_fine_scale_transport = false;
     opts.solve_upscale_transport    = true;
 
     // Resume folder: existing source folder (mean, qx, ...)
