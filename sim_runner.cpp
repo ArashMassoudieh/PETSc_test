@@ -307,9 +307,11 @@ static bool run_fine_loop_collect(
         lambda_x_correlations.append(corr_x, "Realization" + aquiutils::numbertostring(r + 1));
         double lambda_x_emp;
         if (P.CorrelationModel == SimParams::correlationmode::exponentialfit)
-            lambda_x_emp= corr_x.fitExponentialDecay();
-        else
+            lambda_x_emp= P.lambda_y_multiplier*corr_x.fitExponentialDecay();
+        else if (P.CorrelationModel == SimParams::correlationmode::derivative)
             lambda_x_emp= corr_x.getTime(0)/(1.0-corr_x.getValue(0));
+        else
+            lambda_x_emp= corr_x.fitGaussianDecay();
 
 
         for (int i = 0; i < num_deltas; ++i) {
@@ -328,8 +330,10 @@ static bool run_fine_loop_collect(
         double lambda_y_emp;
         if (P.CorrelationModel == SimParams::correlationmode::exponentialfit)
             lambda_y_emp= P.lambda_y_multiplier*corr_y.fitExponentialDecay();
-        else
+        else if (P.CorrelationModel == SimParams::correlationmode::derivative)
             lambda_y_emp= corr_y.getTime(0)/(1.0-corr_y.getValue(0));
+        else
+            lambda_y_emp= corr_y.fitGaussianDecay();
 
         // inverse CDF + pdf
         TimeSeries<double> qx_inverse_cdf = g.extractFieldCDF("qx", Grid2D::ArrayKind::Fx, 100, 1e-6);

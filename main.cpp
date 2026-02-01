@@ -41,7 +41,7 @@ int main(int argc, char** argv)
 
     opts.upscale_only   = false;
     opts.hardcoded_mean = false; // (your current setting)
-    opts.solve_fine_scale_transport = false;
+    opts.solve_fine_scale_transport = true;
     opts.solve_upscale_transport    = true;
 
     // Resume folder: existing source folder (mean, qx, ...)
@@ -49,7 +49,7 @@ int main(int argc, char** argv)
     bool user_set_run_dir = false;
 
     // Your existing resume folder naming
-    std::string resume_run_dir = joinPath(output_dir, "std=2, D=0, aniso");
+    std::string resume_run_dir = joinPath(output_dir, "run_20260131_112925_std2_D0.1_aniso");
 
     // -----------------------------
     // Plot options (kept in main only)
@@ -117,9 +117,9 @@ int main(int argc, char** argv)
     P.lambda_y_multiplier = 1;
     P.stdev = 2.0;
     P.g_mean = 0.0;
-    P.CorrelationModel = SimParams::correlationmode::exponentialfit;
-    P.correlation_x_range = {0.001,0.01};
-    P.correlation_y_range = {0.001,0.01};
+    P.CorrelationModel = SimParams::correlationmode::gaussian;
+    P.correlation_x_range = {0.001,0.05};
+    P.correlation_y_range = {0.001,0.05};
     // "D" in your naming = diffusion coefficient
     P.Diffusion_coefficient = 0.01;
 

@@ -66,7 +66,7 @@ public:
     enum class DerivDir { X, Y };
     /// total number of cells
     std::size_t numCells() const { return static_cast<std::size_t>(nx_)*ny_; }
-
+    enum class velocity_correlation_model {exponential, gaussian} VelocityCorrelationModel = velocity_correlation_model::gaussian;
     // --------- Indexing helpers ---------
 
     /// Flattened index for cell (i,j) in row-major order: I = j*nx + i

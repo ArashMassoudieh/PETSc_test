@@ -2082,11 +2082,13 @@ double Grid2D::Phi_inv(double u)
 // Mixing kernel: κ(v) = v/lc + D/λ_x² + D/λ_y²
 double Grid2D::kappa(double v, double lc, double lambda_x, double lambda_y) const
 {
+    double factor = 1;
+    if (VelocityCorrelationModel==velocity_correlation_model::gaussian) factor = 2;
     double D = diffusion_coeff_;  // Use the existing diffusion coefficient
 
     double term1 = v / lc;
-    double term2 = D / (lambda_x * lambda_x);
-    double term3 = D / (lambda_y * lambda_y);
+    double term2 = factor*D / (lambda_x * lambda_x);
+    double term3 = factor*D / (lambda_y * lambda_y);
 
     return term1 + term2 + term3;
 }
