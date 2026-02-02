@@ -234,9 +234,23 @@ static bool run_fine_loop_collect(
 
         unsigned long seed = P.run_seed + 1000UL*(unsigned long)r + (unsigned long)rank;
 
-        g.makeGaussianFieldSGS("K_normal_score", P.correlation_ls_x, P.correlation_ls_y, 10, seed);
-        g.normalizeField("K_normal_score", Grid2D::ArrayKind::Cell);
+        if (P.CorrelationModel == SimParams::correlationmode::gaussian)
+        {
+            g.generateGaussianRandomField("K_normal_score",
+                                          P.correlation_ls_x,
+                                          P.correlation_ls_y,
+                                          0.0,   // mean
+                                          1.0,   // variance
+                                          seed);
 
+        }
+        else
+        {
+            g.makeGaussianFieldSGS("K_normal_score", P.correlation_ls_x, P.correlation_ls_y, 10, seed);
+
+        }
+
+        g.normalizeField("K_normal_score", Grid2D::ArrayKind::Cell);
         PetscTime(&t_asm0);
         PetscTime(&t_total0);
 
@@ -245,8 +259,6 @@ static bool run_fine_loop_collect(
 
         g.createExponentialField("K_normal_score", P.stdev, P.g_mean, "K");
         g.writeNamedVTI("K", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "K.vti"));
-
-        PetscTime(&t_asm1);
 
         PetscTime(&t_solve0);
         g.DarcySolve(Lx, 0, "K", "K");

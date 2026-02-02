@@ -82,7 +82,7 @@ HEADERS += \
     sim_runner.h
 
 DEFINES += ARMA_USE_LAPACK ARMA_USE_BLAS
-LIBS += -larmadillo -llapack -lblas -lgsl
+LIBS += -larmadillo -llapack -lblas -lgsl -lfftw3
 
 GRID_USE_VTK {
     LIBS += -L$$VTKBUILDPATH/lib/ -lvtkChartsCore$$VTK_V
