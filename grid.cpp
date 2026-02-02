@@ -13,6 +13,7 @@
 #include "petscmatrix.h"
 #include "petscvector.h"
 #include "TimeSeries.h"
+#include <fftw3.h>
 
 #ifdef GRID_USE_VTK
 #include <vtkSmartPointer.h>
@@ -2524,4 +2525,129 @@ void Grid2D::extractConcentrationToCPU() {
         C[i] = static_cast<double>(c_array[i]);
     }
     VecRestoreArrayRead(c_current_->raw(), &c_array);
+}
+
+void Grid2D::generateGaussianRandomField(const std::string& field_name,
+                                         double lambda_x,
+                                         double lambda_y,
+                                         double mean,
+                                         double variance,
+                                         unsigned int seed)
+{
+    // Create or get the field
+    auto& field = this->field(field_name);
+
+    // Setup random number generator
+    gsl_rng* rng = gsl_rng_alloc(gsl_rng_mt19937);
+    if (seed == 0) {
+        // Use time-based seed
+        gsl_rng_set(rng, static_cast<unsigned long>(time(nullptr)));
+    } else {
+        gsl_rng_set(rng, seed);
+    }
+
+    // Allocate real-space array for white noise
+    const int N = nx_ * ny_;
+    double* noise = fftw_alloc_real(N);
+
+    // Generate white noise with standard normal distribution
+    for (int i = 0; i < N; i++) {
+        noise[i] = gsl_ran_gaussian(rng, 1.0);
+    }
+
+    // Allocate complex array for FFT output
+    // For real-to-complex FFT, output size is nx * (ny/2 + 1) complex numbers
+    const int ny_complex = ny_ / 2 + 1;
+    fftw_complex* fft_data = fftw_alloc_complex(nx_ * ny_complex);
+
+    // Create forward FFT plan (real to complex)
+    // Note: FFTW uses row-major order, matching our grid layout
+    fftw_plan forward = fftw_plan_dft_r2c_2d(nx_, ny_, noise, fft_data, FFTW_ESTIMATE);
+
+    // Execute forward FFT
+    fftw_execute(forward);
+
+    // Apply filter in frequency domain
+    // For each wave vector k, multiply by sqrt(S(k))
+    // S(kx, ky) = π·λx·λy · exp(-λx²·kx²/4 - λy²·ky²/4)
+
+    const double kx_factor = 2.0 * M_PI / Lx_;
+    const double ky_factor = 2.0 * M_PI / Ly_;
+
+    for (int ix = 0; ix < nx_; ix++) {
+        for (int iy = 0; iy < ny_complex; iy++) {
+            // Compute wave numbers
+            // kx ranges from 0 to (nx-1), wrapping at Nyquist
+            double kx = (ix <= nx_/2) ? ix * kx_factor : (ix - nx_) * kx_factor;
+
+            // ky ranges from 0 to ny/2 (only positive frequencies for r2c transform)
+            double ky = iy * ky_factor;
+
+            // Power spectrum with Gaussian correlation
+            double k2_scaled = 0.25 * (lambda_x * lambda_x * kx * kx +
+                                       lambda_y * lambda_y * ky * ky);
+            double filter = sqrt(M_PI * lambda_x * lambda_y) * exp(-k2_scaled);
+
+            // Apply filter to both real and imaginary parts
+            int idx = ix * ny_complex + iy;
+            fft_data[idx][0] *= filter;  // real part
+            fft_data[idx][1] *= filter;  // imaginary part
+        }
+    }
+
+    // Allocate output array for inverse FFT
+    double* output = fftw_alloc_real(N);
+
+    // Create inverse FFT plan (complex to real)
+    fftw_plan backward = fftw_plan_dft_c2r_2d(nx_, ny_, fft_data, output, FFTW_ESTIMATE);
+
+    // Execute inverse FFT
+    fftw_execute(backward);
+
+    // Normalize and apply mean/variance
+    // FFTW doesn't normalize, so we need to divide by N
+    // Also scale to desired variance and add mean
+    const double normalization = 1.0 / N;
+    const double sigma = sqrt(variance);
+
+    for (int j = 0; j < ny_; j++) {
+        for (int i = 0; i < nx_; i++) {
+            int idx_fftw = i * ny_ + j;  // FFTW row-major
+            int idx_grid = cellIndex(i, j);  // Grid row-major: j*nx + i
+
+            // Normalize, scale to variance, and add mean
+            field[idx_grid] = mean + sigma * output[idx_fftw] * normalization;
+        }
+    }
+
+    // Cleanup
+    fftw_destroy_plan(forward);
+    fftw_destroy_plan(backward);
+    fftw_free(noise);
+    fftw_free(fft_data);
+    fftw_free(output);
+    gsl_rng_free(rng);
+}
+
+void Grid2D::generateLogNormalK(const std::string& K_field_name,
+                                double lambda_x,
+                                double lambda_y,
+                                double mean_log,
+                                double var_log,
+                                unsigned int seed)
+{
+    // Generate Gaussian field Y = ln(K)
+    std::string Y_field_name = K_field_name + "_log";
+    generateGaussianRandomField(Y_field_name, lambda_x, lambda_y, mean_log, var_log, seed);
+
+    // Transform to log-normal: K = exp(Y)
+    auto& Y_field = field(Y_field_name);
+    auto& K_field = field(K_field_name);
+
+    for (size_t i = 0; i < numCells(); i++) {
+        K_field[i] = exp(Y_field[i]);
+    }
+
+    // Optionally remove the intermediate log field
+    dropField(Y_field_name);
 }

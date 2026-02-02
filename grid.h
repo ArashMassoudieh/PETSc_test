@@ -577,6 +577,46 @@ public:
     const std::vector<double>& getBTCLocations() const;
     std::vector<double>& getBTCLocations();
 
+    /**
+    * @brief Generate a Gaussian random field with specified correlation structure
+        *
+            * Generates a random field with correlation: C(r) = exp(-rx²/λx² - ry²/λy²)
+              * Uses FFT method which assumes periodic boundary conditions.
+              *
+              * @param field_name Name of the field to create/fill
+              * @param lambda_x Correlation length scale in x-direction
+                * @param lambda_y Correlation length scale in y-direction
+                * @param mean Mean of the field (default 0.0)
+                * @param variance Variance of the field (default 1.0)
+                * @param seed Random seed (default 0 = use time-based seed)
+                */
+                void generateGaussianRandomField(const std::string& field_name,
+                                                 double lambda_x,
+                                                 double lambda_y,
+                                                 double mean = 0.0,
+                                                 double variance = 1.0,
+                                                 unsigned int seed = 0);
+
+    /**
+     * @brief Generate log-normal hydraulic conductivity field
+     *
+     * Generates Y = ln(K) as Gaussian random field, then K = exp(Y)
+     *
+     * @param K_field_name Name of conductivity field to create
+     * @param lambda_x Correlation length scale in x-direction
+     * @param lambda_y Correlation length scale in y-direction
+     * @param mean_log Mean of log(K)
+     * @param var_log Variance of log(K)
+     * @param seed Random seed (default 0 = use time-based seed)
+     */
+    void generateLogNormalK(const std::string& K_field_name,
+                            double lambda_x,
+                            double lambda_y,
+                            double mean_log,
+                            double var_log,
+                            unsigned int seed = 0);
+
+
 private:
     int nx_, ny_;
     double Lx_, Ly_, dx_, dy_;

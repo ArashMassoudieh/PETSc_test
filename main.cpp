@@ -25,8 +25,6 @@ int main(int argc, char** argv)
     std::string output_dir = "/home/behzad/Projects/PETSc_test/Results";
 #elif SligoCreek
     std::string output_dir = "/media/arash/E/Projects/PETSc_test/Results";
-#elif Jason
-    std::string output_dir = "/home/arash/Projects/UpscalingResults";
 #elif WSL
     std::string output_dir = "/home/behzad/Projects/PETSc_test/Results";
 #else
@@ -44,7 +42,7 @@ int main(int argc, char** argv)
     opts.upscale_only   = false;
     opts.hardcoded_mean = false; // (your current setting)
     opts.solve_fine_scale_transport = false;
-    opts.solve_upscale_transport    = true;
+    opts.solve_upscale_transport    = false;
 
     // Resume folder: existing source folder (mean, qx, ...)
     bool user_set_qx_cdf  = false;
@@ -116,12 +114,12 @@ int main(int argc, char** argv)
 
     P.correlation_ls_x = 1;
     P.correlation_ls_y = 0.1;
-    P.diffusion_factor = 1; // Calibration coefficient
+    P.diffusion_factor = 0.15; // Calibration coefficient
     P.stdev = 2.0;
     P.g_mean = 0.0;
-    P.CorrelationModel = SimParams::correlationmode::matern;
-    P.correlation_x_range = {0.001,0.1};
-    P.correlation_y_range = {0.001,0.1};
+    P.CorrelationModel = SimParams::correlationmode::gaussian;
+    P.correlation_x_range = {0.001,0.3};
+    P.correlation_y_range = {0.001,0.3};
     // "D" in your naming = diffusion coefficient
     P.Diffusion_coefficient = 0.01;
 
