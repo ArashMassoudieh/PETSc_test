@@ -21,7 +21,11 @@ DEFINES += PowerEdge
 #CONFIG += SligoCreek
 #DEFINES += SligoCreek
 
-# NEW: WSL
+# NEW:
+
+#CONFIG  += Jason
+#DEFINES += Jason
+
 #CONFIG += WSL
 #DEFINES += WSL
 
@@ -48,6 +52,12 @@ contains(DEFINES, SligoCreek) {
     VTKBUILDPATH = /media/arash/E/Projects/VTK-9.1.0/VTK-build
     VTKHEADERPATH = /media/arash/E/Projects/VTK-9.1.0
     VTK_V = -9.1
+}
+
+contains(DEFINES, Jason) {
+    VTKBUILDPATH = /home/arash/Projects/VTK-9.3.0/build
+    VTKHEADERPATH = /home/arash/Projects/VTK-9.3.0
+    VTK_V = -9.3
 }
 
 contains(DEFINES, WSL) {
