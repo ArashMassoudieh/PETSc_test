@@ -119,7 +119,7 @@ int main(int argc, char** argv)
     P.diffusion_factor = 0.15; // Calibration coefficient
     P.stdev = 2.0;
     P.g_mean = 0.0;
-    P.CorrelationModel = SimParams::correlationmode::gaussian;
+    P.CorrelationModel = SimParams::correlationmode::exponentialfit;
     P.correlation_x_range = {0.001,0.3};
     P.correlation_y_range = {0.001,0.3};
     // "D" in your naming = diffusion coefficient
