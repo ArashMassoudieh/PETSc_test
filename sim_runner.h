@@ -49,6 +49,8 @@ struct HardcodedMean
     double lx_mean = 0.0;
     double ly_mean = 0.0;
     double dt_mean = 0.0;
+    double nu_x = 0.0;
+    double nu_y = 0.0;
 
     // fallback only when RunOptions::hardcoded_qx_cdf_path is not provided or load fails
     double qx_const = 0.0;
@@ -73,7 +75,7 @@ struct SimParams
     double correlation_ls_y = 0.0;
     double stdev = 0.0;
     double g_mean = 0.0;
-    double lambda_y_multiplier = 1;
+    double diffusion_factor = 1;
 
     unsigned long run_seed = 0UL;
 
@@ -82,7 +84,7 @@ struct SimParams
     double t_end_pdf = 0.0;
 
     std::vector<double> xLocations;
-    enum class correlationmode {exponentialfit, derivative, gaussian} CorrelationModel = correlationmode::derivative;
+    enum class correlationmode {exponentialfit, derivative, gaussian, matern} CorrelationModel = correlationmode::derivative;
     pair<double,double> correlation_x_range = {0.001,0.02};
     pair<double,double> correlation_y_range = {0.001,0.02};
 };

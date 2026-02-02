@@ -66,7 +66,7 @@ public:
     enum class DerivDir { X, Y };
     /// total number of cells
     std::size_t numCells() const { return static_cast<std::size_t>(nx_)*ny_; }
-    enum class velocity_correlation_model {exponential, gaussian} VelocityCorrelationModel = velocity_correlation_model::gaussian;
+    enum class velocity_correlation_model {exponential, gaussian, matern} VelocityCorrelationModel = velocity_correlation_model::exponential;
     // --------- Indexing helpers ---------
 
     /// Flattened index for cell (i,j) in row-major order: I = j*nx + i
@@ -501,10 +501,14 @@ public:
     double kappa(double v, double lc, double lambda_x, double lambda_y) const;
 
     // Parameters for mixing equation
-    void setMixingParams(double lc, double lambda_x, double lambda_y);
+    void setMixingParams(double lc, double lambda_x, double lambda_y, double mu_x=0, double mu_y=0);
+    void setDiffusionFactor(const double &df);
     double lc() const { return lc_; }
     double lambda_x() const { return lambda_x_; }
     double lambda_y() const { return lambda_y_; }
+    double nu_x() const { return nu_x_; }
+    double nu_y() const { return nu_y_; }
+    double diffusionFactor() {return diffusionfactor_;}
 
     // Add to grid.h public section:
 
@@ -585,6 +589,9 @@ private:
     double lc_;          // Correlation length scale
     double lambda_x_;    // Transverse dispersion length in x
     double lambda_y_;    // Transverse dispersion length in y
+    double nu_x_;        // Matérn smoothness for x correlation (used only when VelocityCorrelationModel == matern)
+    double nu_y_;        // Matérn smoothness for y correlation (used only when VelocityCorrelationModel == matern)
+    double diffusionfactor_ = 1;
     std::vector<double> BTCLocations_; // Breakthrough curve monitoring locations
 
     // Registry of cell-centered scalar fields by name

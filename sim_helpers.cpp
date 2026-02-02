@@ -522,23 +522,26 @@ bool parse_keyval_file(const std::string& path,
 }
 
 bool read_mean_params_txt(const std::string& path,
-                          double& lc_mean, double& lx_mean, double& ly_mean, double& dt_mean)
+                          double& lc_mean, double& lx_mean, double& ly_mean, double& dt_mean,
+                          double& nu_x_mean, double& nu_y_mean)
 {
     std::map<std::string,std::string> kv;
     if (!parse_keyval_file(path, kv)) return false;
-
     auto getd = [&](const std::string& k, double& out)->bool{
         auto it = kv.find(k);
         if (it == kv.end()) return false;
         out = std::atof(it->second.c_str());
         return true;
     };
-
     bool ok =
         getd("lc_mean", lc_mean) &&
         getd("lambda_x_mean", lx_mean) &&
         getd("lambda_y_mean", ly_mean) &&
         getd("dt_mean", dt_mean);
+
+    // Optional: default to 1.5 (C^1 Matérn) if missing
+    if (!getd("matern_nu_x_mean", nu_x_mean)) nu_x_mean = 1.5;
+    if (!getd("matern_nu_y_mean", nu_y_mean)) nu_y_mean = 1.5;
 
     return ok;
 }

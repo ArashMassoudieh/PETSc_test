@@ -229,7 +229,7 @@ bool parse_keyval_file(const std::string& path, std::map<std::string, std::strin
 
 bool read_mean_params_txt(
     const std::string& path,
-    double& lc_mean, double& lx_mean, double& ly_mean, double& dt_mean
+    double& lc_mean, double& lx_mean, double& ly_mean, double& dt_mean, double& nu_x_mean, double& nu_y_mean
 );
 
 bool read_mean_inverse_cdf_csv(

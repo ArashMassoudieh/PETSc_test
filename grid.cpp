@@ -2079,35 +2079,71 @@ double Grid2D::Phi_inv(double u)
     return gsl_cdf_gaussian_Pinv(u, 1.0);
 }
 
-// Mixing kernel: κ(v) = v/lc + D/λ_x² + D/λ_y²
+// Matérn exchange-rate factor: nu/(nu-1), derived from rho''(0).
+//   nu <= 0.5  ->  exponential limit, factor = 1
+//   0.5 < nu <= 1 ->  rho''(0) diverges; clamp to 1 as safeguard (does not arise in practice)
+//   nu > 1     ->  nu / (nu - 1)
+static double matern_exchange_factor(double nu)
+{
+    if (nu <= 1.0) return 1.0;
+    return nu / (nu - 1.0);
+}
+
+// Mixing kernel: κ(v) = v/lc + factor_x * D/λ_x² + factor_y * D/λ_y²
+//
+// The factor per direction is -rho''(0) * ell², i.e. the second-derivative
+// prefactor of the correlation model used to fit that direction:
+//   exponential:  1
+//   gaussian:     2
+//   matern:       nu_i / (nu_i - 1)      [per direction]
 double Grid2D::kappa(double v, double lc, double lambda_x, double lambda_y) const
 {
-    double factor = 1;
-    if (VelocityCorrelationModel==velocity_correlation_model::gaussian) factor = 2;
-    double D = diffusion_coeff_;  // Use the existing diffusion coefficient
+    double D = diffusion_coeff_;
+
+    double factor_x = diffusionfactor_, factor_y = diffusionfactor_;
+    if (VelocityCorrelationModel == velocity_correlation_model::gaussian) {
+        factor_x = 2.0;
+        factor_y = 2.0;
+    } else if (VelocityCorrelationModel == velocity_correlation_model::matern) {
+        factor_x = matern_exchange_factor(nu_x_);
+        factor_y = matern_exchange_factor(nu_y_);
+    }
+    // exponential: factors stay 1
 
     double term1 = v / lc;
-    double term2 = factor*D / (lambda_x * lambda_x);
-    double term3 = factor*D / (lambda_y * lambda_y);
+    double term2 = factor_x * D / (lambda_x * lambda_x);
+    double term3 = factor_y * D / (lambda_y * lambda_y);
 
     return term1 + term2 + term3;
 }
 
-// Set mixing parameters
-void Grid2D::setMixingParams(double lc, double lambda_x, double lambda_y)
+void Grid2D::setMixingParams(double lc, double lambda_x, double lambda_y,
+                             double nu_x, double nu_y)
 {
     if (lc <= 0.0 || lambda_x <= 0.0 || lambda_y <= 0.0) {
         throw std::runtime_error("setMixingParams: all parameters must be positive");
     }
 
-    lc_ = lc;
+    lc_       = lc;
     lambda_x_ = lambda_x;
     lambda_y_ = lambda_y;
+    nu_x_     = nu_x;
+    nu_y_     = nu_y;
 
     std::cout << "Mixing parameters set:\n"
-              << "  lc = " << lc_ << "\n"
+              << "  lc = "       << lc_       << "\n"
               << "  lambda_x = " << lambda_x_ << "\n"
               << "  lambda_y = " << lambda_y_ << "\n";
+
+    if (VelocityCorrelationModel == velocity_correlation_model::matern) {
+        std::cout << "  nu_x = "     << nu_x_     << "  (factor = " << matern_exchange_factor(nu_x_) << ")\n"
+                  << "  nu_y = "     << nu_y_     << "  (factor = " << matern_exchange_factor(nu_y_) << ")\n";
+    }
+}
+
+void Grid2D::setDiffusionFactor(const double &df)
+{
+    diffusionfactor_ = df;
 }
 
 // Add to grid.cpp:

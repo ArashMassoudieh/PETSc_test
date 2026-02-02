@@ -41,7 +41,7 @@ int main(int argc, char** argv)
 
     opts.upscale_only   = false;
     opts.hardcoded_mean = false; // (your current setting)
-    opts.solve_fine_scale_transport = true;
+    opts.solve_fine_scale_transport = false;
     opts.solve_upscale_transport    = true;
 
     // Resume folder: existing source folder (mean, qx, ...)
@@ -114,12 +114,12 @@ int main(int argc, char** argv)
 
     P.correlation_ls_x = 1;
     P.correlation_ls_y = 0.1;
-    P.lambda_y_multiplier = 1;
+    P.diffusion_factor = 1; // Calibration coefficient
     P.stdev = 2.0;
     P.g_mean = 0.0;
-    P.CorrelationModel = SimParams::correlationmode::gaussian;
-    P.correlation_x_range = {0.001,0.05};
-    P.correlation_y_range = {0.001,0.05};
+    P.CorrelationModel = SimParams::correlationmode::matern;
+    P.correlation_x_range = {0.001,0.1};
+    P.correlation_y_range = {0.001,0.1};
     // "D" in your naming = diffusion coefficient
     P.Diffusion_coefficient = 0.01;
 
@@ -188,17 +188,21 @@ int main(int argc, char** argv)
     H.lx_mean  = 1.24365;
     H.ly_mean  = 0.124846;
     H.dt_mean  = 7.31122e-05;
+    H.nu_x = 1.5;
+    H.nu_y = 1.5;
 
     // Optional overwrite from mean_params.txt (if present)
     {
         const std::string mean_path = joinPath(resume_run_dir, "mean_params.txt");
         if (fileExists(mean_path)) {
-            double lc = H.lc_mean, lx = H.lx_mean, ly = H.ly_mean, dt = H.dt_mean;
-            if (read_mean_params_txt(mean_path, lc, lx, ly, dt)) {
+            double lc = H.lc_mean, lx = H.lx_mean, ly = H.ly_mean, dt = H.dt_mean; double nu_x=H.nu_x; double nu_y=H.nu_y;
+            if (read_mean_params_txt(mean_path, lc, lx, ly, dt, nu_x, nu_y)) {
                 H.lc_mean = lc;
                 H.lx_mean = lx;
                 H.ly_mean = ly;
                 H.dt_mean = dt;
+                H.nu_x = nu_x;
+                H.nu_y = nu_y;
 
                 if (rank == 0) std::cout << "Loaded mean params: " << mean_path << "\n";
             }

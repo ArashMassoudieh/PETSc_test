@@ -197,6 +197,8 @@ static bool run_fine_loop_collect(
     std::vector<double>& lc_all,
     std::vector<double>& lx_all,
     std::vector<double>& ly_all,
+    double& nu_x_mean,
+    double& nu_y_mean,
     std::vector<double>& dt_all,
     TimeSeriesSet<double>& inverse_qx_cdfs,
     TimeSeriesSet<double>& qx_pdfs,
@@ -306,12 +308,18 @@ static bool run_fine_loop_collect(
         corr_x.writefile(joinPath(fine_dir, pfx + "velocity_correlation_x.txt"));
         lambda_x_correlations.append(corr_x, "Realization" + aquiutils::numbertostring(r + 1));
         double lambda_x_emp;
+        double matern_nu_x;
         if (P.CorrelationModel == SimParams::correlationmode::exponentialfit)
-            lambda_x_emp= P.lambda_y_multiplier*corr_x.fitExponentialDecay();
+            lambda_x_emp= corr_x.fitExponentialDecay();
         else if (P.CorrelationModel == SimParams::correlationmode::derivative)
             lambda_x_emp= corr_x.getTime(0)/(1.0-corr_x.getValue(0));
-        else
+        else if (P.CorrelationModel == SimParams::correlationmode::gaussian)
             lambda_x_emp= corr_x.fitGaussianDecay();
+        else
+        {   pair<double,double> matern_params = corr_x.fitMaternDecay();
+            lambda_x_emp = matern_params.second;
+            matern_nu_x = matern_params.first;
+        }
 
 
         for (int i = 0; i < num_deltas; ++i) {
@@ -328,12 +336,18 @@ static bool run_fine_loop_collect(
         lambda_y_correlations.append(corr_y, "Realization" + aquiutils::numbertostring(r + 1));
 
         double lambda_y_emp;
+        double matern_nu_y;
         if (P.CorrelationModel == SimParams::correlationmode::exponentialfit)
-            lambda_y_emp= P.lambda_y_multiplier*corr_y.fitExponentialDecay();
+            lambda_y_emp= corr_y.fitExponentialDecay();
         else if (P.CorrelationModel == SimParams::correlationmode::derivative)
             lambda_y_emp= corr_y.getTime(0)/(1.0-corr_y.getValue(0));
-        else
+        else if (P.CorrelationModel == SimParams::correlationmode::gaussian)
             lambda_y_emp= corr_y.fitGaussianDecay();
+        else
+        {   pair<double,double> matern_params = corr_y.fitMaternDecay();
+            lambda_y_emp = matern_params.second;
+            matern_nu_y = matern_params.first;
+        }
 
         // inverse CDF + pdf
         TimeSeries<double> qx_inverse_cdf = g.extractFieldCDF("qx", Grid2D::ArrayKind::Fx, 100, 1e-6);
@@ -426,6 +440,8 @@ static bool run_fine_loop_collect(
             m << "lc=" << lc_emp << "\n";
             m << "lambda_x=" << lambda_x_emp << "\n";
             m << "lambda_y=" << lambda_y_emp << "\n";
+            m << "matern_mu_x=" << matern_nu_x << "\n";
+            m << "matern_mu_y=" << matern_nu_y << "\n";
             m << "dt_opt=" << dt_optimal << "\n";
             m << "seed=" << seed << "\n";
         }
@@ -463,6 +479,91 @@ static bool run_fine_loop_collect(
         lambda_a_correlations.write(joinPath(run_dir, "advective_correlations.txt"));
         lambda_x_correlations.write(joinPath(run_dir, "diffusion_x_correlations.txt"));
         lambda_y_correlations.write(joinPath(run_dir, "diffusion_y_correlations.txt"));
+
+        // --- mean correlation curves (raw) ---
+        TimeSeries<double> mean_corr_a = lambda_a_correlations.mean_ts();
+        TimeSeries<double> mean_corr_x = lambda_x_correlations.mean_ts();
+        TimeSeries<double> mean_corr_y = lambda_y_correlations.mean_ts();
+
+        mean_corr_a.writefile(joinPath(run_dir, "advective_correlations_mean.txt"));
+        mean_corr_x.writefile(joinPath(run_dir, "diffusion_x_correlations_mean.txt"));
+        mean_corr_y.writefile(joinPath(run_dir, "diffusion_y_correlations_mean.txt"));
+
+        // --- fitted correlation curves ---
+
+        // Advective: always exponential
+        {
+            double l_a = mean_corr_a.fitExponentialDecay();
+            TimeSeries<double> fitted_a;
+            for (size_t i = 0; i < mean_corr_a.size(); ++i) {
+                double r = mean_corr_a.getTime(i);
+                fitted_a.append(r, std::exp(-r / l_a));
+            }
+            fitted_a.writefile(joinPath(run_dir, "advective_correlations_mean_fitted.txt"));
+        }
+
+        // Diffusion X: follows CorrelationModel
+        {
+            double ell_x = 0, nu_x = 0.0;
+            if (P.CorrelationModel == SimParams::correlationmode::exponentialfit)
+                ell_x = mean_corr_x.fitExponentialDecay();
+            else if (P.CorrelationModel == SimParams::correlationmode::derivative)
+                ell_x = mean_corr_x.getTime(0) / (1.0 - mean_corr_x.getValue(0));
+            else if (P.CorrelationModel == SimParams::correlationmode::gaussian)
+                ell_x = mean_corr_x.fitGaussianDecay();
+            else {   // matern
+                auto [n, e] = mean_corr_x.fitMaternDecay();
+                nu_x  = n;
+                ell_x = e;
+            }
+
+            TimeSeries<double> fitted_x;
+            for (size_t i = 0; i < mean_corr_x.size(); ++i) {
+                double r   = mean_corr_x.getTime(i);
+                double rho;
+                if (P.CorrelationModel == SimParams::correlationmode::gaussian)
+                    rho = std::exp(-(r / ell_x) * (r / ell_x));
+                else if (P.CorrelationModel == SimParams::correlationmode::matern)
+                    rho = matern(r, nu_x, ell_x);
+                else
+                    rho = std::exp(-r / ell_x);
+                fitted_x.append(r, rho);
+            }
+            nu_x_mean = nu_x;
+            fitted_x.writefile(joinPath(run_dir, "diffusion_x_correlations_mean_fitted.txt"));
+        }
+
+        // Diffusion Y: follows CorrelationModel
+        {
+            double ell_y = 0, nu_y = 0.0;
+            if (P.CorrelationModel == SimParams::correlationmode::exponentialfit)
+                ell_y = mean_corr_y.fitExponentialDecay();
+            else if (P.CorrelationModel == SimParams::correlationmode::derivative)
+                ell_y = mean_corr_y.getTime(0) / (1.0 - mean_corr_y.getValue(0));
+            else if (P.CorrelationModel == SimParams::correlationmode::gaussian)
+                ell_y = mean_corr_y.fitGaussianDecay();
+            else {   // matern
+                auto [n, e] = mean_corr_y.fitMaternDecay();
+                nu_y  = n;
+                ell_y = e;
+            }
+
+            TimeSeries<double> fitted_y;
+            for (size_t i = 0; i < mean_corr_y.size(); ++i) {
+                double r   = mean_corr_y.getTime(i);
+                double rho;
+                if (P.CorrelationModel == SimParams::correlationmode::gaussian)
+                    rho = std::exp(-(r / ell_y) * (r / ell_y));
+                else if (P.CorrelationModel == SimParams::correlationmode::matern)
+                    rho = matern(r, nu_y, ell_y);
+                else
+                    rho = std::exp(-r / ell_y);
+                fitted_y.append(r, rho);
+            }
+            nu_y_mean = nu_y;
+            fitted_y.writefile(joinPath(run_dir, "diffusion_y_correlations_mean_fitted.txt"));
+        }
+
     }
 
     return true;
@@ -482,6 +583,8 @@ static bool build_mean_for_upscaled(
     double& lx_mean,
     double& ly_mean,
     double& dt_mean,
+    double& nu_x_mean,          // ← add
+    double& nu_y_mean,          // ← add
     TimeSeries<double>& invcdf_mean,
     int rank)
 {
@@ -497,6 +600,8 @@ static bool build_mean_for_upscaled(
         lx_mean = H.lx_mean;
         ly_mean = H.ly_mean;
         dt_mean = H.dt_mean;
+        nu_x_mean = H.nu_x;
+        nu_y_mean = H.nu_y;
 
         // --------------------------------------------
         // qx inverse-CDF ladder:
@@ -571,6 +676,8 @@ static bool build_mean_for_upscaled(
         f << "lambda_x_mean=" << lx_mean << "\n";
         f << "lambda_y_mean=" << ly_mean << "\n";
         f << "dt_mean=" << dt_mean << "\n";
+        f << "matern_nu_x_mean=" << nu_x_mean << "\n";
+        f << "matern_nu_y_mean=" << nu_y_mean << "\n";
         f << "du=" << du_from_nu(P.nu) << "\n";
 
         return true;
@@ -581,7 +688,7 @@ static bool build_mean_for_upscaled(
     const std::string mean_cdf_path    = joinPath(run_dir, "mean_qx_inverse_cdf.txt");
 
     bool ok_params = fileExists(mean_params_path) &&
-                     read_mean_params_txt(mean_params_path, lc_mean, lx_mean, ly_mean, dt_mean);
+                     read_mean_params_txt(mean_params_path, lc_mean, lx_mean, ly_mean, dt_mean, nu_x_mean, nu_y_mean);
 
     TimeSeries<double> mean_qx_cdf;
     bool ok_cdf = fileExists(mean_cdf_path) &&
@@ -606,6 +713,8 @@ static bool run_upscaled(
     double lc_mean,
     double lx_mean,
     double ly_mean,
+    double nu_x_mean,
+    double nu_y_mean,
     double dt_mean,
     const TimeSeries<double>& invcdf_mean,
     std::string& up_dir_out,
@@ -635,6 +744,7 @@ static bool run_upscaled(
 
     Grid2D g_u(nx, ny, Lx, Ly);
 
+    g_u.setDiffusionFactor(P.diffusion_factor);
     int qx_size = nu * (nx + 1);
     int qy_size = (nu + 1) * nx;
 
@@ -663,7 +773,7 @@ static bool run_upscaled(
     g_u.writeNamedMatrix("qx", Grid2D::ArrayKind::Fx, joinPath(up_dir, up_pfx + "qx_u_initial.txt"));
     g_u.writeNamedMatrix("qy", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "qy_u_initial.txt"));
 
-    g_u.setMixingParams(lc_mean, lx_mean, ly_mean);
+    g_u.setMixingParams(lc_mean, lx_mean, ly_mean, nu_x_mean, nu_y_mean);
 
     const double dt_pdf = dt_mean;
     const int output_interval_pdf = 500;
@@ -715,6 +825,7 @@ bool run_simulation_blocks(
     out.Fine_Scale_BTCs.resize(P.xLocations.size());
 
     std::vector<double> lc_all, lx_all, ly_all, dt_all;
+    double nu_x_mean=1.5, nu_y_mean=1.5;
     TimeSeriesSet<double> inverse_qx_cdfs;
     TimeSeriesSet<double> qx_pdfs;
     TimeSeriesSet<double> lambda_x_correlations;
@@ -724,7 +835,7 @@ bool run_simulation_blocks(
     if (!opts.upscale_only) {
         const bool ok = run_fine_loop_collect(
             P, opts, out.run_dir,
-            lc_all, lx_all, ly_all, dt_all,
+            lc_all, lx_all, ly_all, nu_x_mean, nu_y_mean, dt_all,
             inverse_qx_cdfs, qx_pdfs,
             lambda_x_correlations, lambda_y_correlations, lambda_a_correlations,
             out.Fine_Scale_BTCs,
@@ -744,7 +855,7 @@ bool run_simulation_blocks(
     build_mean_for_upscaled(
         P, opts, H, out.run_dir,
         lc_all, lx_all, ly_all, dt_all, inverse_qx_cdfs,
-        lc_mean, lx_mean, ly_mean, dt_mean, invcdf_mean,
+        lc_mean, lx_mean, ly_mean, dt_mean, nu_x_mean, nu_y_mean, invcdf_mean,
         rank
     );
 
@@ -762,7 +873,7 @@ bool run_simulation_blocks(
     std::string up_dir, up_btc_path, up_btc_deriv_path;
     const bool ok_up = run_upscaled(
         P, opts, out.run_dir,
-        lc_mean, lx_mean, ly_mean, dt_mean,
+        lc_mean, lx_mean, ly_mean,nu_x_mean, nu_y_mean, dt_mean,
         invcdf_mean,
         up_dir, up_btc_path, up_btc_deriv_path,
         out.Fine_Scale_BTCs,
