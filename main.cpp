@@ -20,17 +20,17 @@ int main(int argc, char** argv)
 #ifdef Arash
     std::string output_dir = "/home/arash/Projects/UpscalingResults";
 #elif PowerEdge
-    std::string output_dir = "/mnt/3rd900/Projects/PETSc_test/Results";
+    std::string output_dir = "/mnt/3rd900/Projects/PETSc_test/UpscalingResults";
 #elif Behzad
-    std::string output_dir = "/home/behzad/Projects/PETSc_test/Results";
+    std::string output_dir = "/home/behzad/Projects/PETSc_test/UpscalingResults";
 #elif SligoCreek
-    std::string output_dir = "/media/arash/E/Projects/PETSc_test/Results";
+    std::string output_dir = "/media/arash/E/Projects/PETSc_test/UpscalingResults";
 #elif Jason
     std::string output_dir = "/home/arash/Projects/UpscalingResults";
 #elif WSL
-    std::string output_dir = "/home/behzad/Projects/PETSc_test/Results";
+    std::string output_dir = "/home/behzad/Projects/PETSc_test/UpscalingResults";
 #else
-    std::string output_dir = "./Results";
+    std::string output_dir = "./UpscalingResults";
 #endif
 
     int rank = 0;
