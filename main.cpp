@@ -42,16 +42,16 @@ int main(int argc, char** argv)
     RunOptions opts;
 
     opts.upscale_only   = false;
-    opts.hardcoded_mean = false; // (your current setting)
+    opts.hardcoded_mean = true; // (your current setting)
     opts.solve_fine_scale_transport = false;
-    opts.solve_upscale_transport    = false;
+    opts.solve_upscale_transport    = true;
 
     // Resume folder: existing source folder (mean, qx, ...)
     bool user_set_qx_cdf  = false;
     bool user_set_run_dir = false;
 
     // Your existing resume folder naming
-    std::string resume_run_dir = joinPath(output_dir, "run_20260131_112925_std2_D0.1_aniso");
+    std::string resume_run_dir = joinPath(output_dir, "100Realizations_20260202_003241_std2_D0.1_aniso");
 
     // -----------------------------
     // Plot options (kept in main only)
