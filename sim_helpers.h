@@ -252,16 +252,8 @@ bool accumulate_inverse_cdf_on_grid(
 );
 
 // --------------------
-// BTC calibration helpers (NEW)
+// BTC calibration helpers
 // --------------------
-
-// Reads black curve file BTC_mean.csv that has columns: t, x=0.50, t, x=1.50, t, x=2.50 ...
-bool read_btc_mean_paired_csv(
-    const std::string& path,
-    std::vector<std::string>& loc_names,
-    std::vector<std::vector<double>>& t_cols,
-    std::vector<std::vector<double>>& c_cols
-);
 
 // Reads RED curve (Upscaled column) from x=0.50BTC_Compare.csv etc.
 bool read_upscaled_from_btc_compare(
@@ -272,7 +264,14 @@ bool read_upscaled_from_btc_compare(
 
 double rmse_ignore_nan(const std::vector<double>& a, const std::vector<double>& b);
 
-// Main scoring: mean RMSE over the 3 locations
+// Main scoring: mean RMSE over selected locations
+double score_upscaled_vs_black_mean_from_compare(
+    const std::string& black_btc_mean_csv,
+    const std::string& run_dir,
+    const std::vector<double>& xLocations
+);
+
+// Backward compatible: uses x=0.50,1.50,2.50
 double score_upscaled_vs_black_mean_from_compare(
     const std::string& black_btc_mean_csv,
     const std::string& run_dir

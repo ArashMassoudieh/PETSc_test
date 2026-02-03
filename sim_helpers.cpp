@@ -712,19 +712,47 @@ bool accumulate_inverse_cdf_on_grid(const std::string& fine_dir, int r,
 }
 
 // ============================================================
-// BTC calibration helpers (NEW)
+// BTC calibration helpers (UPDATED + ROBUST)
 // ============================================================
 
-bool read_btc_mean_paired_csv(
+// Find column index by case-insensitive exact match
+static int find_col_ci_exact(const std::vector<std::string>& cols, const std::string& target)
+{
+    auto low = [](std::string s){
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c){ return (unsigned char)std::tolower(c); });
+        return s;
+    };
+    const std::string t = low(trim_copy(target));
+
+    for (int i = 0; i < (int)cols.size(); ++i) {
+        if (low(trim_copy(cols[i])) == t) return i;
+    }
+    return -1;
+}
+
+// Find the "time" column (prefers t/time/sec/seconds)
+static int find_time_col_ci(const std::vector<std::string>& cols)
+{
+    int idx = -1;
+    idx = find_col_ci_exact(cols, "t");       if (idx >= 0) return idx;
+    idx = find_col_ci_exact(cols, "time");    if (idx >= 0) return idx;
+    idx = find_col_ci_exact(cols, "sec");     if (idx >= 0) return idx;
+    idx = find_col_ci_exact(cols, "seconds"); if (idx >= 0) return idx;
+    return 0; // fallback: first column
+}
+
+// Read BLACK mean BTC_mean.csv in either format:
+// A) t, x=0.50, x=1.50, x=2.50
+// B) t, x=0.50, t, x=1.50, t, x=2.50
+//
+// Output: map loc ("x=0.50") -> (t, c)
+static bool read_black_mean_any_format(
     const std::string& path,
-    std::vector<std::string>& loc_names,
-    std::vector<std::vector<double>>& t_cols,
-    std::vector<std::vector<double>>& c_cols
+    std::map<std::string, std::pair<std::vector<double>, std::vector<double>>>& series_out
 )
 {
-    loc_names.clear();
-    t_cols.clear();
-    c_cols.clear();
+    series_out.clear();
 
     std::ifstream f(path.c_str());
     if (!f) return false;
@@ -734,18 +762,32 @@ bool read_btc_mean_paired_csv(
 
     char delim = detect_delim(header);
     auto h = split_line_delim(header, delim);
-    if (h.size() < 4) return false; // at least t,x , t,x
+    if (h.size() < 2) return false;
 
-    // Expect pairs: t, x=..., t, x=..., ...
-    const int nPairs = (int)h.size() / 2;
-    loc_names.reserve(nPairs);
-    t_cols.assign(nPairs, {});
-    c_cols.assign(nPairs, {});
+    // Detect paired format if header has multiple time columns
+    int t_count = 0;
+    for (auto& s : h) {
+        std::string low = trim_copy(s);
+        std::transform(low.begin(), low.end(), low.begin(),
+                       [](unsigned char c){ return (unsigned char)std::tolower(c); });
+        if (low == "t" || low == "time" || low == "sec" || low == "seconds") t_count++;
+    }
+    const bool is_paired = (t_count >= 2);
 
-    for (int k = 0; k < nPairs; ++k) {
-        std::string name = h[2*k + 1];
-        name = trim_copy(name);
-        loc_names.push_back(name);
+    if (is_paired) {
+        // Expect pairs: t, x=..., t, x=..., ...
+        const int nPairs = (int)h.size() / 2;
+        for (int k = 0; k < nPairs; ++k) {
+            std::string name = trim_copy(h[2*k + 1]);
+            if (!name.empty()) series_out[name] = {{}, {}};
+        }
+    } else {
+        const int tcol = find_time_col_ci(h);
+        for (int j = 0; j < (int)h.size(); ++j) {
+            if (j == tcol) continue;
+            std::string name = trim_copy(h[j]);
+            if (!name.empty()) series_out[name] = {{}, {}};
+        }
     }
 
     std::string line;
@@ -754,35 +796,65 @@ bool read_btc_mean_paired_csv(
         if (line.empty()) continue;
 
         auto a = split_line_delim(line, delim);
-        if ((int)a.size() < 2) continue;
+        if (a.size() < 2) continue;
 
-        for (int k = 0; k < nPairs; ++k) {
-            const int it = 2*k;
-            const int ic = 2*k + 1;
-            if (ic >= (int)a.size()) continue;
+        if (is_paired) {
+            const int nPairs = (int)h.size() / 2;
+            for (int k = 0; k < nPairs; ++k) {
+                const int it = 2*k;
+                const int ic = 2*k + 1;
+                if (ic >= (int)a.size()) continue;
+
+                double tt = std::numeric_limits<double>::quiet_NaN();
+                double cc = std::numeric_limits<double>::quiet_NaN();
+                try_parse_double(a[it], tt);
+                try_parse_double(a[ic], cc);
+
+                std::string name = trim_copy(h[ic]);
+                auto itS = series_out.find(name);
+                if (itS == series_out.end()) continue;
+
+                itS->second.first.push_back(tt);
+                itS->second.second.push_back(cc);
+            }
+        } else {
+            const int tcol = find_time_col_ci(h);
+            if (tcol >= (int)a.size()) continue;
 
             double tt = std::numeric_limits<double>::quiet_NaN();
-            double cc = std::numeric_limits<double>::quiet_NaN();
-            try_parse_double(a[it], tt);
-            try_parse_double(a[ic], cc);
+            if (!try_parse_double(a[tcol], tt)) continue;
 
-            if (std::isfinite(tt)) t_cols[k].push_back(tt);
-            else t_cols[k].push_back(std::numeric_limits<double>::quiet_NaN());
+            for (int j = 0; j < (int)h.size(); ++j) {
+                if (j == tcol) continue;
+                if (j >= (int)a.size()) continue;
 
-            if (std::isfinite(cc)) c_cols[k].push_back(cc);
-            else c_cols[k].push_back(std::numeric_limits<double>::quiet_NaN());
+                std::string name = trim_copy(h[j]);
+                auto itS = series_out.find(name);
+                if (itS == series_out.end()) continue;
+
+                double cc = std::numeric_limits<double>::quiet_NaN();
+                try_parse_double(a[j], cc);
+
+                itS->second.first.push_back(tt);
+                itS->second.second.push_back(cc);
+            }
         }
     }
 
-    // basic sanity
-    for (int k = 0; k < nPairs; ++k) {
-        if (t_cols[k].size() < 2) return false;
-        if (t_cols[k].size() != c_cols[k].size()) return false;
+    // remove bad series
+    for (auto it = series_out.begin(); it != series_out.end(); ) {
+        if (it->second.first.size() < 2 || it->second.first.size() != it->second.second.size()) {
+            it = series_out.erase(it);
+        } else {
+            ++it;
+        }
     }
 
-    return true;
+    return !series_out.empty();
 }
 
+// Reads RED curve (Upscaled column) from x=0.50BTC_Compare.csv etc.
+// Picks first column containing "Upscaled" but NOT "Deriv".
 bool read_upscaled_from_btc_compare(
     const std::string& path,
     std::vector<double>& t_out,
@@ -797,21 +869,21 @@ bool read_upscaled_from_btc_compare(
 
     char delim = detect_delim(header);
     auto cols = split_line_delim(header, delim);
+    if (cols.size() < 2) return false;
 
-    int t_col = -1;
+    int t_col = find_time_col_ci(cols);
+
     int c_col = -1;
-
     for (int i = 0; i < (int)cols.size(); ++i) {
-        std::string s = cols[i];
-        s = trim_copy(s);
+        std::string s = trim_copy(cols[i]);
         std::string low = s;
         std::transform(low.begin(), low.end(), low.begin(),
                        [](unsigned char c){ return (unsigned char)std::tolower(c); });
 
-        if (low == "t") t_col = i;
-
-        // We want the Upscaled column, header looks like: Upscaledx=0.50 (no underscore)
-        if (low.find("upscaled") != std::string::npos) c_col = i;
+        if (low.find("upscaled") == std::string::npos) continue;
+        if (low.find("deriv") != std::string::npos) continue;
+        c_col = i;
+        break;
     }
 
     if (t_col < 0 || c_col < 0) return false;
@@ -821,13 +893,16 @@ bool read_upscaled_from_btc_compare(
 
     std::string line;
     while (std::getline(f, line)) {
+        line = trim_copy(line);
+        if (line.empty()) continue;
+
         auto a = split_line_delim(line, delim);
         if ((int)a.size() <= std::max(t_col, c_col)) continue;
 
         double t = std::numeric_limits<double>::quiet_NaN();
         double c = std::numeric_limits<double>::quiet_NaN();
-        try_parse_double(a[t_col], t);
-        try_parse_double(a[c_col], c);
+        if (!try_parse_double(a[t_col], t)) continue;
+        if (!try_parse_double(a[c_col], c)) continue;
 
         if (std::isfinite(t) && std::isfinite(c)) {
             t_out.push_back(t);
@@ -858,16 +933,16 @@ double rmse_ignore_nan(const std::vector<double>& a, const std::vector<double>& 
     return std::sqrt(sse / (double)n);
 }
 
+// New scoring API: mean RMSE over explicit xLocations
 double score_upscaled_vs_black_mean_from_compare(
     const std::string& black_btc_mean_csv,
-    const std::string& run_dir
+    const std::string& run_dir,
+    const std::vector<double>& xLocations
 )
 {
-    // read BLACK (BTC_mean.csv)
-    std::vector<std::string> names;
-    std::vector<std::vector<double>> t_black, c_black;
-
-    if (!read_btc_mean_paired_csv(black_btc_mean_csv, names, t_black, c_black)) {
+    // BLACK
+    std::map<std::string, std::pair<std::vector<double>, std::vector<double>>> black;
+    if (!read_black_mean_any_format(black_btc_mean_csv, black)) {
         std::cerr << "ERROR: cannot read black BTC_mean: " << black_btc_mean_csv << "\n";
         return std::numeric_limits<double>::infinity();
     }
@@ -875,10 +950,18 @@ double score_upscaled_vs_black_mean_from_compare(
     double total = 0.0;
     int used = 0;
 
-    for (int k = 0; k < (int)names.size(); ++k) {
-        const std::string& loc = names[k]; // expected "x=0.50"
-        const std::string compare_csv = joinPath(run_dir, loc + "BTC_Compare.csv");
+    for (double x : xLocations) {
+        const std::string loc = fmt_x(x); // "x=0.50"
 
+        auto itB = black.find(loc);
+        if (itB == black.end()) {
+            std::cerr << "WARNING: black mean missing column for " << loc
+                      << " in " << black_btc_mean_csv << "\n";
+            continue;
+        }
+
+        // RED compare file must be in NEW run_dir
+        const std::string compare_csv = joinPath(run_dir, loc + "BTC_Compare.csv");
         if (!fileExists(compare_csv)) {
             std::cerr << "WARNING: missing compare file: " << compare_csv << "\n";
             continue;
@@ -886,14 +969,17 @@ double score_upscaled_vs_black_mean_from_compare(
 
         std::vector<double> t_red, c_red;
         if (!read_upscaled_from_btc_compare(compare_csv, t_red, c_red)) {
-            std::cerr << "WARNING: cannot read upscaled curve from: " << compare_csv << "\n";
+            std::cerr << "WARNING: cannot read Upscaled curve from: " << compare_csv << "\n";
             continue;
         }
 
-        // Interpolate RED onto BLACK time grid
-        std::vector<double> c_red_i = resample_col_linear(t_red, c_red, t_black[k]);
+        const std::vector<double>& t_black = itB->second.first;
+        const std::vector<double>& c_black = itB->second.second;
 
-        const double e = rmse_ignore_nan(c_black[k], c_red_i);
+        // Interpolate RED onto BLACK time grid
+        std::vector<double> c_red_i = resample_col_linear(t_red, c_red, t_black);
+
+        const double e = rmse_ignore_nan(c_black, c_red_i);
         if (std::isfinite(e)) {
             total += e;
             used++;
@@ -904,6 +990,15 @@ double score_upscaled_vs_black_mean_from_compare(
     return total / (double)used;
 }
 
+// Backward compatible wrapper: fixed 3 locations
+double score_upscaled_vs_black_mean_from_compare(
+    const std::string& black_btc_mean_csv,
+    const std::string& run_dir
+)
+{
+    const std::vector<double> xs = {0.50, 1.50, 2.50};
+    return score_upscaled_vs_black_mean_from_compare(black_btc_mean_csv, run_dir, xs);
+}
 
 // ============================================================
 // Gnuplot helpers
@@ -1001,7 +1096,7 @@ bool write_btc_compare_plot_gnuplot_by_basename(const std::string& gp_path,
     // (Derivative versions also respected)
     gp << "set style line 1 lc rgb '#9a9a9a' lt 1 lw 1\n"; // fine gray
     gp << "set style line 2 lc rgb '#000000' lt 1 lw 3\n"; // mean bold black
-    gp << "set style line 3 lc rgb '#d60000' lt 1 lw 3\n"; // upscaled bold red\n";
+    gp << "set style line 3 lc rgb '#d60000' lt 1 lw 3\n"; // upscaled bold red
 
     for (auto& kv : groups) {
         const std::string& base = kv.first;

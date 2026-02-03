@@ -9,6 +9,7 @@
 #include <mpi.h>
 #include <cmath>        // std::round, std::abs
 #include <limits>
+#include <fstream>
 
 #include "sim_helpers.h"
 #include "plotter.h"     // TBaseMode, AlignMode, run_final_aggregation_and_plots
@@ -147,9 +148,9 @@ int main(int argc, char** argv)
     // Params (kept here)
     // -----------------------------
     SimParams P;
-    P.nx = 300;
-    P.ny = 100;
-    P.nu = 100;
+    P.nx = 30;
+    P.ny = 10;
+    P.nu = 10;
     P.Lx = 3.0;
     P.Ly = 1.0;
 
@@ -251,7 +252,11 @@ int main(int argc, char** argv)
             std::cout << "\n=== CALIBRATING diffusion_factor ===\n";
             std::cout << "Range: [" << calib_min << ", " << calib_max << "] step " << calib_step << "\n";
             std::cout << "Black mean file: " << black_mean_csv << "\n";
-            std::cout << "Using red curves from: x=*.BTC_Compare.csv (Upscaled column)\n\n";
+            std::cout << "Red curves expected in each run_dir:\n";
+            for (double x : P.xLocations) {
+                std::cout << "  - " << fmt_x(x) << "BTC_Compare.csv (Upscaled column)\n";
+            }
+            std::cout << "\n";
         }
 
         createDirectory(output_dir);
@@ -259,7 +264,7 @@ int main(int argc, char** argv)
         const std::string calib_csv = joinPath(output_dir, "calibration_summary.csv");
         if (rank == 0) {
             std::ofstream f(calib_csv);
-            f << "diffusion_factor,score_rmse_mean,run_dir\n";
+            f << "diffusion_factor,rmse_mean_over_x,run_dir\n";
         }
 
         double best_df = std::numeric_limits<double>::quiet_NaN();
@@ -282,10 +287,14 @@ int main(int argc, char** argv)
                 MPI_Abort(PETSC_COMM_WORLD, 123);
             }
 
-            // score using RED from BTC_Compare + BLACK from BTC_mean
+            // ---- PHASE 2: score using RED from compare + BLACK from resume BTC_mean ----
             double score = std::numeric_limits<double>::infinity();
             if (rank == 0) {
-                score = score_upscaled_vs_black_mean_from_compare(black_mean_csv, out.run_dir);
+                score = score_upscaled_vs_black_mean_from_compare(
+                    black_mean_csv,
+                    out.run_dir,
+                    P.xLocations
+                );
 
                 std::ofstream f(calib_csv, std::ios::app);
                 f << df << "," << score << "," << out.run_dir << "\n";
