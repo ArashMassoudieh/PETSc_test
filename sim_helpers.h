@@ -10,10 +10,9 @@
 #include <iomanip>
 #include <sstream>
 #include <ctime>
-
-#include <fstream>     // needed for inline read_inverse_cdf_any_format
-#include <algorithm>   // std::find_if, std::transform
-#include <cctype>      // std::isspace, std::tolower
+#include <fstream>
+#include <algorithm>
+#include <cctype>
 
 #include <TimeSeries.h>
 #include <TimeSeriesSet.h>
@@ -41,24 +40,14 @@ std::string makeFineFolder(int r1);     // fine_r0001, ...
 // --------------------
 // run folder tag helpers
 // --------------------
-// Compact formatting for tags (matches sim_helpers.cpp implementation):
-//   0       -> "0"
-//   0.0     -> "0"
-//   0.001   -> "0.001"
-//   1.2500  -> "1.25"
 std::string fmt_compact_double_tag(double v);
 
 // Build run tag used for NEW run_dir folder names:
-//   std<stdev>_D<diffusion>_<iso|aniso>
-// Rule: correlation_ls_x == correlation_ls_y => iso, else aniso
-std::string make_run_tag_std_D_aniso(const SimParams& P);
+//   std<stdev>_D<diffusion>_<iso|aniso>_df<diffusion_factor>
+std::string make_run_tag_std_D_aniso_df(const SimParams& P);
 
 // --------------------------------------------------
 // Resume folder consistency helpers
-// Expected folder style:
-//   "std=2, D=0, aniso"  OR  "std2_D0.1_aniso"
-// Numeric equivalence is enforced:
-//   0 == 0.0 == 0.00 == ...
 // --------------------------------------------------
 bool parse_resume_std(const std::string& s, int& std_val);
 bool parse_resume_D  (const std::string& s, double& D_val);
@@ -160,25 +149,19 @@ static inline bool read_inverse_cdf_any_format(const std::string& path, TimeSeri
 
     auto trim = [](std::string& s) {
         auto isspace_ = [](unsigned char c){ return std::isspace(c); };
-        s.erase(s.begin(), std::find_if(s.begin(), s.end(),
-                                        [&](unsigned char c){ return !isspace_(c); }));
-        s.erase(std::find_if(s.rbegin(), s.rend(),
-                             [&](unsigned char c){ return !isspace_(c); }).base(),
-                s.end());
+        s.erase(s.begin(), std::find_if(s.begin(), s.end(), [&](unsigned char c){ return !isspace_(c); }));
+        s.erase(std::find_if(s.rbegin(), s.rend(), [&](unsigned char c){ return !isspace_(c); }).base(), s.end());
     };
 
     while (std::getline(f, line)) {
         trim(line);
         if (line.empty()) continue;
 
-        // detect + skip header once (optional)
         if (!header_checked) {
             header_checked = true;
             std::string low = line;
             std::transform(low.begin(), low.end(), low.begin(),
                            [](unsigned char c){ return (unsigned char)std::tolower(c); });
-
-            // crude but effective: header contains u and v and a delimiter
             if ((low.find('u') != std::string::npos) &&
                 (low.find('v') != std::string::npos) &&
                 (low.find(',') != std::string::npos || low.find(' ') != std::string::npos))
@@ -187,7 +170,6 @@ static inline bool read_inverse_cdf_any_format(const std::string& path, TimeSeri
             }
         }
 
-        // normalize delimiter: commas -> spaces
         for (char& c : line) if (c == ',') c = ' ';
 
         std::stringstream ss(line);
@@ -239,8 +221,7 @@ bool parse_keyval_file(const std::string& path, std::map<std::string, std::strin
 
 bool read_mean_params_txt(
     const std::string& path,
-    double& lc_mean, double& lx_mean, double& ly_mean, double& dt_mean,
-    double& nu_x_mean, double& nu_y_mean
+    double& lc_mean, double& lx_mean, double& ly_mean, double& dt_mean, double& nu_x_mean, double& nu_y_mean
 );
 
 bool read_mean_inverse_cdf_csv(
@@ -268,6 +249,33 @@ bool accumulate_inverse_cdf_on_grid(
     const std::string& fine_dir, int r,
     double du, int nU,
     std::vector<double>& invcdf_sum
+);
+
+// --------------------
+// BTC calibration helpers (NEW)
+// --------------------
+
+// Reads black curve file BTC_mean.csv that has columns: t, x=0.50, t, x=1.50, t, x=2.50 ...
+bool read_btc_mean_paired_csv(
+    const std::string& path,
+    std::vector<std::string>& loc_names,
+    std::vector<std::vector<double>>& t_cols,
+    std::vector<std::vector<double>>& c_cols
+);
+
+// Reads RED curve (Upscaled column) from x=0.50BTC_Compare.csv etc.
+bool read_upscaled_from_btc_compare(
+    const std::string& path,
+    std::vector<double>& t_out,
+    std::vector<double>& c_out
+);
+
+double rmse_ignore_nan(const std::vector<double>& a, const std::vector<double>& b);
+
+// Main scoring: mean RMSE over the 3 locations
+double score_upscaled_vs_black_mean_from_compare(
+    const std::string& black_btc_mean_csv,
+    const std::string& run_dir
 );
 
 // --------------------

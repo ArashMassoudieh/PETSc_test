@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <limits>
 
 // ============================================================
 // FS / path helpers
@@ -80,14 +81,9 @@ std::string makeFineFolder(int r1)
 {
     return std::string("fine_") + makeRealLabel(r1);
 }
+
 // --------------------------------------------------
 // Resume folder parsing helpers (robust)
-// Accepts BOTH styles anywhere in resume_run_dir (full path OK):
-//   std2, std=2, std = 2, std=2.0, std = 2.00
-//   D0.1, D=0.1, D = 0.1, D=1e-3, D = 1.00
-// Numeric equivalence enforced:
-//   std must be integer-valued (2 == 2.0 == 2.00), NOT 2.4 -> 2
-// Keeps warnings in validate_resume_run_dir.
 // --------------------------------------------------
 
 static inline std::string lower_copy(std::string s)
@@ -117,7 +113,6 @@ static bool contains_word_token_ci(const std::string& s_in, const std::string& w
 
 bool parse_resume_aniso(const std::string& s, bool& is_aniso)
 {
-    // prefer "aniso" if both somehow appear
     if (contains_word_token_ci(s, "aniso")) { is_aniso = true;  return true; }
     if (contains_word_token_ci(s, "iso"))   { is_aniso = false; return true; }
     return false;
@@ -127,8 +122,6 @@ static inline bool is_key_boundary_left_ci(const std::string& s_lower, size_t po
 {
     if (pos == 0) return true;
     unsigned char c = (unsigned char)s_lower[pos - 1];
-    // UNDERSCORE SHOULD COUNT AS A BOUNDARY for our folder naming
-    // so boundary means: "previous char is NOT alphanumeric"
     return !std::isalnum(c);
 }
 
@@ -137,12 +130,9 @@ static inline bool is_number_start(unsigned char c)
     return (std::isdigit(c) || c == '.' || c == '+' || c == '-');
 }
 
-// Find LAST valid occurrence of key ("std" or "d") with token boundary and numeric tail:
-//   key [spaces] [=] [spaces] number
-// or immediate number: std2, d0.1
 static bool extract_last_number_after_key_ci(
     const std::string& s_original,
-    const std::string& key_lower,   // "std" or "d"
+    const std::string& key_lower,
     double& value_out
 )
 {
@@ -158,32 +148,23 @@ static bool extract_last_number_after_key_ci(
         pos = s.find(key_lower, pos);
         if (pos == std::string::npos) break;
 
-        // boundary on the left (avoid matching "...standard..." etc.)
         if (!is_key_boundary_left_ci(s, pos)) { pos += 1; continue; }
 
         size_t i = pos + key_len;
         if (i >= s.size()) { pos += 1; continue; }
 
-        // optional spaces
         while (i < s.size() && std::isspace((unsigned char)s[i])) ++i;
-
-        // optional '='
         if (i < s.size() && s[i] == '=') ++i;
-
-        // optional spaces
         while (i < s.size() && std::isspace((unsigned char)s[i])) ++i;
         if (i >= s.size()) { pos += 1; continue; }
 
-        // must begin a number
         if (!is_number_start((unsigned char)s[i])) { pos += 1; continue; }
 
-        // parse using original string (so endp indexes are correct)
         const char* start = s_original.c_str() + i;
         char* endp = nullptr;
         double v = std::strtod(start, &endp);
         if (endp == start) { pos += 1; continue; }
 
-        // accept (keep last valid)
         value_out = v;
         found = true;
 
@@ -198,7 +179,6 @@ bool parse_resume_std(const std::string& s, int& std_val)
     double v = 0.0;
     if (!extract_last_number_after_key_ci(s, "std", v)) return false;
 
-    // must be integer-valued (2 == 2.0 == 2.00)
     const double vr = std::round(v);
     if (std::abs(v - vr) > 1e-12) return false;
 
@@ -209,15 +189,12 @@ bool parse_resume_std(const std::string& s, int& std_val)
 bool parse_resume_D(const std::string& s, double& D_val)
 {
     double v = 0.0;
-    // accept both "D" and "d"
     if (!extract_last_number_after_key_ci(s, "d", v)) return false;
 
     D_val = v;
     return true;
 }
 
-// NOTE: MUST NOT be inline in .cpp, otherwise linker may not get a symbol.
-// Keep as normal external function (matches sim_helpers.h).
 bool validate_resume_run_dir(const std::string& resume_run_dir,
                              const SimParams& P,
                              std::string& err_msg)
@@ -282,41 +259,32 @@ bool validate_resume_run_dir(const std::string& resume_run_dir,
 // ============================================================
 std::string fmt_compact_double_tag(double v)
 {
-    // Goal:
-    //   0       -> "0"
-    //   0.0     -> "0"
-    //   0.001   -> "0.001"
-    //   1.2500  -> "1.25"
-
     std::ostringstream os;
     os.setf(std::ios::fixed);
-    os << std::setprecision(6) << v;   // enough precision for your D values
+    os << std::setprecision(6) << v;
 
     std::string s = os.str();
 
-    // trim trailing zeros
     if (s.find('.') != std::string::npos) {
-        while (!s.empty() && s.back() == '0')
-            s.pop_back();
-        if (!s.empty() && s.back() == '.')
-            s.pop_back();
+        while (!s.empty() && s.back() == '0') s.pop_back();
+        if (!s.empty() && s.back() == '.') s.pop_back();
     }
-
+    if (s.empty()) s = "0";
     return s;
 }
 
-std::string make_run_tag_std_D_aniso(const SimParams& P)
+std::string make_run_tag_std_D_aniso_df(const SimParams& P)
 {
     const int std_int = static_cast<int>(std::round(P.stdev));
 
-    // Rule: correlation_ls_x == correlation_ls_y => iso, else aniso
     const bool aniso = (std::abs(P.correlation_ls_x - P.correlation_ls_y) > 1e-12);
     const std::string aniso_tag = aniso ? "aniso" : "iso";
 
-    const std::string Dtag = fmt_compact_double_tag(P.Diffusion_coefficient);
-    return "std" + std::to_string(std_int) + "_D" + Dtag + "_" + aniso_tag;
-}
+    const std::string Dtag  = fmt_compact_double_tag(P.Diffusion_coefficient);
+    const std::string DFtag = fmt_compact_double_tag(P.diffusion_factor);
 
+    return "std" + std::to_string(std_int) + "_D" + Dtag + "_" + aniso_tag + "_df" + DFtag;
+}
 
 double mean_of(const std::vector<double>& v)
 {
@@ -373,7 +341,6 @@ static inline std::string trim_copy(std::string s)
 
 char detect_delim(const std::string& header)
 {
-    // choose the most frequent among [',', '\t', ';']
     size_t c1 = std::count(header.begin(), header.end(), ',');
     size_t c2 = std::count(header.begin(), header.end(), '\t');
     size_t c3 = std::count(header.begin(), header.end(), ';');
@@ -420,11 +387,9 @@ bool read_time_series_table_csv(const std::string& path,
     auto h = split_line_delim(header, delim);
     if (h.size() < 2) return false;
 
-    // First column assumed time
     colnames.clear();
     cols.clear();
 
-    // keep only non-time columns
     for (size_t j = 1; j < h.size(); ++j) colnames.push_back(h[j]);
     cols.assign(colnames.size(), std::vector<double>{});
     times.clear();
@@ -442,17 +407,15 @@ bool read_time_series_table_csv(const std::string& path,
 
         for (size_t j = 1; j < a.size() && (j-1) < cols.size(); ++j) {
             double v = std::numeric_limits<double>::quiet_NaN();
-            try_parse_double(a[j], v); // if fails, v stays NaN
+            try_parse_double(a[j], v);
             cols[j-1].push_back(v);
         }
 
-        // if short row, pad NaNs
         for (size_t j = a.size(); j < h.size(); ++j) {
             cols[j-1].push_back(std::numeric_limits<double>::quiet_NaN());
         }
     }
 
-    // sanity: all columns same length
     for (auto& c : cols) {
         if (c.size() != times.size()) return false;
     }
@@ -504,7 +467,6 @@ std::vector<double> resample_col_linear(const std::vector<double>& t_src,
     std::vector<double> out(t_dst.size(), std::numeric_limits<double>::quiet_NaN());
     if (t_src.empty() || y_src.empty() || t_src.size() != y_src.size()) return out;
 
-    // assume t_src is increasing (as produced by your solver)
     size_t k = 0;
     for (size_t i = 0; i < t_dst.size(); ++i) {
         double td = t_dst[i];
@@ -524,7 +486,6 @@ std::vector<double> resample_col_linear(const std::vector<double>& t_src,
         double t0 = t_src[k], t1 = t_src[k+1];
         double y0 = y_src[k], y1 = y_src[k+1];
 
-        // if endpoints NaN, keep NaN (simple & safe)
         if (!std::isfinite(y0) || !std::isfinite(y1)) {
             out[i] = std::numeric_limits<double>::quiet_NaN();
             continue;
@@ -590,19 +551,20 @@ bool read_mean_params_txt(const std::string& path,
 {
     std::map<std::string,std::string> kv;
     if (!parse_keyval_file(path, kv)) return false;
+
     auto getd = [&](const std::string& k, double& out)->bool{
         auto it = kv.find(k);
         if (it == kv.end()) return false;
         out = std::atof(it->second.c_str());
         return true;
     };
+
     bool ok =
         getd("lc_mean", lc_mean) &&
         getd("lambda_x_mean", lx_mean) &&
         getd("lambda_y_mean", ly_mean) &&
         getd("dt_mean", dt_mean);
 
-    // Optional: default to 1.5 (C^1 Matérn) if missing
     if (!getd("matern_nu_x_mean", nu_x_mean)) nu_x_mean = 1.5;
     if (!getd("matern_nu_y_mean", nu_y_mean)) nu_y_mean = 1.5;
 
@@ -625,7 +587,7 @@ bool read_xy_table(const std::string& path, std::vector<double>& x, std::vector<
     std::string line;
     while (std::getline(f, line)) {
         if (trim_copy(line).empty()) continue;
-        // tolerate commas/tabs/spaces
+
         char delim = ',';
         if (line.find('\t') != std::string::npos) delim = '\t';
         else if (line.find(',') != std::string::npos) delim = ',';
@@ -677,7 +639,6 @@ bool read_fine_params_all_csv(const std::string& path,
         auto a = split_line_delim(line, ',');
         if (a.size() < 5) continue;
 
-        // a[0] realization (ignored)
         double v1,v2,v3,v4;
         if (!try_parse_double(a[1], v1)) continue;
         if (!try_parse_double(a[2], v2)) continue;
@@ -705,12 +666,10 @@ std::vector<std::pair<int,std::string>> list_fine_folders(const std::string& run
         std::string name = ent->d_name;
         if (name == "." || name == "..") continue;
 
-        // expecting fine_r0001, fine_r0002, ...
         if (name.rfind("fine_r", 0) != 0) continue;
 
-        // parse r#### part
-        if (name.size() < 10) continue; // "fine_r" + 4 digits
-        std::string digits = name.substr(std::string("fine_r").size(), 5); // like "0001" or "0001/"? (safe)
+        if (name.size() < 10) continue;
+        std::string digits = name.substr(std::string("fine_r").size(), 5);
         digits.erase(std::remove_if(digits.begin(), digits.end(),
                                     [](unsigned char c){ return !std::isdigit(c); }),
                      digits.end());
@@ -751,6 +710,200 @@ bool accumulate_inverse_cdf_on_grid(const std::string& fine_dir, int r,
     }
     return true;
 }
+
+// ============================================================
+// BTC calibration helpers (NEW)
+// ============================================================
+
+bool read_btc_mean_paired_csv(
+    const std::string& path,
+    std::vector<std::string>& loc_names,
+    std::vector<std::vector<double>>& t_cols,
+    std::vector<std::vector<double>>& c_cols
+)
+{
+    loc_names.clear();
+    t_cols.clear();
+    c_cols.clear();
+
+    std::ifstream f(path.c_str());
+    if (!f) return false;
+
+    std::string header;
+    if (!std::getline(f, header)) return false;
+
+    char delim = detect_delim(header);
+    auto h = split_line_delim(header, delim);
+    if (h.size() < 4) return false; // at least t,x , t,x
+
+    // Expect pairs: t, x=..., t, x=..., ...
+    const int nPairs = (int)h.size() / 2;
+    loc_names.reserve(nPairs);
+    t_cols.assign(nPairs, {});
+    c_cols.assign(nPairs, {});
+
+    for (int k = 0; k < nPairs; ++k) {
+        std::string name = h[2*k + 1];
+        name = trim_copy(name);
+        loc_names.push_back(name);
+    }
+
+    std::string line;
+    while (std::getline(f, line)) {
+        line = trim_copy(line);
+        if (line.empty()) continue;
+
+        auto a = split_line_delim(line, delim);
+        if ((int)a.size() < 2) continue;
+
+        for (int k = 0; k < nPairs; ++k) {
+            const int it = 2*k;
+            const int ic = 2*k + 1;
+            if (ic >= (int)a.size()) continue;
+
+            double tt = std::numeric_limits<double>::quiet_NaN();
+            double cc = std::numeric_limits<double>::quiet_NaN();
+            try_parse_double(a[it], tt);
+            try_parse_double(a[ic], cc);
+
+            if (std::isfinite(tt)) t_cols[k].push_back(tt);
+            else t_cols[k].push_back(std::numeric_limits<double>::quiet_NaN());
+
+            if (std::isfinite(cc)) c_cols[k].push_back(cc);
+            else c_cols[k].push_back(std::numeric_limits<double>::quiet_NaN());
+        }
+    }
+
+    // basic sanity
+    for (int k = 0; k < nPairs; ++k) {
+        if (t_cols[k].size() < 2) return false;
+        if (t_cols[k].size() != c_cols[k].size()) return false;
+    }
+
+    return true;
+}
+
+bool read_upscaled_from_btc_compare(
+    const std::string& path,
+    std::vector<double>& t_out,
+    std::vector<double>& c_out
+)
+{
+    std::ifstream f(path.c_str());
+    if (!f) return false;
+
+    std::string header;
+    if (!std::getline(f, header)) return false;
+
+    char delim = detect_delim(header);
+    auto cols = split_line_delim(header, delim);
+
+    int t_col = -1;
+    int c_col = -1;
+
+    for (int i = 0; i < (int)cols.size(); ++i) {
+        std::string s = cols[i];
+        s = trim_copy(s);
+        std::string low = s;
+        std::transform(low.begin(), low.end(), low.begin(),
+                       [](unsigned char c){ return (unsigned char)std::tolower(c); });
+
+        if (low == "t") t_col = i;
+
+        // We want the Upscaled column, header looks like: Upscaledx=0.50 (no underscore)
+        if (low.find("upscaled") != std::string::npos) c_col = i;
+    }
+
+    if (t_col < 0 || c_col < 0) return false;
+
+    t_out.clear();
+    c_out.clear();
+
+    std::string line;
+    while (std::getline(f, line)) {
+        auto a = split_line_delim(line, delim);
+        if ((int)a.size() <= std::max(t_col, c_col)) continue;
+
+        double t = std::numeric_limits<double>::quiet_NaN();
+        double c = std::numeric_limits<double>::quiet_NaN();
+        try_parse_double(a[t_col], t);
+        try_parse_double(a[c_col], c);
+
+        if (std::isfinite(t) && std::isfinite(c)) {
+            t_out.push_back(t);
+            c_out.push_back(c);
+        }
+    }
+
+    return t_out.size() >= 2;
+}
+
+double rmse_ignore_nan(const std::vector<double>& a, const std::vector<double>& b)
+{
+    if (a.size() != b.size() || a.empty()) return std::numeric_limits<double>::infinity();
+
+    double sse = 0.0;
+    int n = 0;
+
+    for (size_t i = 0; i < a.size(); ++i) {
+        double x = a[i];
+        double y = b[i];
+        if (!std::isfinite(x) || !std::isfinite(y)) continue;
+        double d = x - y;
+        sse += d * d;
+        n++;
+    }
+
+    if (n == 0) return std::numeric_limits<double>::infinity();
+    return std::sqrt(sse / (double)n);
+}
+
+double score_upscaled_vs_black_mean_from_compare(
+    const std::string& black_btc_mean_csv,
+    const std::string& run_dir
+)
+{
+    // read BLACK (BTC_mean.csv)
+    std::vector<std::string> names;
+    std::vector<std::vector<double>> t_black, c_black;
+
+    if (!read_btc_mean_paired_csv(black_btc_mean_csv, names, t_black, c_black)) {
+        std::cerr << "ERROR: cannot read black BTC_mean: " << black_btc_mean_csv << "\n";
+        return std::numeric_limits<double>::infinity();
+    }
+
+    double total = 0.0;
+    int used = 0;
+
+    for (int k = 0; k < (int)names.size(); ++k) {
+        const std::string& loc = names[k]; // expected "x=0.50"
+        const std::string compare_csv = joinPath(run_dir, loc + "BTC_Compare.csv");
+
+        if (!fileExists(compare_csv)) {
+            std::cerr << "WARNING: missing compare file: " << compare_csv << "\n";
+            continue;
+        }
+
+        std::vector<double> t_red, c_red;
+        if (!read_upscaled_from_btc_compare(compare_csv, t_red, c_red)) {
+            std::cerr << "WARNING: cannot read upscaled curve from: " << compare_csv << "\n";
+            continue;
+        }
+
+        // Interpolate RED onto BLACK time grid
+        std::vector<double> c_red_i = resample_col_linear(t_red, c_red, t_black[k]);
+
+        const double e = rmse_ignore_nan(c_black[k], c_red_i);
+        if (std::isfinite(e)) {
+            total += e;
+            used++;
+        }
+    }
+
+    if (used == 0) return std::numeric_limits<double>::infinity();
+    return total / (double)used;
+}
+
 
 // ============================================================
 // Gnuplot helpers
