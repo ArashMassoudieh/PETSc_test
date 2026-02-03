@@ -123,7 +123,7 @@ int main(int argc, char** argv)
     P.correlation_x_range = {0.001,P.correlation_ls_x};
     P.correlation_y_range = {0.001,P.correlation_ls_y};
     // "D" in your naming = diffusion coefficient
-    P.Diffusion_coefficient = 0.01;
+    P.Diffusion_coefficient = 0.1;
 
     P.t_end_pdf = 20.0;
 
