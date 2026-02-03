@@ -40,6 +40,42 @@ struct RunOptions
     std::string hardcoded_qx_cdf_path;
 };
 
+struct FineScaleOutputs
+{
+    // Correlation time series sets (all realizations)
+    TimeSeriesSet<double> velocity_x_correlations;
+    TimeSeriesSet<double> velocity_y_correlations;
+    TimeSeriesSet<double> advective_correlations;
+    TimeSeriesSet<double> K_x_correlations;
+    TimeSeriesSet<double> K_y_correlations;
+
+    // Inverse CDFs and PDFs
+    TimeSeriesSet<double> inverse_qx_cdfs;
+    TimeSeriesSet<double> qx_pdfs;
+
+    // Fitted parameters per realization
+    std::vector<double> lc_all;           // advective correlation length
+    std::vector<double> velocity_lx_all;  // velocity lambda_x
+    std::vector<double> velocity_ly_all;  // velocity lambda_y
+    std::vector<double> K_lx_all;         // K lambda_x
+    std::vector<double> K_ly_all;         // K lambda_y
+    std::vector<double> dt_all;           // optimal timesteps
+
+
+    // Mean parameters
+    double nu_x_mean = 1.5;
+    double nu_y_mean = 1.5;
+    double lambda_K_x_mean = 0.0;
+    double lambda_K_y_mean = 0.0;
+    double lc_mean = 0.0;              // advective correlation mean
+    double velocity_lx_mean = 0.0;     // velocity lambda_x mean
+    double velocity_ly_mean = 0.0;     // velocity lambda_y mean
+    double dt_mean;
+
+    // BTCs per location
+    std::vector<TimeSeriesSet<double>> BTCs;
+};
+
 // -----------------------------
 // Hardcoded mean parameters
 // -----------------------------
