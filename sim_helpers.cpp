@@ -80,56 +80,28 @@ std::string makeFineFolder(int r1)
 {
     return std::string("fine_") + makeRealLabel(r1);
 }
-
 // --------------------------------------------------
-// Resume folder parsing helpers
+// Resume folder parsing helpers (robust)
+// Accepts BOTH styles anywhere in resume_run_dir (full path OK):
+//   std2, std=2, std = 2, std=2.0, std = 2.00
+//   D0.1, D=0.1, D = 0.1, D=1e-3, D = 1.00
+// Numeric equivalence enforced:
+//   std must be integer-valued (2 == 2.0 == 2.00), NOT 2.4 -> 2
+// Keeps warnings in validate_resume_run_dir.
 // --------------------------------------------------
-static bool extract_token(const std::string& s,
-                          const std::string& key,
-                          std::string& token)
+
+static inline std::string lower_copy(std::string s)
 {
-    const auto pos = s.find(key);
-    if (pos == std::string::npos) return false;
-
-    const size_t start = pos + key.size();
-    size_t end = start;
-
-    while (end < s.size() && s[end] != ',' &&
-           !std::isspace(static_cast<unsigned char>(s[end])))
-        ++end;
-
-    token = s.substr(start, end - start);
-    return !token.empty();
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c){ return (unsigned char)std::tolower(c); });
+    return s;
 }
 
-bool parse_resume_std(const std::string& s, int& std_val)
+static bool contains_word_token_ci(const std::string& s_in, const std::string& word_in)
 {
-    std::string tok;
-    if (!extract_token(s, "std=", tok)) return false;
+    const std::string s = lower_copy(s_in);
+    const std::string word = lower_copy(word_in);
 
-    try {
-        std_val = std::stoi(tok);
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
-bool parse_resume_D(const std::string& s, double& D_val)
-{
-    std::string tok;
-    if (!extract_token(s, "D=", tok)) return false;
-
-    try {
-        D_val = std::stod(tok);
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
-static bool contains_word_token(const std::string& s, const std::string& word)
-{
     const auto is_alpha = [](unsigned char c){ return std::isalpha(c) != 0; };
 
     size_t pos = 0;
@@ -146,11 +118,106 @@ static bool contains_word_token(const std::string& s, const std::string& word)
 bool parse_resume_aniso(const std::string& s, bool& is_aniso)
 {
     // prefer "aniso" if both somehow appear
-    if (contains_word_token(s, "aniso")) { is_aniso = true;  return true; }
-    if (contains_word_token(s, "iso"))   { is_aniso = false; return true; }
+    if (contains_word_token_ci(s, "aniso")) { is_aniso = true;  return true; }
+    if (contains_word_token_ci(s, "iso"))   { is_aniso = false; return true; }
     return false;
 }
 
+static inline bool is_key_boundary_left_ci(const std::string& s_lower, size_t pos)
+{
+    if (pos == 0) return true;
+    unsigned char c = (unsigned char)s_lower[pos - 1];
+    // UNDERSCORE SHOULD COUNT AS A BOUNDARY for our folder naming
+    // so boundary means: "previous char is NOT alphanumeric"
+    return !std::isalnum(c);
+}
+
+static inline bool is_number_start(unsigned char c)
+{
+    return (std::isdigit(c) || c == '.' || c == '+' || c == '-');
+}
+
+// Find LAST valid occurrence of key ("std" or "d") with token boundary and numeric tail:
+//   key [spaces] [=] [spaces] number
+// or immediate number: std2, d0.1
+static bool extract_last_number_after_key_ci(
+    const std::string& s_original,
+    const std::string& key_lower,   // "std" or "d"
+    double& value_out
+)
+{
+    value_out = 0.0;
+
+    const std::string s = lower_copy(s_original);
+    const size_t key_len = key_lower.size();
+
+    bool found = false;
+    size_t pos = 0;
+
+    while (true) {
+        pos = s.find(key_lower, pos);
+        if (pos == std::string::npos) break;
+
+        // boundary on the left (avoid matching "...standard..." etc.)
+        if (!is_key_boundary_left_ci(s, pos)) { pos += 1; continue; }
+
+        size_t i = pos + key_len;
+        if (i >= s.size()) { pos += 1; continue; }
+
+        // optional spaces
+        while (i < s.size() && std::isspace((unsigned char)s[i])) ++i;
+
+        // optional '='
+        if (i < s.size() && s[i] == '=') ++i;
+
+        // optional spaces
+        while (i < s.size() && std::isspace((unsigned char)s[i])) ++i;
+        if (i >= s.size()) { pos += 1; continue; }
+
+        // must begin a number
+        if (!is_number_start((unsigned char)s[i])) { pos += 1; continue; }
+
+        // parse using original string (so endp indexes are correct)
+        const char* start = s_original.c_str() + i;
+        char* endp = nullptr;
+        double v = std::strtod(start, &endp);
+        if (endp == start) { pos += 1; continue; }
+
+        // accept (keep last valid)
+        value_out = v;
+        found = true;
+
+        pos += 1;
+    }
+
+    return found;
+}
+
+bool parse_resume_std(const std::string& s, int& std_val)
+{
+    double v = 0.0;
+    if (!extract_last_number_after_key_ci(s, "std", v)) return false;
+
+    // must be integer-valued (2 == 2.0 == 2.00)
+    const double vr = std::round(v);
+    if (std::abs(v - vr) > 1e-12) return false;
+
+    std_val = (int)vr;
+    return true;
+}
+
+bool parse_resume_D(const std::string& s, double& D_val)
+{
+    double v = 0.0;
+    // accept both "D" and "d"
+    if (!extract_last_number_after_key_ci(s, "d", v)) return false;
+
+    D_val = v;
+    return true;
+}
+
+// NOTE: MUST NOT be inline in .cpp, otherwise linker may not get a symbol.
+// Keep as normal external function (matches sim_helpers.h).
 bool validate_resume_run_dir(const std::string& resume_run_dir,
                              const SimParams& P,
                              std::string& err_msg)
@@ -173,10 +240,9 @@ bool validate_resume_run_dir(const std::string& resume_run_dir,
         if (!ok_std)   err_msg += "  - missing/invalid token: std=<int>\n";
         if (!ok_D)     err_msg += "  - missing/invalid token: D=<number>\n";
         if (!ok_aniso) err_msg += "  - missing token: iso or aniso\n";
-        err_msg += "Expected style like: \"std=2, D=0, aniso\"\n";
+        err_msg += "Expected styles like: \"std=2, D=0.1, aniso\" OR \"std2_D0.1_aniso\" (spaces ok)\n";
     }
 
-    // Only compare values if parsed successfully
     const int std_param = static_cast<int>(std::round(P.stdev));
     if (ok_std && (std_folder != std_param)) {
         any_error = true;
@@ -195,9 +261,7 @@ bool validate_resume_run_dir(const std::string& resume_run_dir,
         err_msg += os.str();
     }
 
-    const bool aniso_param =
-        (std::abs(P.correlation_ls_x - P.correlation_ls_y) > 1e-12);
-
+    const bool aniso_param = (std::abs(P.correlation_ls_x - P.correlation_ls_y) > 1e-12);
     if (ok_aniso && (aniso_folder != aniso_param)) {
         any_error = true;
         err_msg += "iso/aniso mismatch:\n";
@@ -206,7 +270,6 @@ bool validate_resume_run_dir(const std::string& resume_run_dir,
         err_msg += "  (Rule: correlation_ls_x == correlation_ls_y => iso, else aniso)\n";
     }
 
-    // add context footer once
     if (any_error) {
         err_msg += "resume_run_dir = " + resume_run_dir + "\n";
     }
