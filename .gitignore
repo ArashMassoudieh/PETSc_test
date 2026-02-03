@@ -40,3 +40,5 @@ build-Release-6.9.0/
 UpscalingResults
 
 build/Desktop_Qt_6_9_3-Debug/
+
+build/Desktop_Qt_6_9_3-Release/
