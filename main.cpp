@@ -26,7 +26,7 @@ int main(int argc, char** argv)
 #elif SligoCreek
     std::string output_dir = "/media/arash/E/Projects/PETSc_test/UpscalingResults";
 #elif Jason
-    std::string output_dir = "/home/arash/Projects/UpscalingResults";
+    std::string output_dir = "/home/arash/Projects/PETSc_test/UpscalingResults";
 #elif WSL
     std::string output_dir = "/home/behzad/Projects/PETSc_test/UpscalingResults";
 #else
