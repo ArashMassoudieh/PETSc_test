@@ -7,13 +7,13 @@ CONFIG  += GRID_USE_VTK
 DEFINES += GSL
 
 # ============================================================
-# Host-config (PowerEdge active)
+# Host-config (canonical): enable one
 # ============================================================
 #CONFIG += Behzad
 #DEFINES += Behzad
 
-CONFIG += PowerEdge
-DEFINES += PowerEdge
+#CONFIG += PowerEdge
+#DEFINES += PowerEdge
 
 #CONFIG += Arash
 #DEFINES += Arash
@@ -21,8 +21,8 @@ DEFINES += PowerEdge
 #CONFIG += SligoCreek
 #DEFINES += SligoCreek
 
-#CONFIG  += Jason
-#DEFINES += Jason
+CONFIG  += Jason
+DEFINES += Jason
 
 #CONFIG += WSL
 #DEFINES += WSL
@@ -55,86 +55,118 @@ contains(DEFINES, SligoCreek) {
     VTK_V          = -9.1
 }
 
-# Keep Jason/WSL blocks here if you want (inactive now)
+# ---- Jason: VTK INSTALL prefix (stable) ----
 contains(DEFINES, Jason) {
-    VTKBUILDPATH   = /home/arash/Projects/VTK-9.3.0/build
-    VTKHEADERPATH  = /home/arash/Projects/VTK-9.3.0
+    VTKINSTALLPATH = /home/arash/Projects/VTK-install
+    VTK_INCNAME    = vtk-9.3
     VTK_V          = -9.3
+
+    VTKHEADERPATH  = $$VTKINSTALLPATH/include/$$VTK_INCNAME
+    VTKLIBPATH     = $$VTKINSTALLPATH/lib
+
+    !exists($$VTKHEADERPATH/vtkSmartPointer.h) {
+        error("VTK not found: $$VTKHEADERPATH/vtkSmartPointer.h")
+    }
+    !exists($$VTKLIBPATH) {
+        error("VTK lib path not found: $$VTKLIBPATH")
+    }
 }
 
 contains(DEFINES, WSL) {
     VTKINSTALLPATH = /home/behzad/Projects/VTK-install
-    VTK_V          = -9.4
     VTK_INCNAME    = vtk-9.4
-
-    !exists($$VTKINSTALLPATH/include/$$VTK_INCNAME/vtkSmartPointer.h) {
-        error("VTK not found: $$VTKINSTALLPATH/include/$$VTK_INCNAME/vtkSmartPointer.h")
-    }
+    VTK_V          = -9.4
+    VTKHEADERPATH  = $$VTKINSTALLPATH/include/$$VTK_INCNAME
+    VTKLIBPATH     = $$VTKINSTALLPATH/lib
 }
 
 
 # ============================================================
-# PETSc (PowerEdge)  -- prefer petscvariables if present
+# PETSc (universal, qmake-friendly)
+#   Order: pkg-config -> petscvariables -> manual -lpetsc
+#   Also: auto-detect PETSC_ARCH if wrong/empty.
 # ============================================================
 PETSC_DIR  = $$(PETSC_DIR)
 PETSC_ARCH = $$(PETSC_ARCH)
 
-message("PETSC_DIR from env  = $$PETSC_DIR")
-message("PETSC_ARCH from env = $$PETSC_ARCH")
-
+# Host defaults only if env empty
 contains(DEFINES, PowerEdge) {
-    # ### EDIT ME (PowerEdge PETSc root)
     isEmpty(PETSC_DIR)  { PETSC_DIR  = /mnt/3rd900/Projects/petsc }
-    # ### EDIT ME (PowerEdge PETSc arch dir name)
     isEmpty(PETSC_ARCH) { PETSC_ARCH = arch-linux-c-opt }
-} else {
-    # fallback (kept for safety)
-    isEmpty(PETSC_DIR)  { PETSC_DIR  = /home/arash/petsc }
+} else:contains(DEFINES, Jason)|contains(DEFINES, Arash) {
+    isEmpty(PETSC_DIR)  { PETSC_DIR  = /home/arash/Projects/petsc }
     isEmpty(PETSC_ARCH) { PETSC_ARCH = arch-linux-c-opt }
 }
 
-message("PETSC_DIR final  = $$PETSC_DIR")
-message("PETSC_ARCH final = $$PETSC_ARCH")
+message("PETSC_DIR  = $$PETSC_DIR")
+message("PETSC_ARCH = $$PETSC_ARCH")
 
-PETSC_VARIABLES = $$PETSC_DIR/$$PETSC_ARCH/lib/petsc/conf/petscvariables
+# If PETSC_ARCH doesn't exist, auto-pick the first arch-* folder
+!exists($$PETSC_DIR/$$PETSC_ARCH) {
+    message("NOTE: PETSC_ARCH not found at $$PETSC_DIR/$$PETSC_ARCH. Auto-detecting...")
+    PETSC_ARCH = $$system(ls -1 $$PETSC_DIR 2>/dev/null | grep '^arch-' | head -n 1)
+    isEmpty(PETSC_ARCH) {
+        error("Could not auto-detect PETSC_ARCH under PETSC_DIR=$$PETSC_DIR")
+    }
+    message("Auto-detected PETSC_ARCH = $$PETSC_ARCH")
+}
 
-exists($$PETSC_VARIABLES) {
-    message("Including PETSc variables from: $$PETSC_VARIABLES")
+PETSC_LIBDIR = $$PETSC_DIR/$$PETSC_ARCH/lib
+PETSC_PKGCFG = $$PETSC_LIBDIR/pkgconfig
+PETSC_VARIABLES = $$PETSC_LIBDIR/petsc/conf/petscvariables
+
+# ---- 1) pkg-config ----
+PETSC_CFLAGS = $$system(PKG_CONFIG_PATH=$$PETSC_PKGCFG pkg-config --cflags petsc 2>/dev/null)
+PETSC_LIBS   = $$system(PKG_CONFIG_PATH=$$PETSC_PKGCFG pkg-config --libs   petsc 2>/dev/null)
+
+!isEmpty(PETSC_CFLAGS) {
+    message("Using PETSc via pkg-config from: $$PETSC_PKGCFG")
+    QMAKE_CXXFLAGS += $$PETSC_CFLAGS
+    LIBS          += $$PETSC_LIBS
+} else:exists($$PETSC_VARIABLES) {
+    # ---- 2) petscvariables ----
+    message("Using PETSc via petscvariables: $$PETSC_VARIABLES")
     include($$PETSC_VARIABLES)
 
-    # Compile flags & include paths from PETSc
+    # Compile includes from PETSc (fixes petscsys.h)
     QMAKE_CXXFLAGS += $$PETSC_CC_INCLUDES
 
-    # Link PETSc + its external deps
-    LIBS += $$PETSC_LIB $$PETSC_EXTERNAL_LIB_BASIC $$PETSC_EXTERNAL_LIB
+    # Important: some PETSc installs don't populate PETSC_LIB well for qmake.
+    # So still force -lpetsc explicitly + PETSc externals if provided.
+    LIBS += $$PETSC_EXTERNAL_LIB_BASIC $$PETSC_EXTERNAL_LIB
+    LIBS += -L$$PETSC_LIBDIR -lpetsc
 } else {
-    # Fallback: manual include/lib (your current working style)
-    message("NOTE: PETSc petscvariables not found; using manual include/lib flags")
+    # ---- 3) manual fallback ----
+    message("NOTE: PETSc pkg-config and petscvariables not found; using manual include/lib flags")
     INCLUDEPATH += $$PETSC_DIR/include
     INCLUDEPATH += $$PETSC_DIR/$$PETSC_ARCH/include
-    LIBS += -L$$PETSC_DIR/$$PETSC_ARCH/lib -lpetsc
+    LIBS        += -L$$PETSC_LIBDIR -lpetsc
 }
 
-# Ensure runtime finds PETSc shared libs
-QMAKE_LFLAGS += -Wl,-rpath,$$PETSC_DIR/$$PETSC_ARCH/lib
-
-# Project includes
-INCLUDEPATH += Utilities/
+# runtime path
+QMAKE_LFLAGS += -Wl,-rpath,$$PETSC_LIBDIR
 
 
 # ============================================================
-# MPI wrapper for compile & link (PowerEdge)
+# MPI wrapper for compile & link (universal, robust)
 # ============================================================
-# Prefer environment MPICXX if set; else host defaults.
 MPI_CXX = $$(MPICXX)
 
-contains(DEFINES, PowerEdge) {
-    # ### EDIT ME if you truly want PETSc-bundled mpicxx on PowerEdge:
-    # MPI_CXX = /mnt/3rd900/Projects/petsc-install/bin/mpicxx
+# Optional per-host hard overrides (only if you want):
+# contains(DEFINES, PowerEdge) { isEmpty(MPI_CXX) { MPI_CXX = /mnt/3rd900/Projects/petsc-install/bin/mpicxx } }
+# contains(DEFINES, Jason)     { isEmpty(MPI_CXX) { MPI_CXX = /usr/bin/mpicxx } }
+
+# Auto-detect from PATH
+isEmpty(MPI_CXX) {
+    MPI_CXX = $$system(which mpicxx 2>/dev/null)
 }
 
 isEmpty(MPI_CXX) {
-    MPI_CXX = mpicxx
+    error("mpicxx not found. Install mpich/openmpi or set MPICXX=/full/path/to/mpicxx")
+}
+
+!exists($$MPI_CXX) {
+    error("MPI compiler not found at: $$MPI_CXX (check MPICXX or PATH)")
 }
 
 message("Using MPI_CXX = $$MPI_CXX")
@@ -142,6 +174,12 @@ message("Using MPI_CXX = $$MPI_CXX")
 QMAKE_CXX        = $$MPI_CXX
 QMAKE_LINK       = $$MPI_CXX
 QMAKE_LINK_SHLIB = $$MPI_CXX
+
+
+# ============================================================
+# Project includes
+# ============================================================
+INCLUDEPATH += Utilities/
 
 
 # ============================================================
@@ -204,13 +242,19 @@ LIBS    += -larmadillo -lgsl -lgslcblas -lfftw3
 
 
 # ============================================================
-# VTK (PowerEdge build-tree)
+# VTK (PowerEdge build-tree OR Jason install-prefix)
 # ============================================================
 GRID_USE_VTK {
-    LIBS += -L$$VTKBUILDPATH/lib
-    QMAKE_LFLAGS += -Wl,-rpath,$$VTKBUILDPATH/lib
+    # ---- Lib path + rpath ----
+    contains(DEFINES, Jason)|contains(DEFINES, WSL) {
+        LIBS += -L$$VTKLIBPATH
+        QMAKE_LFLAGS += -Wl,-rpath,$$VTKLIBPATH
+    } else {
+        LIBS += -L$$VTKBUILDPATH/lib
+        QMAKE_LFLAGS += -Wl,-rpath,$$VTKBUILDPATH/lib
+    }
 
-    # VTK libs (as you had; depends on VTK_V)
+    # ---- VTK libs (unchanged; depends on VTK_V) ----
     LIBS += -lvtkChartsCore$$VTK_V \
             -lvtkCommonColor$$VTK_V \
             -lvtkCommonComputationalGeometry$$VTK_V \
@@ -314,55 +358,60 @@ GRID_USE_VTK {
             -lvtkViewsInfovis$$VTK_V \
             -lvtkzlib$$VTK_V
 
-    # Keep your include spam (since it’s proven working on build-tree VTK)
-    INCLUDEPATH += $$VTKHEADERPATH \
-                   $$VTKHEADERPATH/Common/Core \
-                   $$VTKBUILDPATH/Common/Core \
-                   $$VTKHEADERPATH/Common/Color \
-                   $$VTKHEADERPATH/Common/Transforms \
-                   $$VTKBUILDPATH/Common/Transforms \
-                   $$VTKBUILDPATH/Common/Color \
-                   $$VTKBUILDPATH/Common/DataModel \
-                   $$VTKBUILDPATH/Utilities/KWIML \
-                   $$VTKHEADERPATH/Utilities/KWIML \
-                   $$VTKHEADERPATH/Rendering/Core \
-                   $$VTKBUILDPATH/Rendering/Core \
-                   $$VTKBUILDPATH/Filters/Core \
-                   $$VTKHEADERPATH/Charts/Core \
-                   $$VTKBUILDPATH/Charts/Core \
-                   $$VTKBUILDPATH/Filters/General \
-                   $$VTKBUILDPATH/Rendering/Context2D \
-                   $$VTKHEADERPATH/Rendering/Context2D \
-                   $$VTKHEADERPATH/Common/DataModel \
-                   $$VTKHEADERPATH/Common/Math \
-                   $$VTKHEADERPATH/Views/Context2D \
-                   $$VTKBUILDPATH/Views/Context2D \
-                   $$VTKBUILDPATH/Views/Core \
-                   $$VTKBUILDPATH/Interaction/Widgets \
-                   $$VTKHEADERPATH/Views/Core \
-                   $$VTKHEADERPATH/Interaction/Style \
-                   $$VTKBUILDPATH/Interaction/Style \
-                   $$VTKHEADERPATH/Filters/Modeling \
-                   $$VTKBUILDPATH/Filters/Modeling \
-                   $$VTKHEADERPATH/Common/ExecutionModel \
-                   $$VTKBUILDPATH/Common/ExecutionModel \
-                   $$VTKHEADERPATH/Interaction/Widgets \
-                   $$VTKHEADERPATH/Filters/Core \
-                   $$VTKHEADERPATH/Common/Misc \
-                   $$VTKBUILDPATH/Common/Misc \
-                   $$VTKHEADERPATH/IO/XML \
-                   $$VTKBUILDPATH/IO/XML \
-                   $$VTKHEADERPATH/Filters/Sources \
-                   $$VTKBUILDPATH/Filters/Sources \
-                   $$VTKHEADERPATH/Filters/General \
-                   $$VTKHEADERPATH/IO/Image \
-                   $$VTKBUILDPATH/IO/Image \
-                   $$VTKHEADERPATH/Imaging/Core \
-                   $$VTKBUILDPATH/Imaging/Core \
-                   $$VTKBUILDPATH/Utilities/KWSys \
-                   $$VTKBUILDPATH/ThirdParty/nlohmannjson \
-                   $$VTKHEADERPATH/ThirdParty/nlohmannjson \
-                   $$VTKBUILDPATH/Common/Math
+    # Base include is enough for Jason install-prefix
+    INCLUDEPATH += $$VTKHEADERPATH
+
+    # PowerEdge build-tree needs extra include dirs; keep only for PowerEdge
+    contains(DEFINES, PowerEdge) {
+        INCLUDEPATH += $$VTKHEADERPATH \
+                       $$VTKHEADERPATH/Common/Core \
+                       $$VTKBUILDPATH/Common/Core \
+                       $$VTKHEADERPATH/Common/Color \
+                       $$VTKHEADERPATH/Common/Transforms \
+                       $$VTKBUILDPATH/Common/Transforms \
+                       $$VTKBUILDPATH/Common/Color \
+                       $$VTKBUILDPATH/Common/DataModel \
+                       $$VTKBUILDPATH/Utilities/KWIML \
+                       $$VTKHEADERPATH/Utilities/KWIML \
+                       $$VTKHEADERPATH/Rendering/Core \
+                       $$VTKBUILDPATH/Rendering/Core \
+                       $$VTKBUILDPATH/Filters/Core \
+                       $$VTKHEADERPATH/Charts/Core \
+                       $$VTKBUILDPATH/Charts/Core \
+                       $$VTKBUILDPATH/Filters/General \
+                       $$VTKBUILDPATH/Rendering/Context2D \
+                       $$VTKHEADERPATH/Rendering/Context2D \
+                       $$VTKHEADERPATH/Common/DataModel \
+                       $$VTKHEADERPATH/Common/Math \
+                       $$VTKHEADERPATH/Views/Context2D \
+                       $$VTKBUILDPATH/Views/Context2D \
+                       $$VTKBUILDPATH/Views/Core \
+                       $$VTKBUILDPATH/Interaction/Widgets \
+                       $$VTKHEADERPATH/Views/Core \
+                       $$VTKHEADERPATH/Interaction/Style \
+                       $$VTKBUILDPATH/Interaction/Style \
+                       $$VTKHEADERPATH/Filters/Modeling \
+                       $$VTKBUILDPATH/Filters/Modeling \
+                       $$VTKHEADERPATH/Common/ExecutionModel \
+                       $$VTKBUILDPATH/Common/ExecutionModel \
+                       $$VTKHEADERPATH/Interaction/Widgets \
+                       $$VTKHEADERPATH/Filters/Core \
+                       $$VTKHEADERPATH/Common/Misc \
+                       $$VTKBUILDPATH/Common/Misc \
+                       $$VTKHEADERPATH/IO/XML \
+                       $$VTKBUILDPATH/IO/XML \
+                       $$VTKHEADERPATH/Filters/Sources \
+                       $$VTKBUILDPATH/Filters/Sources \
+                       $$VTKHEADERPATH/Filters/General \
+                       $$VTKHEADERPATH/IO/Image \
+                       $$VTKBUILDPATH/IO/Image \
+                       $$VTKHEADERPATH/Imaging/Core \
+                       $$VTKBUILDPATH/Imaging/Core \
+                       $$VTKBUILDPATH/Utilities/KWSys \
+                       $$VTKBUILDPATH/ThirdParty/nlohmannjson \
+                       $$VTKHEADERPATH/ThirdParty/nlohmannjson \
+                       $$VTKBUILDPATH/Common/Math
+    }
 }
 
 message("Final INCLUDEPATH = $$INCLUDEPATH")
