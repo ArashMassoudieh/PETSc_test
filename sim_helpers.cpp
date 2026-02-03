@@ -328,6 +328,28 @@ std::vector<double> finalize_mean_vec(const std::vector<double>& sum,
     return out;
 }
 
+bool parse_range3(const std::string& s, double& a, double& b, double& c)
+{
+    // expects "min:max:step"
+    auto p1 = s.find(':');
+    if (p1 == std::string::npos) return false;
+
+    auto p2 = s.find(':', p1 + 1);
+    if (p2 == std::string::npos) return false;
+
+    std::string s1 = s.substr(0, p1);
+    std::string s2 = s.substr(p1 + 1, p2 - (p1 + 1));
+    std::string s3 = s.substr(p2 + 1);
+
+    return try_parse_double(s1, a)
+        && try_parse_double(s2, b)
+        && try_parse_double(s3, c);
+}
+// --------------------
+// CLI helpers
+// --------------------
+
+// Parse "min:max:step" into three doubles
 // ============================================================
 // delimiter-robust parsing
 // ============================================================

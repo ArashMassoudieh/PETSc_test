@@ -15,20 +15,6 @@
 #include "plotter.h"     // TBaseMode, AlignMode, run_final_aggregation_and_plots
 #include "sim_runner.h"  // SimParams, RunOptions, HardcodedMean, RunOutputs
 
-static bool parse_range3(const std::string& s, double& a, double& b, double& c)
-{
-    // expects "min:max:step"
-    auto p1 = s.find(':');
-    if (p1 == std::string::npos) return false;
-    auto p2 = s.find(':', p1 + 1);
-    if (p2 == std::string::npos) return false;
-
-    std::string s1 = s.substr(0, p1);
-    std::string s2 = s.substr(p1 + 1, p2 - (p1 + 1));
-    std::string s3 = s.substr(p2 + 1);
-
-    return try_parse_double(s1, a) && try_parse_double(s2, b) && try_parse_double(s3, c);
-}
 
 int main(int argc, char** argv)
 {
@@ -85,6 +71,9 @@ int main(int argc, char** argv)
     double calib_min = 0.1, calib_max = 0.5, calib_step = 0.05;
     std::string black_mean_csv = joinPath(resume_run_dir, "BTC_mean.csv"); // can be overridden
 
+    // Calibration root folder (NEW): UpscalingResults/Calibration
+    std::string calib_root_dir = joinPath(output_dir, "Calibration");
+
     // -----------------------------
     // CLI
     // -----------------------------
@@ -138,6 +127,10 @@ int main(int argc, char** argv)
         }
         else if (a.rfind("--black-mean=", 0) == 0) {
             black_mean_csv = a.substr(std::string("--black-mean=").size());
+        }
+        else if (a.rfind("--calib-root=", 0) == 0) {
+            // optional override if you ever want it
+            calib_root_dir = a.substr(std::string("--calib-root=").size());
         }
     }
 
@@ -248,8 +241,17 @@ int main(int argc, char** argv)
     // CALIBRATION MODE
     // -----------------------------
     if (do_calib) {
+
+        // Make sure the Calibration folder exists
+        if (rank == 0) {
+            createDirectory(output_dir);
+            createDirectory(calib_root_dir);
+        }
+        MPI_Barrier(PETSC_COMM_WORLD);
+
         if (rank == 0) {
             std::cout << "\n=== CALIBRATING diffusion_factor ===\n";
+            std::cout << "Calibration root: " << calib_root_dir << "\n";
             std::cout << "Range: [" << calib_min << ", " << calib_max << "] step " << calib_step << "\n";
             std::cout << "Black mean file: " << black_mean_csv << "\n";
             std::cout << "Red curves expected in each run_dir:\n";
@@ -259,9 +261,7 @@ int main(int argc, char** argv)
             std::cout << "\n";
         }
 
-        createDirectory(output_dir);
-
-        const std::string calib_csv = joinPath(output_dir, "calibration_summary.csv");
+        const std::string calib_csv = joinPath(calib_root_dir, "calibration_summary.csv");
         if (rank == 0) {
             std::ofstream f(calib_csv);
             f << "diffusion_factor,rmse_mean_over_x,run_dir\n";
@@ -279,13 +279,34 @@ int main(int argc, char** argv)
             const std::string run_tag = make_run_tag_std_D_aniso_df(P);
 
             RunOutputs out;
-            out.run_dir = prepare_run_dir_mpi(output_dir, resume_run_dir, opts, rank, run_tag);
+
+            // IMPORTANT: calibration run folders go under Calibration/
+            out.run_dir = prepare_run_dir_mpi(calib_root_dir, resume_run_dir, opts, rank, run_tag);
 
             const bool ok = run_simulation_blocks(P, opts, H, out, rank);
             if (!ok) {
                 if (rank == 0) std::cerr << "ERROR: simulation failed for df=" << df << "\n";
                 MPI_Abort(PETSC_COMM_WORLD, 123);
             }
+
+            // ---------------------------------------------------------
+            // Ensure per-location compare CSVs exist for scoring
+            // ---------------------------------------------------------
+            if (rank == 0) {
+                for (int i = 0; i < (int)P.xLocations.size(); ++i) {
+                    const std::string out_cmp = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare.csv");
+                    out.Fine_Scale_BTCs[i].write(out_cmp);
+                    std::cout << "Wrote: " << out_cmp << "\n";
+                }
+                // optional (handy for debugging)
+                {
+                    const std::string out_mean = joinPath(out.run_dir, "BTC_mean.csv");
+                    out.mean_BTCs.write(out_mean);
+                    std::cout << "Wrote: " << out_mean << "\n";
+                }
+            }
+
+            MPI_Barrier(PETSC_COMM_WORLD);
 
             // ---- PHASE 2: score using RED from compare + BLACK from resume BTC_mean ----
             double score = std::numeric_limits<double>::infinity();
@@ -317,6 +338,7 @@ int main(int argc, char** argv)
             std::cout << "best_score  = " << best_score << "\n";
             std::cout << "best_run    = " << best_run_dir << "\n";
             std::cout << "Summary CSV = " << calib_csv << "\n";
+            std::cout << "Calibration root = " << calib_root_dir << "\n";
         }
 
         MPI_Barrier(PETSC_COMM_WORLD);

@@ -38,6 +38,13 @@ std::string makeRealLabel(int r1);      // r0001, r0002, ...
 std::string makeFineFolder(int r1);     // fine_r0001, ...
 
 // --------------------
+// CLI helpers
+// --------------------
+
+// Parse "min:max:step" into three doubles
+bool parse_range3(const std::string& s, double& a, double& b, double& c);
+
+// --------------------
 // run folder tag helpers
 // --------------------
 std::string fmt_compact_double_tag(double v);
