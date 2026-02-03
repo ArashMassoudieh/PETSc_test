@@ -10,6 +10,11 @@
 #include <iomanip>
 #include <sstream>
 #include <ctime>
+
+#include <fstream>     // needed for inline read_inverse_cdf_any_format
+#include <algorithm>   // std::find_if, std::transform
+#include <cctype>      // std::isspace, std::tolower
+
 #include <TimeSeries.h>
 #include <TimeSeriesSet.h>
 
@@ -36,10 +41,11 @@ std::string makeFineFolder(int r1);     // fine_r0001, ...
 // --------------------
 // run folder tag helpers
 // --------------------
-// Compact, filesystem-safe formatting for tags:
-//   0.001  -> "1e-3"
-//   0.125  -> "0p125"
-//   2.0    -> "2"
+// Compact formatting for tags (matches sim_helpers.cpp implementation):
+//   0       -> "0"
+//   0.0     -> "0"
+//   0.001   -> "0.001"
+//   1.2500  -> "1.25"
 std::string fmt_compact_double_tag(double v);
 
 // Build run tag used for NEW run_dir folder names:
@@ -50,7 +56,7 @@ std::string make_run_tag_std_D_aniso(const SimParams& P);
 // --------------------------------------------------
 // Resume folder consistency helpers
 // Expected folder style:
-//   "std=2, D=0, aniso"
+//   "std=2, D=0, aniso"  OR  "std2_D0.1_aniso"
 // Numeric equivalence is enforced:
 //   0 == 0.0 == 0.00 == ...
 // --------------------------------------------------
@@ -154,8 +160,11 @@ static inline bool read_inverse_cdf_any_format(const std::string& path, TimeSeri
 
     auto trim = [](std::string& s) {
         auto isspace_ = [](unsigned char c){ return std::isspace(c); };
-        s.erase(s.begin(), std::find_if(s.begin(), s.end(), [&](unsigned char c){ return !isspace_(c); }));
-        s.erase(std::find_if(s.rbegin(), s.rend(), [&](unsigned char c){ return !isspace_(c); }).base(), s.end());
+        s.erase(s.begin(), std::find_if(s.begin(), s.end(),
+                                        [&](unsigned char c){ return !isspace_(c); }));
+        s.erase(std::find_if(s.rbegin(), s.rend(),
+                             [&](unsigned char c){ return !isspace_(c); }).base(),
+                s.end());
     };
 
     while (std::getline(f, line)) {
@@ -168,6 +177,7 @@ static inline bool read_inverse_cdf_any_format(const std::string& path, TimeSeri
             std::string low = line;
             std::transform(low.begin(), low.end(), low.begin(),
                            [](unsigned char c){ return (unsigned char)std::tolower(c); });
+
             // crude but effective: header contains u and v and a delimiter
             if ((low.find('u') != std::string::npos) &&
                 (low.find('v') != std::string::npos) &&
@@ -229,12 +239,13 @@ bool parse_keyval_file(const std::string& path, std::map<std::string, std::strin
 
 bool read_mean_params_txt(
     const std::string& path,
-    double& lc_mean, double& lx_mean, double& ly_mean, double& dt_mean, double& nu_x_mean, double& nu_y_mean
+    double& lc_mean, double& lx_mean, double& ly_mean, double& dt_mean,
+    double& nu_x_mean, double& nu_y_mean
 );
 
 bool read_mean_inverse_cdf_csv(
     const std::string& path,
-    TimeSeries<double>&
+    TimeSeries<double>& mean_cdf
 );
 
 bool read_xy_table(const std::string& path, std::vector<double>& x, std::vector<double>& y);

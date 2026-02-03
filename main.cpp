@@ -8,6 +8,7 @@
 #include <string>
 #include <mpi.h>
 #include <cmath>        // std::round, std::abs
+#include <cstdlib>      // std::atof
 
 #include "sim_helpers.h"
 #include "plotter.h"     // TBaseMode, AlignMode, run_final_aggregation_and_plots
@@ -50,6 +51,11 @@ int main(int argc, char** argv)
     bool user_set_qx_cdf  = false;
     bool user_set_run_dir = false;
 
+    // calibration: diffusion factor
+    bool user_set_diff_factor = false;
+    double cli_diff_factor = 0.15; // default
+    std::string cli_tag_extra;
+
     // Your existing resume folder naming
     std::string resume_run_dir = joinPath(output_dir, "100Realizations_20260202_003241_std2_D0.1_aniso");
 
@@ -79,6 +85,15 @@ int main(int argc, char** argv)
         else if (a.rfind("--qx-cdf=", 0) == 0) {
             opts.hardcoded_qx_cdf_path = a.substr(std::string("--qx-cdf=").size());
             user_set_qx_cdf = true;
+        }
+
+        // --- calibration (diffusion factor) ---
+        else if (a.rfind("--diff-factor=", 0) == 0) {
+            cli_diff_factor = std::atof(a.substr(std::string("--diff-factor=").size()).c_str());
+            user_set_diff_factor = true;
+        }
+        else if (a.rfind("--tag=", 0) == 0) {
+            cli_tag_extra = a.substr(std::string("--tag=").size());
         }
 
         // --- transport toggles ---
@@ -116,12 +131,16 @@ int main(int argc, char** argv)
 
     P.correlation_ls_x = 1;
     P.correlation_ls_y = 0.1;
-    P.diffusion_factor = 0.15; // Calibration coefficient
+
+    // calibration coefficient (CLI override)
+    P.diffusion_factor = cli_diff_factor;
+
     P.stdev = 2.0;
     P.g_mean = 0.0;
     P.CorrelationModel = SimParams::correlationmode::exponentialfit;
-    P.correlation_x_range = {0.001,P.correlation_ls_x};
-    P.correlation_y_range = {0.001,P.correlation_ls_y};
+    P.correlation_x_range = {0.001, P.correlation_ls_x};
+    P.correlation_y_range = {0.001, P.correlation_ls_y};
+
     // "D" in your naming = diffusion coefficient
     P.Diffusion_coefficient = 0.1;
 
@@ -131,6 +150,11 @@ int main(int argc, char** argv)
     P.run_seed = 20260115UL;
 
     P.xLocations = {0.5, 1.5, 2.5};
+
+    if (rank == 0) {
+        std::cout << "Using diffusion_factor = " << P.diffusion_factor
+                  << (user_set_diff_factor ? " (from CLI)\n" : " (default)\n");
+    }
 
     // -----------------------------
     // stdev integer check (as before)
@@ -159,11 +183,7 @@ int main(int argc, char** argv)
     }
 
     // -----------------------------
-    // WARNING-ONLY sanity check:
-    // resume folder is an *input source* (mean, qx, ...),
-    // run folder is new and based on P.
-    // So mismatch is not fatal: print warning only.
-    // Only do this warning when resume_run_dir was not explicitly overridden.
+    // WARNING-ONLY sanity check
     // -----------------------------
     if (opts.upscale_only || opts.hardcoded_mean) {
         std::string err;
@@ -178,9 +198,11 @@ int main(int argc, char** argv)
 
     // -----------------------------
     // Build run tag for NEW run_dir folder name
-    // Example: std2_D1e-3_aniso
+    // Include df in tag so each sweep has unique output folder.
     // -----------------------------
-    const std::string run_tag = make_run_tag_std_D_aniso(P);
+    std::string run_tag = make_run_tag_std_D_aniso(P);
+    run_tag += "_df" + fmt_compact_double_tag(P.diffusion_factor);
+    if (!cli_tag_extra.empty()) run_tag += "_" + cli_tag_extra;
 
     // -----------------------------
     // Hardcoded means (used only when --hardcoded-mean)
@@ -197,7 +219,8 @@ int main(int argc, char** argv)
     {
         const std::string mean_path = joinPath(resume_run_dir, "mean_params.txt");
         if (fileExists(mean_path)) {
-            double lc = H.lc_mean, lx = H.lx_mean, ly = H.ly_mean, dt = H.dt_mean; double nu_x=H.nu_x; double nu_y=H.nu_y;
+            double lc = H.lc_mean, lx = H.lx_mean, ly = H.ly_mean, dt = H.dt_mean;
+            double nu_x = H.nu_x, nu_y = H.nu_y;
             if (read_mean_params_txt(mean_path, lc, lx, ly, dt, nu_x, nu_y)) {
                 H.lc_mean = lc;
                 H.lx_mean = lx;
@@ -216,9 +239,6 @@ int main(int argc, char** argv)
 
     // -----------------------------
     // Prepare run_dir (MPI-safe)
-    // NOTE: This creates/chooses the OUTPUT run folder.
-    // It must NOT overwrite resume_run_dir.
-    // It should append run_tag only when creating a new run directory.
     // -----------------------------
     RunOutputs out;
     out.run_dir = prepare_run_dir_mpi(output_dir, resume_run_dir, opts, rank, run_tag);
