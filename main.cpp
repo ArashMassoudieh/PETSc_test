@@ -109,25 +109,25 @@ int main(int argc, char** argv)
     // -----------------------------
     SimParams P;
     P.nx = 300;
-    P.ny = 300;
+    P.ny = 100;
     P.nu = 100;
     P.Lx = 3.0;
-    P.Ly = 3.0;
+    P.Ly = 1.0;
 
     P.correlation_ls_x = 1;
     P.correlation_ls_y = 0.1;
     P.diffusion_factor = 0.15; // Calibration coefficient
     P.stdev = 2.0;
     P.g_mean = 0.0;
-    P.CorrelationModel = SimParams::correlationmode::gaussian;
-    P.correlation_x_range = {0.001,0.5*P.correlation_ls_x};
-    P.correlation_y_range = {0.001,0.5*P.correlation_ls_y};
+    P.CorrelationModel = SimParams::correlationmode::exponentialfit;
+    P.correlation_x_range = {0.001,P.correlation_ls_x};
+    P.correlation_y_range = {0.001,P.correlation_ls_y};
     // "D" in your naming = diffusion coefficient
     P.Diffusion_coefficient = 0.01;
 
     P.t_end_pdf = 20.0;
 
-    P.nReal_default = 20;
+    P.nReal_default = 100;
     P.run_seed = 20260115UL;
 
     P.xLocations = {0.5, 1.5, 2.5};
