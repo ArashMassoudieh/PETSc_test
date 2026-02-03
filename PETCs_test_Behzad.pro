@@ -14,8 +14,8 @@ DEFINES += GSL
 #CONFIG  += Behzad
 #DEFINES += Behzad
 
-#CONFIG  += PowerEdge
-#DEFINES += PowerEdge
+CONFIG  += PowerEdge
+DEFINES += PowerEdge
 
 #CONFIG  += Arash
 #DEFINES += Arash
@@ -23,8 +23,8 @@ DEFINES += GSL
 #CONFIG  += SligoCreek
 #DEFINES += SligoCreek
 
-CONFIG  += Jason
-DEFINES += Jason
+#CONFIG  += Jason
+#DEFINES += Jason
 
 #CONFIG  += WSL
 #DEFINES += WSL
