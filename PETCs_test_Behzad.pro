@@ -152,7 +152,7 @@ HEADERS += \
 
 # ==== Armadillo / GSL ====
 DEFINES += ARMA_USE_LAPACK ARMA_USE_BLAS
-LIBS    += -larmadillo -lgsl -lgslcblas
+LIBS    += -larmadillo -lgsl -lgslcblas -lfftw3
 
 # ==== VTK ====
 GRID_USE_VTK {
