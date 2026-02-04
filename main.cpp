@@ -141,9 +141,9 @@ int main(int argc, char** argv)
     // Params (kept here)
     // -----------------------------
     SimParams P;
-    P.nx = 30;
-    P.ny = 10;
-    P.nu = 10;
+    P.nx = 300;
+    P.ny = 100;
+    P.nu = 100;
     P.Lx = 3.0;
     P.Ly = 1.0;
 

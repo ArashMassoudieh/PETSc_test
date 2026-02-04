@@ -8,8 +8,7 @@ DEFINES += GSL
 
 
 # ============================================================
-# Host-config (canonical): enable ONE only
-# Default: Jason (keep it this way)
+# Host-config (enable ONE only)
 # ============================================================
 #CONFIG  += Behzad
 #DEFINES += Behzad
@@ -90,8 +89,10 @@ contains(DEFINES, WSL) {
 
 # ============================================================
 # PETSc
-#   Jason: include petscvariables (your working setup)
-#   PowerEdge: keep your manual include/lib (your working setup)
+#   PowerEdge: keep your manual include/lib defaults,
+#             PLUS include petscvariables when available
+#             (so OpenBLAS/MPI externals auto-link correctly).
+#   Jason/others: include petscvariables (your working setup).
 # ============================================================
 PETSC_DIR  = $$(PETSC_DIR)
 PETSC_ARCH = $$(PETSC_ARCH)
@@ -104,8 +105,21 @@ contains(DEFINES, PowerEdge) {
     isEmpty(PETSC_DIR)  { PETSC_DIR  = /home/arash/petsc }
     isEmpty(PETSC_ARCH) { PETSC_ARCH = arch-linux-c-opt }
 
+    # Core includes (fixes petscsys.h)
     INCLUDEPATH += $$PETSC_DIR/include
     INCLUDEPATH += $$PETSC_DIR/$$PETSC_ARCH/include
+
+    # If available, pull PETSc's own include+external link flags
+    PETSC_VARIABLES = $$PETSC_DIR/$$PETSC_ARCH/lib/petsc/conf/petscvariables
+    exists($$PETSC_VARIABLES) {
+        include($$PETSC_VARIABLES)
+        QMAKE_CXXFLAGS += $$PETSC_CC_INCLUDES
+        LIBS += $$PETSC_EXTERNAL_LIB_BASIC $$PETSC_EXTERNAL_LIB
+    } else {
+        message("WARNING: PETSc petscvariables not found: $$PETSC_VARIABLES")
+    }
+
+    # Link PETSc itself
     LIBS += -L$$PETSC_DIR/$$PETSC_ARCH/lib -lpetsc
     QMAKE_LFLAGS += -Wl,-rpath,$$PETSC_DIR/$$PETSC_ARCH/lib
 } else {
@@ -122,10 +136,10 @@ contains(DEFINES, PowerEdge) {
     # Compile flags & include paths from PETSc (fixes petscsys.h)
     QMAKE_CXXFLAGS += $$PETSC_CC_INCLUDES
 
-    # Link PETSc + externals (fixes PetscInitialized undefined)
-    LIBS += $$PETSC_EXTERNAL_LIB_BASIC $$PETSC_EXTERNAL_LIB
+    # Link PETSc + externals
     PETSC_LIBDIR = $$PETSC_DIR/$$PETSC_ARCH/lib
     LIBS += -L$$PETSC_LIBDIR -lpetsc
+    LIBS += $$PETSC_EXTERNAL_LIB_BASIC $$PETSC_EXTERNAL_LIB
     QMAKE_LFLAGS += -Wl,-rpath,$$PETSC_LIBDIR
 }
 
@@ -161,10 +175,6 @@ QMAKE_LINK       = $$MPI_CXX
 QMAKE_LINK_SHLIB = $$MPI_CXX
 
 # ---- PowerEdge: MPI mismatch forcer ----
-# PETSc complains when compile sees mpi.h from a different MPI than PETSc used.
-# So we:
-#   1) remove common OpenMPI include dirs (that sneak in via kits)
-#   2) inject mpicxx -show include dirs (so the correct mpi.h wins)
 contains(DEFINES, PowerEdge) {
 
     # Remove common OpenMPI include dirs if Qt kit injected them
@@ -259,6 +269,7 @@ GRID_USE_VTK {
         QMAKE_LFLAGS += -Wl,-rpath,$$VTKLIBPATH
         INCLUDEPATH += $$VTKHEADERPATH
     } else {
+        # Keep your existing PowerEdge behavior:
         LIBS += -L$$VTKBUILDPATH/lib
         QMAKE_LFLAGS += -Wl,-rpath,$$VTKBUILDPATH/lib
 
