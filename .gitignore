@@ -52,3 +52,7 @@ build/Desktop-Debug/.qtc_clangd/
 build-qmake-jason/bin/
 
 build-qmake-jason/obj/
+
+*.o
+
+build-qmake-poweredge/bin/
