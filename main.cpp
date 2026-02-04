@@ -8,10 +8,13 @@
 #include <string>
 #include <mpi.h>
 #include <cmath>        // std::round, std::abs
+#include <limits>
+#include <fstream>
 
 #include "sim_helpers.h"
 #include "plotter.h"     // TBaseMode, AlignMode, run_final_aggregation_and_plots
 #include "sim_runner.h"  // SimParams, RunOptions, HardcodedMean, RunOutputs
+
 
 int main(int argc, char** argv)
 {
@@ -42,7 +45,7 @@ int main(int argc, char** argv)
     RunOptions opts;
 
     opts.upscale_only   = false;
-    opts.hardcoded_mean = true; // (your current setting)
+    opts.hardcoded_mean = true; // your current setting (keeps calibration fast)
     opts.solve_fine_scale_transport = false;
     opts.solve_upscale_transport    = true;
 
@@ -50,7 +53,7 @@ int main(int argc, char** argv)
     bool user_set_qx_cdf  = false;
     bool user_set_run_dir = false;
 
-    // Your existing resume folder naming
+    // Existing resume folder naming (input source)
     std::string resume_run_dir = joinPath(output_dir, "100Realizations_20260202_003241_std2_D0.1_aniso");
 
     // -----------------------------
@@ -60,6 +63,16 @@ int main(int argc, char** argv)
     TBaseMode tbase_mode = TBaseMode::Fixed;
     AlignMode align_mode = AlignMode::MakeUniform;
     bool use_timeseriesset_mean = true;
+
+    // -----------------------------
+    // Calibration options
+    // -----------------------------
+    bool do_calib = true;
+    double calib_min = 0.1, calib_max = 0.5, calib_step = 0.05;
+    std::string black_mean_csv = joinPath(resume_run_dir, "BTC_mean.csv"); // can be overridden
+
+    // Calibration root folder (NEW): UpscalingResults/Calibration
+    std::string calib_root_dir = joinPath(output_dir, "Calibration");
 
     // -----------------------------
     // CLI
@@ -99,6 +112,26 @@ int main(int argc, char** argv)
 
         else if (a == "--mean-ts")    use_timeseriesset_mean = true;
         else if (a == "--no-mean-ts") use_timeseriesset_mean = false;
+
+        // --- calibration ---
+        else if (a == "--calib-df") {
+            do_calib = true;
+        }
+        else if (a.rfind("--calib-df=", 0) == 0) {
+            do_calib = true;
+            const std::string spec = a.substr(std::string("--calib-df=").size());
+            if (!parse_range3(spec, calib_min, calib_max, calib_step)) {
+                if (rank == 0) std::cerr << "ERROR: --calib-df=min:max:step expected. Got: " << spec << "\n";
+                MPI_Abort(PETSC_COMM_WORLD, 77);
+            }
+        }
+        else if (a.rfind("--black-mean=", 0) == 0) {
+            black_mean_csv = a.substr(std::string("--black-mean=").size());
+        }
+        else if (a.rfind("--calib-root=", 0) == 0) {
+            // optional override if you ever want it
+            calib_root_dir = a.substr(std::string("--calib-root=").size());
+        }
     }
 
     // Your rule: hardcoded mean implies upscale-only
@@ -116,14 +149,18 @@ int main(int argc, char** argv)
 
     P.correlation_ls_x = 1;
     P.correlation_ls_y = 0.1;
+
+    // THIS is the calibration target (we will sweep it if do_calib)
     P.diffusion_factor = 0.15; // Calibration coefficient
+
+    // "D" in naming = diffusion coefficient (physics diffusion)
+    P.Diffusion_coefficient = 0.1;
+
     P.stdev = 2.0;
     P.g_mean = 0.0;
     P.CorrelationModel = SimParams::correlationmode::exponentialfit;
-    P.correlation_x_range = {0.001,P.correlation_ls_x};
-    P.correlation_y_range = {0.001,P.correlation_ls_y};
-    // "D" in your naming = diffusion coefficient
-    P.Diffusion_coefficient = 0.1;
+    P.correlation_x_range = {0.001, P.correlation_ls_x};
+    P.correlation_y_range = {0.001, P.correlation_ls_y};
 
     P.t_end_pdf = 20.0;
 
@@ -133,7 +170,7 @@ int main(int argc, char** argv)
     P.xLocations = {0.5, 1.5, 2.5};
 
     // -----------------------------
-    // stdev integer check (as before)
+    // stdev integer check
     // -----------------------------
     const int std_int = static_cast<int>(std::round(P.stdev));
     if (std::abs(P.stdev - std_int) > 1e-12) {
@@ -144,7 +181,7 @@ int main(int argc, char** argv)
         MPI_Abort(PETSC_COMM_WORLD, 1);
     }
 
-    // Resume folder should not be empty in your workflow
+    // Resume folder should not be empty
     if (resume_run_dir.empty()) {
         if (rank == 0) {
             std::cerr << "ERROR: resume_run_dir is empty. "
@@ -153,18 +190,12 @@ int main(int argc, char** argv)
         MPI_Abort(PETSC_COMM_WORLD, 66);
     }
 
-    // If user did NOT provide --qx-cdf, point to the expected mean file in resume_run_dir.
+    // If user did NOT provide --qx-cdf, point to expected mean file in resume_run_dir
     if (!user_set_qx_cdf) {
         opts.hardcoded_qx_cdf_path = joinPath(resume_run_dir, "mean_qx_inverse_cdf.txt");
     }
 
-    // -----------------------------
-    // WARNING-ONLY sanity check:
-    // resume folder is an *input source* (mean, qx, ...),
-    // run folder is new and based on P.
-    // So mismatch is not fatal: print warning only.
-    // Only do this warning when resume_run_dir was not explicitly overridden.
-    // -----------------------------
+    // warning-only sanity check
     if (opts.upscale_only || opts.hardcoded_mean) {
         std::string err;
         if (!validate_resume_run_dir(resume_run_dir, P, err)) {
@@ -177,12 +208,6 @@ int main(int argc, char** argv)
     }
 
     // -----------------------------
-    // Build run tag for NEW run_dir folder name
-    // Example: std2_D1e-3_aniso
-    // -----------------------------
-    const std::string run_tag = make_run_tag_std_D_aniso(P);
-
-    // -----------------------------
     // Hardcoded means (used only when --hardcoded-mean)
     // -----------------------------
     HardcodedMean H;
@@ -192,12 +217,14 @@ int main(int argc, char** argv)
     H.dt_mean  = 7.31122e-05;
     H.nu_x = 1.5;
     H.nu_y = 1.5;
+    H.qx_const = 1.0;
 
     // Optional overwrite from mean_params.txt (if present)
     {
         const std::string mean_path = joinPath(resume_run_dir, "mean_params.txt");
         if (fileExists(mean_path)) {
-            double lc = H.lc_mean, lx = H.lx_mean, ly = H.ly_mean, dt = H.dt_mean; double nu_x=H.nu_x; double nu_y=H.nu_y;
+            double lc = H.lc_mean, lx = H.lx_mean, ly = H.ly_mean, dt = H.dt_mean;
+            double nu_x = H.nu_x, nu_y = H.nu_y;
             if (read_mean_params_txt(mean_path, lc, lx, ly, dt, nu_x, nu_y)) {
                 H.lc_mean = lc;
                 H.lx_mean = lx;
@@ -205,36 +232,134 @@ int main(int argc, char** argv)
                 H.dt_mean = dt;
                 H.nu_x = nu_x;
                 H.nu_y = nu_y;
-
                 if (rank == 0) std::cout << "Loaded mean params: " << mean_path << "\n";
             }
         }
     }
 
-    // constant fallback if no mean qx could be loaded / computed
-    H.qx_const = 1.0;
+    // -----------------------------
+    // CALIBRATION MODE
+    // -----------------------------
+    if (do_calib) {
+
+        // Make sure the Calibration folder exists
+        if (rank == 0) {
+            createDirectory(output_dir);
+            createDirectory(calib_root_dir);
+        }
+        MPI_Barrier(PETSC_COMM_WORLD);
+
+        if (rank == 0) {
+            std::cout << "\n=== CALIBRATING diffusion_factor ===\n";
+            std::cout << "Calibration root: " << calib_root_dir << "\n";
+            std::cout << "Range: [" << calib_min << ", " << calib_max << "] step " << calib_step << "\n";
+            std::cout << "Black mean file: " << black_mean_csv << "\n";
+            std::cout << "Red curves expected in each run_dir:\n";
+            for (double x : P.xLocations) {
+                std::cout << "  - " << fmt_x(x) << "BTC_Compare.csv (Upscaled column)\n";
+            }
+            std::cout << "\n";
+        }
+
+        const std::string calib_csv = joinPath(calib_root_dir, "calibration_summary.csv");
+        if (rank == 0) {
+            std::ofstream f(calib_csv);
+            f << "diffusion_factor,rmse_mean_over_x,run_dir\n";
+        }
+
+        double best_df = std::numeric_limits<double>::quiet_NaN();
+        double best_score = std::numeric_limits<double>::infinity();
+        std::string best_run_dir;
+
+        // sweep
+        for (double df = calib_min; df <= calib_max + 0.5*calib_step; df += calib_step) {
+            P.diffusion_factor = df;
+
+            // build run tag including df
+            const std::string run_tag = make_run_tag_std_D_aniso_df(P);
+
+            RunOutputs out;
+
+            // IMPORTANT: calibration run folders go under Calibration/
+            out.run_dir = prepare_run_dir_mpi(calib_root_dir, resume_run_dir, opts, rank, run_tag);
+
+            const bool ok = run_simulation_blocks(P, opts, H, out, rank);
+            if (!ok) {
+                if (rank == 0) std::cerr << "ERROR: simulation failed for df=" << df << "\n";
+                MPI_Abort(PETSC_COMM_WORLD, 123);
+            }
+
+            // ---------------------------------------------------------
+            // Ensure per-location compare CSVs exist for scoring
+            // ---------------------------------------------------------
+            if (rank == 0) {
+                for (int i = 0; i < (int)P.xLocations.size(); ++i) {
+                    const std::string out_cmp = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare.csv");
+                    out.Fine_Scale_BTCs[i].write(out_cmp);
+                    std::cout << "Wrote: " << out_cmp << "\n";
+                }
+                // optional (handy for debugging)
+                {
+                    const std::string out_mean = joinPath(out.run_dir, "BTC_mean.csv");
+                    out.mean_BTCs.write(out_mean);
+                    std::cout << "Wrote: " << out_mean << "\n";
+                }
+            }
+
+            MPI_Barrier(PETSC_COMM_WORLD);
+
+            // ---- PHASE 2: score using RED from compare + BLACK from resume BTC_mean ----
+            double score = std::numeric_limits<double>::infinity();
+            if (rank == 0) {
+                score = score_upscaled_vs_black_mean_from_compare(
+                    black_mean_csv,
+                    out.run_dir,
+                    P.xLocations
+                );
+
+                std::ofstream f(calib_csv, std::ios::app);
+                f << df << "," << score << "," << out.run_dir << "\n";
+
+                std::cout << "df=" << df << "  score=" << score << "  run=" << out.run_dir << "\n";
+
+                if (std::isfinite(score) && score < best_score) {
+                    best_score = score;
+                    best_df = df;
+                    best_run_dir = out.run_dir;
+                }
+            }
+
+            MPI_Barrier(PETSC_COMM_WORLD);
+        }
+
+        if (rank == 0) {
+            std::cout << "\n=== BEST diffusion_factor ===\n";
+            std::cout << "best_df     = " << best_df << "\n";
+            std::cout << "best_score  = " << best_score << "\n";
+            std::cout << "best_run    = " << best_run_dir << "\n";
+            std::cout << "Summary CSV = " << calib_csv << "\n";
+            std::cout << "Calibration root = " << calib_root_dir << "\n";
+        }
+
+        MPI_Barrier(PETSC_COMM_WORLD);
+        return 0;
+    }
 
     // -----------------------------
-    // Prepare run_dir (MPI-safe)
-    // NOTE: This creates/chooses the OUTPUT run folder.
-    // It must NOT overwrite resume_run_dir.
-    // It should append run_tag only when creating a new run directory.
+    // NORMAL MODE (single run)
     // -----------------------------
+    const std::string run_tag = make_run_tag_std_D_aniso_df(P);
+
     RunOutputs out;
     out.run_dir = prepare_run_dir_mpi(output_dir, resume_run_dir, opts, rank, run_tag);
 
-    // -----------------------------
-    // Run simulation blocks (fine loop + mean + upscaled)
-    // -----------------------------
     const bool ok = run_simulation_blocks(P, opts, H, out, rank);
     if (!ok) {
         if (rank == 0) std::cerr << "ERROR: simulation runner failed.\n";
         MPI_Abort(PETSC_COMM_WORLD, 123);
     }
 
-    // -----------------------------
     // Write compare + mean CSVs
-    // -----------------------------
     for (int i = 0; i < (int)P.xLocations.size(); ++i) {
         const std::string out_cmp = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare.csv");
         out.Fine_Scale_BTCs[i].write(out_cmp);
@@ -246,9 +371,7 @@ int main(int argc, char** argv)
         if (rank == 0) std::cout << "Wrote: " << out_mean << "\n";
     }
 
-    // -----------------------------
     // Plotter (rank 0 only)
-    // -----------------------------
     if (plotter && rank == 0) {
         const bool okp = run_final_aggregation_and_plots(
             out.run_dir,
@@ -268,16 +391,6 @@ int main(int argc, char** argv)
         std::cout << "\nMixing PDF simulation complete!\n";
         std::cout << "Resume folder (input source): " << resume_run_dir << "\n";
         std::cout << "All outputs saved to (new run dir): " << out.run_dir << "\n";
-
-        if (opts.hardcoded_mean) {
-            if (!opts.hardcoded_qx_cdf_path.empty()) {
-                std::cout << "Hardcoded mean mode: qx inverse-CDF path (preferred mean file) = "
-                          << opts.hardcoded_qx_cdf_path << "\n";
-                std::cout << "If missing, runner will compute from qx_inverse_cdfs.txt or use constant fallback.\n";
-            } else {
-                std::cout << "Hardcoded mean mode: no qx path set; using constant qx fallback.\n";
-            }
-        }
     }
 
     MPI_Barrier(PETSC_COMM_WORLD);
