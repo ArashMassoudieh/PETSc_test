@@ -13,6 +13,11 @@ set yrange [1e-6:*]
 set xlabel 't' font "Arial,32"
 set ylabel 'c/c_0' font "Arial,32"
 set key right top
+set key font "Arial,18"
+set key maxcols 4
+set key samplen 2
+set key spacing 1.1
+set key width -2
 
 # ===============================
 # Styles

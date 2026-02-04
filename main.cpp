@@ -68,7 +68,7 @@ int main(int argc, char** argv)
     // Calibration options
     // -----------------------------
     bool do_calib = true;
-    double calib_min = 0.1, calib_max = 0.5, calib_step = 0.05;
+    double calib_min = 0.1, calib_max = 0.25, calib_step = 0.01;
     std::string black_mean_csv = joinPath(resume_run_dir, "BTC_mean.csv"); // can be overridden
 
     // Calibration root folder (NEW): UpscalingResults/Calibration
