@@ -120,7 +120,7 @@ struct SimParams
     double t_end_pdf = 0.0;
 
     std::vector<double> xLocations;
-    enum class correlationmode {exponentialfit, derivative, gaussian, matern} CorrelationModel = correlationmode::derivative;
+    enum class correlationmode {exponentialfit, derivative, gaussian, matern, oneoversums} CorrelationModel = correlationmode::derivative;
     pair<double,double> correlation_x_range = {0.001,0.02};
     pair<double,double> correlation_y_range = {0.001,0.02};
 };

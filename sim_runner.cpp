@@ -947,6 +947,16 @@ static bool run_upscaled(
 
     Grid2D g_u(nx, ny, Lx, Ly);
 
+    if (SimParams::CorrelationModel  == SimParams::correlationmode::exponentialfit)
+        g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::exponential;
+    else if (SimParams::CorrelationModel  == SimParams::correlationmode::gaussian)
+             g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::gaussian;);
+    else if (SimParams::CorrelationModel  == SimParams::correlationmode::matern)
+             g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::matern;);
+    else
+             g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::oneoversum;);
+
+
     g_u.setDiffusionFactor(P.diffusion_factor);
     int qx_size = nu * (nx + 1);
     int qy_size = (nu + 1) * nx;

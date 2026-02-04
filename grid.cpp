@@ -2111,6 +2111,11 @@ double Grid2D::kappa(double v, double lc, double lambda_x, double lambda_y) cons
     }
     // exponential: factors stay 1
 
+    if (VelocityCorrelationModel == velocity_correlation_model::oneoversum)
+    {
+        return v/lc + D/(lambda_x * lambda_x + lambda_y * lambda_y);
+    }
+
     double term1 = v / lc;
     double term2 = factor_x * D / (lambda_x * lambda_x);
     double term3 = factor_y * D / (lambda_y * lambda_y);
