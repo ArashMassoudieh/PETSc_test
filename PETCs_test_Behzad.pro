@@ -13,8 +13,8 @@ DEFINES += GSL
 #CONFIG  += Behzad
 #DEFINES += Behzad
 
-CONFIG  += PowerEdge
-DEFINES += PowerEdge
+#CONFIG  += PowerEdge
+#DEFINES += PowerEdge
 
 #CONFIG  += Arash
 #DEFINES += Arash
@@ -22,8 +22,8 @@ DEFINES += PowerEdge
 #CONFIG  += SligoCreek
 #DEFINES += SligoCreek
 
-#CONFIG  += Jason
-#DEFINES += Jason
+CONFIG  += Jason
+DEFINES += Jason
 
 #CONFIG  += WSL
 #DEFINES += WSL
@@ -90,9 +90,9 @@ contains(DEFINES, WSL) {
 # ============================================================
 # PETSc
 #   PowerEdge: keep your manual include/lib defaults,
-#             PLUS include petscvariables when available
-#             (so OpenBLAS/MPI externals auto-link correctly).
-#   Jason/others: include petscvariables (your working setup).
+#             PLUS include petscvariables when available.
+#   Jason/others: include petscvariables (robust).
+#   ALSO: print PETSc external libs so we can confirm OpenBLAS.
 # ============================================================
 PETSC_DIR  = $$(PETSC_DIR)
 PETSC_ARCH = $$(PETSC_ARCH)
@@ -105,21 +105,26 @@ contains(DEFINES, PowerEdge) {
     isEmpty(PETSC_DIR)  { PETSC_DIR  = /home/arash/petsc }
     isEmpty(PETSC_ARCH) { PETSC_ARCH = arch-linux-c-opt }
 
-    # Core includes (fixes petscsys.h)
     INCLUDEPATH += $$PETSC_DIR/include
     INCLUDEPATH += $$PETSC_DIR/$$PETSC_ARCH/include
 
-    # If available, pull PETSc's own include+external link flags
     PETSC_VARIABLES = $$PETSC_DIR/$$PETSC_ARCH/lib/petsc/conf/petscvariables
     exists($$PETSC_VARIABLES) {
         include($$PETSC_VARIABLES)
         QMAKE_CXXFLAGS += $$PETSC_CC_INCLUDES
         LIBS += $$PETSC_EXTERNAL_LIB_BASIC $$PETSC_EXTERNAL_LIB
+
+        message("PETSC_EXTERNAL_LIB_BASIC = $$PETSC_EXTERNAL_LIB_BASIC")
+        message("PETSC_EXTERNAL_LIB       = $$PETSC_EXTERNAL_LIB")
+
+        OPENBLAS_HIT_BASIC = $$find(PETSC_EXTERNAL_LIB_BASIC, openblas)
+        OPENBLAS_HIT_EXT   = $$find(PETSC_EXTERNAL_LIB, openblas)
+        message("OpenBLAS hit (basic) = $$OPENBLAS_HIT_BASIC")
+        message("OpenBLAS hit (ext)   = $$OPENBLAS_HIT_EXT")
     } else {
         message("WARNING: PETSc petscvariables not found: $$PETSC_VARIABLES")
     }
 
-    # Link PETSc itself
     LIBS += -L$$PETSC_DIR/$$PETSC_ARCH/lib -lpetsc
     QMAKE_LFLAGS += -Wl,-rpath,$$PETSC_DIR/$$PETSC_ARCH/lib
 } else {
@@ -136,6 +141,15 @@ contains(DEFINES, PowerEdge) {
     # Compile flags & include paths from PETSc (fixes petscsys.h)
     QMAKE_CXXFLAGS += $$PETSC_CC_INCLUDES
 
+    # Print PETSc external libs to confirm OpenBLAS
+    message("PETSC_EXTERNAL_LIB_BASIC = $$PETSC_EXTERNAL_LIB_BASIC")
+    message("PETSC_EXTERNAL_LIB       = $$PETSC_EXTERNAL_LIB")
+
+    OPENBLAS_HIT_BASIC = $$find(PETSC_EXTERNAL_LIB_BASIC, openblas)
+    OPENBLAS_HIT_EXT   = $$find(PETSC_EXTERNAL_LIB, openblas)
+    message("OpenBLAS hit (basic) = $$OPENBLAS_HIT_BASIC")
+    message("OpenBLAS hit (ext)   = $$OPENBLAS_HIT_EXT")
+
     # Link PETSc + externals
     PETSC_LIBDIR = $$PETSC_DIR/$$PETSC_ARCH/lib
     LIBS += -L$$PETSC_LIBDIR -lpetsc
@@ -150,13 +164,12 @@ message("PETSC_ARCH final = $$PETSC_ARCH")
 # ============================================================
 # MPI wrapper for compile & link
 #   PowerEdge: keep your hardcoded PETSc-MPICH mpicxx (working)
-#   Jason: use system mpicxx (working)
-#   PLUS: PowerEdge MPI mismatch forcer (kills OpenMPI header mix)
+#   Jason: use environment mpicxx (more robust than hardcoding /usr/bin)
 # ============================================================
 contains(DEFINES, PowerEdge) {
     MPI_CXX = /home/arash/petsc-install/bin/mpicxx
 } else:contains(DEFINES, Jason) {
-    MPI_CXX = /usr/bin/mpicxx
+    MPI_CXX = $$system(which mpicxx 2>/dev/null)
 } else {
     MPI_CXX = $$system(which mpicxx 2>/dev/null)
 }
@@ -173,6 +186,7 @@ message("Using MPI_CXX = $$MPI_CXX")
 QMAKE_CXX        = $$MPI_CXX
 QMAKE_LINK       = $$MPI_CXX
 QMAKE_LINK_SHLIB = $$MPI_CXX
+
 
 # ---- PowerEdge: MPI mismatch forcer ----
 contains(DEFINES, PowerEdge) {
