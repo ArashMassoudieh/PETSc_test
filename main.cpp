@@ -45,8 +45,8 @@ int main(int argc, char** argv)
     RunOptions opts;
 
     opts.upscale_only   = false;
-    opts.hardcoded_mean = true; // your current setting (keeps calibration fast)
-    opts.solve_fine_scale_transport = false;
+    opts.hardcoded_mean = false; // your current setting (keeps calibration fast)
+    opts.solve_fine_scale_transport = true;
     opts.solve_upscale_transport    = true;
 
     // Resume folder: existing source folder (mean, qx, ...)
@@ -67,7 +67,7 @@ int main(int argc, char** argv)
     // -----------------------------
     // Calibration options
     // -----------------------------
-    bool do_calib = true;
+    bool do_calib = false;
     double calib_min = 0.1, calib_max = 0.5, calib_step = 0.05;
     std::string black_mean_csv = joinPath(resume_run_dir, "BTC_mean.csv"); // can be overridden
 
@@ -154,7 +154,7 @@ int main(int argc, char** argv)
     P.diffusion_factor = 0.15; // Calibration coefficient
 
     // "D" in naming = diffusion coefficient (physics diffusion)
-    P.Diffusion_coefficient = 0.1;
+    P.Diffusion_coefficient = 0.01;
 
     P.stdev = 2.0;
     P.g_mean = 0.0;

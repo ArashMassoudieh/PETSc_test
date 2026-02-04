@@ -46,3 +46,9 @@ build/Desktop_Qt_6_9_3-Release/
 build/Desktop-Debug/.qtc_clangd/.cache/clangd/index/
 
 build/Desktop-Debug/.qtc_clangd/
+
+*.stash
+
+build-qmake-jason/bin/
+
+build-qmake-jason/obj/

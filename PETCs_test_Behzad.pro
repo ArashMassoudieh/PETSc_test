@@ -8,7 +8,8 @@ DEFINES += GSL
 
 
 # ============================================================
-# Host-config (enable ONE only)
+# Host-config (canonical): enable ONE only
+# Default: Jason (keep it this way)
 # ============================================================
 #CONFIG  += Behzad
 #DEFINES += Behzad
@@ -27,6 +28,44 @@ DEFINES += Jason
 
 #CONFIG  += WSL
 #DEFINES += WSL
+
+
+# ============================================================
+# Host build folders (puts all .o/moc/rcc/ui + exe out of source tree)
+# ============================================================
+BUILD_TAG = unknown
+
+contains(DEFINES, Jason)     { BUILD_TAG = jason }
+contains(DEFINES, PowerEdge) { BUILD_TAG = poweredge }
+contains(DEFINES, Behzad)    { BUILD_TAG = behzad }
+contains(DEFINES, Arash)     { BUILD_TAG = arash }
+contains(DEFINES, SligoCreek){ BUILD_TAG = sligocreek }
+contains(DEFINES, WSL)       { BUILD_TAG = wsl }
+
+BUILD_DIR = $$PWD/build-qmake-$$BUILD_TAG
+
+# Create directories if missing
+!exists($$BUILD_DIR)            { system(mkdir -p $$BUILD_DIR) }
+!exists($$BUILD_DIR/obj)        { system(mkdir -p $$BUILD_DIR/obj) }
+!exists($$BUILD_DIR/moc)        { system(mkdir -p $$BUILD_DIR/moc) }
+!exists($$BUILD_DIR/rcc)        { system(mkdir -p $$BUILD_DIR/rcc) }
+!exists($$BUILD_DIR/ui)         { system(mkdir -p $$BUILD_DIR/ui) }
+!exists($$BUILD_DIR/bin)        { system(mkdir -p $$BUILD_DIR/bin) }
+
+OBJECTS_DIR = $$BUILD_DIR/obj
+MOC_DIR     = $$BUILD_DIR/moc
+RCC_DIR     = $$BUILD_DIR/rcc
+UI_DIR      = $$BUILD_DIR/ui
+DESTDIR     = $$BUILD_DIR/bin
+
+# Avoid executable collisions across hosts
+TARGET = PETCs_test_$$BUILD_TAG
+
+message("BUILD_TAG   = $$BUILD_TAG")
+message("BUILD_DIR   = $$BUILD_DIR")
+message("OBJECTS_DIR = $$OBJECTS_DIR")
+message("DESTDIR     = $$DESTDIR")
+message("TARGET      = $$TARGET")
 
 
 # ============================================================
@@ -56,7 +95,7 @@ contains(DEFINES, SligoCreek) {
     VTK_V          = -9.1
 }
 
-# ---- Jason: VTK INSTALL prefix (your working setup) ----
+# ---- Jason: VTK INSTALL prefix ----
 contains(DEFINES, Jason) {
     VTKINSTALLPATH = /home/arash/Projects/VTK-install
     VTK_INCNAME    = vtk-9.3
@@ -88,11 +127,9 @@ contains(DEFINES, WSL) {
 
 
 # ============================================================
-# PETSc
-#   PowerEdge: keep your manual include/lib defaults,
-#             PLUS include petscvariables when available.
-#   Jason/others: include petscvariables (robust).
-#   ALSO: print PETSc external libs so we can confirm OpenBLAS.
+# PETSc (Jason + PowerEdge)
+#   - both use petscvariables
+#   - OpenBLAS hit printed at qmake time
 # ============================================================
 PETSC_DIR  = $$(PETSC_DIR)
 PETSC_ARCH = $$(PETSC_ARCH)
@@ -101,61 +138,40 @@ message("PETSC_DIR from env  = $$PETSC_DIR")
 message("PETSC_ARCH from env = $$PETSC_ARCH")
 
 contains(DEFINES, PowerEdge) {
-    # ---- PowerEdge defaults (keep your working paths) ----
     isEmpty(PETSC_DIR)  { PETSC_DIR  = /home/arash/petsc }
     isEmpty(PETSC_ARCH) { PETSC_ARCH = arch-linux-c-opt }
-
-    INCLUDEPATH += $$PETSC_DIR/include
-    INCLUDEPATH += $$PETSC_DIR/$$PETSC_ARCH/include
-
-    PETSC_VARIABLES = $$PETSC_DIR/$$PETSC_ARCH/lib/petsc/conf/petscvariables
-    exists($$PETSC_VARIABLES) {
-        include($$PETSC_VARIABLES)
-        QMAKE_CXXFLAGS += $$PETSC_CC_INCLUDES
-        LIBS += $$PETSC_EXTERNAL_LIB_BASIC $$PETSC_EXTERNAL_LIB
-
-        message("PETSC_EXTERNAL_LIB_BASIC = $$PETSC_EXTERNAL_LIB_BASIC")
-        message("PETSC_EXTERNAL_LIB       = $$PETSC_EXTERNAL_LIB")
-
-        OPENBLAS_HIT_BASIC = $$find(PETSC_EXTERNAL_LIB_BASIC, openblas)
-        OPENBLAS_HIT_EXT   = $$find(PETSC_EXTERNAL_LIB, openblas)
-        message("OpenBLAS hit (basic) = $$OPENBLAS_HIT_BASIC")
-        message("OpenBLAS hit (ext)   = $$OPENBLAS_HIT_EXT")
-    } else {
-        message("WARNING: PETSc petscvariables not found: $$PETSC_VARIABLES")
-    }
-
-    LIBS += -L$$PETSC_DIR/$$PETSC_ARCH/lib -lpetsc
-    QMAKE_LFLAGS += -Wl,-rpath,$$PETSC_DIR/$$PETSC_ARCH/lib
-} else {
-    # ---- Jason/others: use PETSc variables (robust, your working style) ----
+} else:contains(DEFINES, Jason) {
     isEmpty(PETSC_DIR)  { PETSC_DIR  = /home/arash/Projects/petsc }
     isEmpty(PETSC_ARCH) { PETSC_ARCH = arch-linux-c-opt }
-
-    PETSC_VARIABLES = $$PETSC_DIR/$$PETSC_ARCH/lib/petsc/conf/petscvariables
-    !exists($$PETSC_VARIABLES) {
-        error("PETSc petscvariables not found: $$PETSC_VARIABLES")
-    }
-    include($$PETSC_VARIABLES)
-
-    # Compile flags & include paths from PETSc (fixes petscsys.h)
-    QMAKE_CXXFLAGS += $$PETSC_CC_INCLUDES
-
-    # Print PETSc external libs to confirm OpenBLAS
-    message("PETSC_EXTERNAL_LIB_BASIC = $$PETSC_EXTERNAL_LIB_BASIC")
-    message("PETSC_EXTERNAL_LIB       = $$PETSC_EXTERNAL_LIB")
-
-    OPENBLAS_HIT_BASIC = $$find(PETSC_EXTERNAL_LIB_BASIC, openblas)
-    OPENBLAS_HIT_EXT   = $$find(PETSC_EXTERNAL_LIB, openblas)
-    message("OpenBLAS hit (basic) = $$OPENBLAS_HIT_BASIC")
-    message("OpenBLAS hit (ext)   = $$OPENBLAS_HIT_EXT")
-
-    # Link PETSc + externals
-    PETSC_LIBDIR = $$PETSC_DIR/$$PETSC_ARCH/lib
-    LIBS += -L$$PETSC_LIBDIR -lpetsc
-    LIBS += $$PETSC_EXTERNAL_LIB_BASIC $$PETSC_EXTERNAL_LIB
-    QMAKE_LFLAGS += -Wl,-rpath,$$PETSC_LIBDIR
+} else {
+    isEmpty(PETSC_DIR)  { PETSC_DIR  = /home/arash/Projects/petsc }
+    isEmpty(PETSC_ARCH) { PETSC_ARCH = arch-linux-c-opt }
 }
+
+PETSC_VARIABLES = $$PETSC_DIR/$$PETSC_ARCH/lib/petsc/conf/petscvariables
+!exists($$PETSC_VARIABLES) {
+    error("PETSc petscvariables not found: $$PETSC_VARIABLES")
+}
+include($$PETSC_VARIABLES)
+
+# Includes from PETSc (fixes petscsys.h)
+QMAKE_CXXFLAGS += $$PETSC_CC_INCLUDES
+INCLUDEPATH += $$PETSC_DIR/include
+INCLUDEPATH += $$PETSC_DIR/$$PETSC_ARCH/include
+
+# Link PETSc + externals
+PETSC_LIBDIR = $$PETSC_DIR/$$PETSC_ARCH/lib
+LIBS += -L$$PETSC_LIBDIR -lpetsc
+LIBS += $$PETSC_EXTERNAL_LIB_BASIC $$PETSC_EXTERNAL_LIB
+QMAKE_LFLAGS += -Wl,-rpath,$$PETSC_LIBDIR
+
+# Debug/verification: print BLAS choice (OpenBLAS hit)
+message("PETSC_EXTERNAL_LIB_BASIC = $$PETSC_EXTERNAL_LIB_BASIC")
+message("PETSC_EXTERNAL_LIB       = $$PETSC_EXTERNAL_LIB")
+OPENBLAS_HIT_BASIC = $$find(PETSC_EXTERNAL_LIB_BASIC, openblas)
+OPENBLAS_HIT_EXT   = $$find(PETSC_EXTERNAL_LIB, openblas)
+message("OpenBLAS hit (basic) = $$OPENBLAS_HIT_BASIC")
+message("OpenBLAS hit (ext)   = $$OPENBLAS_HIT_EXT")
 
 message("PETSC_DIR final  = $$PETSC_DIR")
 message("PETSC_ARCH final = $$PETSC_ARCH")
@@ -163,8 +179,8 @@ message("PETSC_ARCH final = $$PETSC_ARCH")
 
 # ============================================================
 # MPI wrapper for compile & link
-#   PowerEdge: keep your hardcoded PETSc-MPICH mpicxx (working)
-#   Jason: use environment mpicxx (more robust than hardcoding /usr/bin)
+#   PowerEdge: keep your hardcoded PETSc-MPICH mpicxx
+#   Jason: use environment mpicxx
 # ============================================================
 contains(DEFINES, PowerEdge) {
     MPI_CXX = /home/arash/petsc-install/bin/mpicxx
@@ -180,18 +196,14 @@ isEmpty(MPI_CXX) {
 !exists($$MPI_CXX) {
     error("MPI compiler not found: $$MPI_CXX")
 }
-
 message("Using MPI_CXX = $$MPI_CXX")
 
 QMAKE_CXX        = $$MPI_CXX
 QMAKE_LINK       = $$MPI_CXX
 QMAKE_LINK_SHLIB = $$MPI_CXX
 
-
 # ---- PowerEdge: MPI mismatch forcer ----
 contains(DEFINES, PowerEdge) {
-
-    # Remove common OpenMPI include dirs if Qt kit injected them
     QMAKE_CXXFLAGS -= -I/usr/include/openmpi
     QMAKE_CXXFLAGS -= -I/usr/lib/x86_64-linux-gnu/openmpi/include
     QMAKE_CXXFLAGS -= -I/usr/local/include/openmpi
@@ -273,7 +285,7 @@ LIBS    += -larmadillo -lgsl -lgslcblas -lfftw3
 
 # ============================================================
 # VTK
-#   PowerEdge: build-tree + include spam (your working setup)
+#   PowerEdge: build-tree + include spam
 #   Jason: install-prefix (minimal include)
 # ============================================================
 GRID_USE_VTK {
@@ -283,11 +295,9 @@ GRID_USE_VTK {
         QMAKE_LFLAGS += -Wl,-rpath,$$VTKLIBPATH
         INCLUDEPATH += $$VTKHEADERPATH
     } else {
-        # Keep your existing PowerEdge behavior:
         LIBS += -L$$VTKBUILDPATH/lib
         QMAKE_LFLAGS += -Wl,-rpath,$$VTKBUILDPATH/lib
 
-        # PowerEdge build-tree include spam (keep it exactly as your working script)
         contains(DEFINES, PowerEdge) {
             INCLUDEPATH += $$VTKHEADERPATH \
                 $$VTKHEADERPATH/Common/Core \
@@ -342,7 +352,7 @@ GRID_USE_VTK {
         }
     }
 
-    # VTK libs (keep as-is; depends on VTK_V)
+    # VTK libs (depends on VTK_V)
     LIBS += -lvtkChartsCore$$VTK_V \
             -lvtkCommonColor$$VTK_V \
             -lvtkCommonComputationalGeometry$$VTK_V \
