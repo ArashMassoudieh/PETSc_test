@@ -79,7 +79,7 @@ do for [X in Xvals] {
     set title sprintf("BTC Mean (black) + Calibration (red)  |  x = %s", X) font "Arial,32"
 
     # ---- start plot with black mean ----
-    plotcmd = sprintf("'%s' every ::1 using %d:%d with lines ls 1 title 'Mean (resume)'", \
+    plotcmd = sprintf("'%s' every ::1 using %d:%d with lines ls 1 title 'Mean'", \
                       BLACK_MEAN, col_t(X), col_c(X))
 
     # ---- add calibration curves ----
@@ -99,7 +99,7 @@ do for [X in Xvals] {
 
         if (ncol >= 2) {
             ls = 11 + ((i-1) % 9)  # cycle 11..19
-            plotcmd = plotcmd . sprintf(", '%s' every ::1 using 1:%d with lines ls %d title 'df=%s'", \
+            plotcmd = plotcmd . sprintf(", '%s' every ::1 using 1:%d with lines ls %d title 'Upscaled df=%s'", \
                                         datafile, ncol, ls, df)
         } else {
             print sprintf("WARNING: Bad column count in %s (ncol=%d)", datafile, ncol)
