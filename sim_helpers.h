@@ -271,10 +271,12 @@ bool read_upscaled_from_btc_compare(
 
 double rmse_ignore_nan(const std::vector<double>& a, const std::vector<double>& b);
 
-// Score a run directory against BLACK curves in BTC_mean.csv
-// Reads UPSCALED breakthrough curves from:
-//   <run_dir>/upscaled_mean/upscaled_BTC_Upscaled.csv   (preferred)
-// Falls back to alternate names if present.
+// Score a run directory against BLACK curves in BTC_mean.csv.
+// Reads UPSCALED breakthrough curves from per-x compare files (matches gnuplot):
+//   <run_dir>/x=0.50BTC_Compare.csv
+//   <run_dir>/x=1.50BTC_Compare.csv
+//   <run_dir>/x=2.50BTC_Compare.csv
+// Uses the LAST column in each compare CSV as the upscaled curve.
 // Compares in log10 space (log-RMSE), averaged across xLocations.
 //
 // Returns +inf if required files/columns are missing.

@@ -291,8 +291,8 @@ int main(int argc, char** argv)
                     const double dfv = dfs[i];
                     const std::string& rdir = dirs[i];
 
-                    const double score =
-                        score_upscaled_vs_black_mean_from_compare(black_mean_csv, rdir, P.xLocations);
+                    // NOTE: scorer reads <run_dir>/x=0.50BTC_Compare.csv etc (matches gnuplot)
+                    const double score = score_upscaled_vs_black_mean_from_compare(black_mean_csv, rdir, P.xLocations);
 
                     f << dfv << "," << score << "," << rdir << "\n";
                     std::cout << "df=" << dfv << "  score=" << score << "  run=" << rdir << "\n";
@@ -323,7 +323,7 @@ int main(int argc, char** argv)
             std::cout << "Range: [" << calib_min << ", " << calib_max << "] step " << calib_step << "\n";
             std::cout << "Black mean file: " << black_mean_csv << "\n";
             std::cout << "Runs will be saved under: " << calib_root_dir << "\n";
-            std::cout << "Scoring uses upscaled BTC: <run_dir>/upscaled_mean/upscaled_BTC_Upscaled.csv\n\n";
+            std::cout << "Scoring uses per-x BTC_Compare: <run_dir>/x=0.50BTC_Compare.csv etc\n\n";
         }
 
         // Ensure folders exist
@@ -381,8 +381,7 @@ int main(int argc, char** argv)
                 const double dfv = df_list_rank0[i];
                 const std::string& rdir = run_dirs_rank0[i];
 
-                const double score =
-                    score_upscaled_vs_black_mean_from_compare(black_mean_csv, rdir, P.xLocations);
+                const double score = score_upscaled_vs_black_mean_from_compare(black_mean_csv, rdir, P.xLocations);
 
                 f << dfv << "," << score << "," << rdir << "\n";
                 std::cout << "df=" << dfv << "  score=" << score << "  run=" << rdir << "\n";

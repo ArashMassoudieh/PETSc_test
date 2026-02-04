@@ -733,7 +733,7 @@ bool accumulate_inverse_cdf_on_grid(const std::string& fine_dir, int r,
 }
 
 // ============================================================
-// BTC calibration helpers (UPDATED + ROBUST)
+// BTC calibration helpers
 // ============================================================
 
 // Find column index by case-insensitive exact match
@@ -843,7 +843,53 @@ double rmse_ignore_nan(const std::vector<double>& a, const std::vector<double>& 
     return std::sqrt(sse / (double)n);
 }
 
+// ------------------------------------------------------------
+// Read (t, last_column) from CSV (skip header), like gnuplot ncol
+// ------------------------------------------------------------
+static bool read_lastcol_series_csv(const std::string& path,
+                                   std::vector<double>& t_out,
+                                   std::vector<double>& y_out)
+{
+    std::ifstream f(path.c_str());
+    if (!f) return false;
+
+    std::string header;
+    if (!std::getline(f, header)) return false;
+
+    char delim = detect_delim(header);
+    auto h = split_line_delim(header, delim);
+    if (h.size() < 2) return false;
+
+    const int t_col = 0;
+    const int y_col = (int)h.size() - 1; // LAST COLUMN
+
+    t_out.clear();
+    y_out.clear();
+
+    std::string line;
+    while (std::getline(f, line)) {
+        line = trim_copy(line);
+        if (line.empty()) continue;
+
+        auto a = split_line_delim(line, delim);
+        if ((int)a.size() <= y_col) continue;
+
+        double t = std::numeric_limits<double>::quiet_NaN();
+        double y = std::numeric_limits<double>::quiet_NaN();
+        if (!try_parse_double(a[t_col], t)) continue;
+        if (!try_parse_double(a[y_col], y)) continue;
+
+        if (std::isfinite(t) && std::isfinite(y)) {
+            t_out.push_back(t);
+            y_out.push_back(y);
+        }
+    }
+
+    return t_out.size() >= 2;
+}
+
 // New scoring API: mean log-RMSE over explicit xLocations
+// BLACK from BTC_mean.csv (paired columns), RED from per-x BTC_Compare.csv (LAST column, matches gnuplot)
 double score_upscaled_vs_black_mean_from_compare(
     const std::string& black_mean_csv,
     const std::string& run_dir,
@@ -860,7 +906,7 @@ double score_upscaled_vs_black_mean_from_compare(
         return s.substr(b, e - b);
     };
 
-    auto to_lower = [&](std::string s)->std::string{
+    auto to_lower = [](std::string s)->std::string{
         for (char& c : s) c = (char)std::tolower((unsigned char)c);
         return s;
     };
@@ -906,7 +952,6 @@ double score_upscaled_vs_black_mean_from_compare(
             std::string line;
             while (std::getline(f, line)) {
                 if (trim2(line).empty()) continue;
-                if (delim == ' ') { for (char& c : line) if (c == ',') c = ' '; }
                 std::vector<std::string> tok = split_any(line, delim);
                 if ((int)tok.size() < 2*nPairs) continue;
 
@@ -929,7 +974,6 @@ double score_upscaled_vs_black_mean_from_compare(
             std::string line;
             while (std::getline(f, line)) {
                 if (trim2(line).empty()) continue;
-                if (delim == ' ') { for (char& c : line) if (c == ',') c = ' '; }
                 std::vector<std::string> tok = split_any(line, delim);
                 if (tok.size() < 1 + names.size()) continue;
 
@@ -938,8 +982,8 @@ double score_upscaled_vs_black_mean_from_compare(
                 shared_t.push_back(t);
 
                 for (size_t j=0; j<names.size(); ++j) {
-                    double y=0.0;
-                    if (!try_parse_double(tok[1+j], y)) y = std::numeric_limits<double>::quiet_NaN();
+                    double y=std::numeric_limits<double>::quiet_NaN();
+                    try_parse_double(tok[1+j], y);
                     ycols[j].push_back(y);
                 }
             }
@@ -970,58 +1014,49 @@ double score_upscaled_vs_black_mean_from_compare(
         return std::numeric_limits<double>::infinity();
     }
 
-    // load RED upscaled series
-    const std::string cand1 = joinPath(joinPath(run_dir, "upscaled_mean"), "upscaled_BTC_Upscaled.csv");
-    const std::string cand2 = joinPath(joinPath(run_dir, "upscaled_mean"), "BTC_Upscaled.csv");
-    const std::string cand3 = joinPath(run_dir, "BTC_Upscaled.csv");
-
-    std::string up_path;
-    if (fileExists(cand1)) up_path = cand1;
-    else if (fileExists(cand2)) up_path = cand2;
-    else if (fileExists(cand3)) up_path = cand3;
-    else {
-        std::cerr << "WARNING: missing upscaled BTC file in run_dir: " << run_dir << "\n";
-        return std::numeric_limits<double>::infinity();
-    }
-
-    std::map<std::string, Series> up_map;
-    std::vector<double> up_shared_t;
-    if (!read_any_series_csv(up_path, up_map, up_shared_t)) {
-        std::cerr << "WARNING: could not read upscaled BTC CSV: " << up_path << "\n";
-        return std::numeric_limits<double>::infinity();
-    }
-
-    // score: log-RMSE over all x locations
+    // score: log-RMSE over all x locations using per-x compare files
     const double eps = 1e-12;
+    const double tmin = 2.0;   // tail emphasis; try 3.0 if you want more tail
+    const double tmax = 1e100;
+
     double sum_rmse = 0.0;
     int n_used = 0;
 
     for (double x : xLocations) {
         const Series* B = find_series_for_x(black_map, x);
-        const Series* U = find_series_for_x(up_map, x);
-        if (!B || !U) {
-            std::cerr << "WARNING: missing series for x=" << x
-                      << " (black=" << (B!=nullptr) << ", upscaled=" << (U!=nullptr) << ")\n";
+        if (!B) {
+            std::cerr << "WARNING: missing BLACK series for x=" << x << " in " << black_mean_csv << "\n";
+            return std::numeric_limits<double>::infinity();
+        }
+
+        const std::string cmp_path = joinPath(run_dir, fmt_x(x) + "BTC_Compare.csv");
+
+        std::vector<double> tu, cu;
+        if (!fileExists(cmp_path) || !read_lastcol_series_csv(cmp_path, tu, cu)) {
+            std::cerr << "WARNING: could not read compare (upscaled) file: " << cmp_path << "\n";
             return std::numeric_limits<double>::infinity();
         }
 
         const std::vector<double>& tb = B->first;
         const std::vector<double>& cb = B->second;
-        const std::vector<double>& tu = U->first;
-        const std::vector<double>& cu = U->second;
-        if (tb.size() < 2 || tu.size() < 2) return std::numeric_limits<double>::infinity();
+        if (tb.size() < 2 || cb.size() != tb.size()) return std::numeric_limits<double>::infinity();
 
         std::vector<double> cu_i = resample_col_linear(tu, cu, tb);
 
         double sse = 0.0;
         int n = 0;
         for (size_t i = 0; i < tb.size() && i < cb.size() && i < cu_i.size(); ++i) {
+            const double t = tb[i];
+            if (!(t >= tmin && t <= tmax)) continue;
+
             const double b = cb[i];
             const double u = cu_i[i];
             if (!std::isfinite(b) || !std::isfinite(u)) continue;
+
             const double lb = std::log10(std::max(b, eps));
             const double lu = std::log10(std::max(u, eps));
             const double d = lb - lu;
+
             sse += d * d;
             ++n;
         }
