@@ -55,6 +55,7 @@ int main(int argc, char** argv)
     // Existing resume folder naming (input source)
     std::string resume_run_dir = joinPath(output_dir, "100Realizations_20260202_003241_std2_D0.1_aniso");
     resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso"); //uncomment if you are running for D = 0.1
+    resume_run_dir = joinPath(output_dir, "std=2, D=0, aniso"); // uncomment for if you are running upscaled
 
     // -----------------------------
     // Plot options (kept in main only)
@@ -67,8 +68,8 @@ int main(int argc, char** argv)
     // -----------------------------
     // Calibration options
     // -----------------------------
-    bool do_calib = true;
-    double calib_min = 0.1, calib_max = 0.25, calib_step = 0.01;
+    bool do_calib = false;
+    double calib_min = 0.3, calib_max = 0.5, calib_step = 0.05;
     std::string black_mean_csv = joinPath(resume_run_dir, "BTC_mean.csv"); // can be overridden
 
     // Score-only mode: DO NOT run simulations; just scan existing run folders and score them.
@@ -166,7 +167,7 @@ int main(int argc, char** argv)
     P.diffusion_factor = 0.15;
 
     // "D" in naming = diffusion coefficient (physics diffusion)
-    P.Diffusion_coefficient = 0.01;
+    P.Diffusion_coefficient = 0;
 
     P.stdev = 2.0;
     P.g_mean = 0.0;
