@@ -51,7 +51,7 @@ int main(int argc, char** argv)
     // -----------------------------
     // NEW: Wiener defaults (OFF unless --wiener)
     // -----------------------------
-    opts.wiener_enable  = true;
+    opts.wiener_enable  = false;
     opts.wiener_mode    = "2d";         // 1dx | 1dy | 2d
     opts.wiener_Dx      = 0.0;
     opts.wiener_Dy      = 0.0;
