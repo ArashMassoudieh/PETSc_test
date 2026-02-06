@@ -48,6 +48,17 @@ int main(int argc, char** argv)
     opts.solve_fine_scale_transport = false;
     opts.solve_upscale_transport    = true;
 
+    // -----------------------------
+    // NEW: Wiener defaults (OFF unless --wiener)
+    // -----------------------------
+    opts.wiener_enable  = true;
+    opts.wiener_mode    = "2d";         // 1dx | 1dy | 2d
+    opts.wiener_Dx      = 0.0;
+    opts.wiener_Dy      = 0.0;
+    opts.wiener_dt      = 1e-3;
+    opts.wiener_seed    = 12345UL;
+    opts.wiener_release = "left-flux";  // left-uniform | left-flux | center
+
     // Resume folder: existing source folder (mean, qx, ...)
     bool user_set_qx_cdf  = false;
     bool user_set_run_dir = false;
@@ -118,6 +129,15 @@ int main(int argc, char** argv)
         else if (a == "--mean-ts")    use_timeseriesset_mean = true;
         else if (a == "--no-mean-ts") use_timeseriesset_mean = false;
 
+        // --- NEW: Wiener particle diffusion (1D/2D) ---
+        else if (a == "--wiener") opts.wiener_enable = true;
+        else if (a.rfind("--wmode=", 0) == 0) opts.wiener_mode = a.substr(std::string("--wmode=").size());
+        else if (a.rfind("--Dx=", 0) == 0)    opts.wiener_Dx = std::stod(a.substr(5));
+        else if (a.rfind("--Dy=", 0) == 0)    opts.wiener_Dy = std::stod(a.substr(5));
+        else if (a.rfind("--wdt=", 0) == 0)   opts.wiener_dt = std::stod(a.substr(6));
+        else if (a.rfind("--wseed=", 0) == 0) opts.wiener_seed = (unsigned long)std::stoull(a.substr(8));
+        else if (a.rfind("--wrelease=", 0) == 0) opts.wiener_release = a.substr(std::string("--wrelease=").size());
+
         // --- calibration ---
         else if (a == "--calib-df") {
             do_calib = true;
@@ -167,7 +187,7 @@ int main(int argc, char** argv)
     P.diffusion_factor = 0.15;
 
     // "D" in naming = diffusion coefficient (physics diffusion)
-    P.Diffusion_coefficient = 0;
+    P.Diffusion_coefficient = 0.01;
 
     P.stdev = 2.0;
     P.g_mean = 0.0;
@@ -452,6 +472,15 @@ int main(int argc, char** argv)
         std::cout << "\nMixing PDF simulation complete!\n";
         std::cout << "Resume folder (input source): " << resume_run_dir << "\n";
         std::cout << "All outputs saved to (new run dir): " << out.run_dir << "\n";
+
+        if (opts.wiener_enable) {
+            std::cout << "Wiener enabled: mode=" << opts.wiener_mode
+                      << " Dx=" << opts.wiener_Dx
+                      << " Dy=" << opts.wiener_Dy
+                      << " dt=" << opts.wiener_dt
+                      << " release=" << opts.wiener_release
+                      << " seed=" << opts.wiener_seed << "\n";
+        }
     }
 
     MPI_Barrier(PETSC_COMM_WORLD);

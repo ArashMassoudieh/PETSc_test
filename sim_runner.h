@@ -38,6 +38,22 @@ struct RunOptions
     //
     // NOTE: sim_runner.cpp will ALSO copy/write mean_qx_inverse_cdf.txt into the new run_dir.
     std::string hardcoded_qx_cdf_path;
+
+        // -----------------------------
+        // NEW: Wiener particle tracker (1D/2D)
+        // -----------------------------
+        bool wiener_enable = false;          // default OFF
+        // "1dx" | "1dy" | "2d"
+        std::string wiener_mode = "2d";
+
+        // axis-aligned anisotropic diffusion (ellipse when Dx != Dy)
+        double wiener_Dx = 0.0;
+        double wiener_Dy = 0.0;
+        double wiener_dt = 1e-3;
+        unsigned long wiener_seed = 12345UL;
+
+        // "left-uniform" | "left-flux" | "center"
+        std::string wiener_release = "left-flux";
 };
 
 struct FineScaleOutputs

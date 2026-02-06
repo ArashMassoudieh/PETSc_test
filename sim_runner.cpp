@@ -16,6 +16,7 @@
 #include "grid.h"
 #include "Pathway.h"
 #include "PathwaySet.h"
+#include "PathwaySetWiener.h"
 
 static inline double du_from_nu(int nu)
 {
@@ -334,14 +335,44 @@ static pair<double, double> computeAndFitVelocityCorrelations(
 
 static double computeAndFitAdvectiveCorrelation(
     Grid2D& g,
+    const SimParams& P,
+    const RunOptions& opts,
     const std::string& fine_dir,
     const std::string& pfx,
     FineScaleOutputs& outputs,
     int r)
 {
     PathwaySet pathways;
-    pathways.Initialize(1000, PathwaySet::Weighting::FluxWeighted, &g);
-    pathways.trackAllPathways(&g, 0.01);
+
+    if (opts.wiener_enable) {
+        // Decide Wiener mode
+        std::string m = to_lower_copy(trim_copy(opts.wiener_mode));
+
+        WienerParams wp;
+        wp.dt   = opts.wiener_dt;
+        wp.seed = opts.wiener_seed + (unsigned long)r;
+        wp.Dx   = opts.wiener_Dx;
+        wp.Dy   = opts.wiener_Dy;
+
+        if (m == "1dx") wp.mode = WienerMode::W1D_X;
+        else if (m == "1dy") wp.mode = WienerMode::W1D_Y;
+        else wp.mode = WienerMode::W2D; // default
+
+        // Release mode
+        std::string rels = to_lower_copy(trim_copy(opts.wiener_release));
+        PathwaySetWiener::Release rel = PathwaySetWiener::Release::LeftFluxWeighted;
+        if (rels == "center") rel = PathwaySetWiener::Release::CenterPoint;
+        else if (rels == "left-uniform") rel = PathwaySetWiener::Release::LeftUniform;
+        else rel = PathwaySetWiener::Release::LeftFluxWeighted;
+
+        pathways = PathwaySetWiener::initialize(1000, rel, &g);
+        PathwaySetWiener::trackAll(pathways, &g, wp, /*max_steps=*/2000000);
+
+    } else {
+        // ORIGINAL behavior (unchanged)
+        pathways.Initialize(1000, PathwaySet::Weighting::FluxWeighted, &g);
+        pathways.trackAllPathways(&g, 0.01);
+    }
 
     double Delta_x_min = 0.001, Delta_x_max = 0.5;
     int num_Delta_x = 30;
@@ -666,7 +697,7 @@ static bool run_fine_loop_collect(
         PetscTime(&t_total1);
 
         // Compute advective correlation
-        double lc_emp = computeAndFitAdvectiveCorrelation(g, fine_dir, pfx, outputs, r);
+        double lc_emp = computeAndFitAdvectiveCorrelation(g, P, opts, fine_dir, pfx, outputs, r);
         outputs.lc_all.push_back(lc_emp);
 
         // Write meta file
