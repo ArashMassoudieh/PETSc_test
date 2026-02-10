@@ -18,10 +18,11 @@ struct WienerParams
 {
     WienerMode mode = WienerMode::Off;
 
-    double Dx = 0.0;        // diffusion in x  (used in W1D_X and W2D)
-    double Dy = 0.0;        // diffusion in y  (used in W1D_Y and W2D)
+    double D = 0.01;        // diffusion coefficient
     double dt = 1e-3;       // fixed timestep
     unsigned long seed = 0; // RNG seed
+    double rx = 1;
+    double ry = 0.1;
 };
 
 // Add-on tracker: does NOT modify Particle/Pathway definitions.

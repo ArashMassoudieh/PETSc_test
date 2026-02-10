@@ -14,6 +14,7 @@
 #include "sim_helpers.h"
 #include "plotter.h"     // TBaseMode, AlignMode, run_final_aggregation_and_plots
 #include "sim_runner.h"  // SimParams, RunOptions, HardcodedMean, RunOutputs
+#include "Pathway.h"
 
 int main(int argc, char** argv)
 {
@@ -44,17 +45,17 @@ int main(int argc, char** argv)
     RunOptions opts;
 
     opts.upscale_only   = false;
-    opts.hardcoded_mean = true; // keeps calibration fast
+    opts.hardcoded_mean = false; // keeps calibration fast
     opts.solve_fine_scale_transport = false;
-    opts.solve_upscale_transport    = true;
+    opts.solve_upscale_transport    = false;
 
     // -----------------------------
     // NEW: Wiener defaults (OFF unless --wiener)
     // -----------------------------
-    opts.wiener_enable  = false;
+    opts.wiener_enable  = true;
     opts.wiener_mode    = "2d";         // 1dx | 1dy | 2d
-    opts.wiener_Dx      = 0.0;
-    opts.wiener_Dy      = 0.0;
+    opts.wiener_Dx      = 0.1;
+    //opts.wiener_Dy      = 0.0;
     opts.wiener_dt      = 1e-3;
     opts.wiener_seed    = 12345UL;
     opts.wiener_release = "left-flux";  // left-uniform | left-flux | center
@@ -66,7 +67,8 @@ int main(int argc, char** argv)
     // Existing resume folder naming (input source)
     std::string resume_run_dir = joinPath(output_dir, "100Realizations_20260202_003241_std2_D0.1_aniso");
     resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso"); //uncomment if you are running for D = 0.1
-    resume_run_dir = joinPath(output_dir, "std=2, D=0, aniso"); // uncomment for if you are running upscaled
+    resume_run_dir = joinPath(output_dir, "std=2, D=0, aniso"); // uncomment for if you are running upscaled for std = 2
+    resume_run_dir = joinPath(output_dir, "std=1, D=0, aniso"); // uncomment for if you are running upscaled for std = 1
 
     // -----------------------------
     // Plot options (kept in main only)
@@ -80,7 +82,7 @@ int main(int argc, char** argv)
     // Calibration options
     // -----------------------------
     bool do_calib = false;
-    double calib_min = 0.3, calib_max = 0.5, calib_step = 0.05;
+    double calib_min = 0.1, calib_max = 0.25, calib_step = 0.05;
     std::string black_mean_csv = joinPath(resume_run_dir, "BTC_mean.csv"); // can be overridden
 
     // Score-only mode: DO NOT run simulations; just scan existing run folders and score them.
@@ -180,16 +182,16 @@ int main(int argc, char** argv)
     P.Lx = 3.0;
     P.Ly = 1.0;
 
-    P.correlation_ls_x = 1;
-    P.correlation_ls_y = 0.1;
+    P.correlation_ls_x = 0.1;
+    P.correlation_ls_y = 1;
 
     // calibration target
     P.diffusion_factor = 0.15;
 
     // "D" in naming = diffusion coefficient (physics diffusion)
-    P.Diffusion_coefficient = 0.01;
+    P.Diffusion_coefficient = 0.1;
 
-    P.stdev = 2.0;
+    P.stdev = 1.0;
     P.g_mean = 0.0;
     P.CorrelationModel = SimParams::correlationmode::exponentialfit;
     P.correlation_x_range = {0.001, P.correlation_ls_x};
@@ -480,6 +482,7 @@ int main(int argc, char** argv)
                       << " dt=" << opts.wiener_dt
                       << " release=" << opts.wiener_release
                       << " seed=" << opts.wiener_seed << "\n";
+
         }
     }
 

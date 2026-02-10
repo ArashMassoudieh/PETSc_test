@@ -5,6 +5,26 @@
 #include "Particle.h"
 #include <vector>
 #include <string>
+#include <random>
+
+enum class WienerMode {
+    Off = 0,
+    W1D_X,   // noise only in x
+    W1D_Y,   // noise only in y
+    W2D      // noise in x and y (ellipse if Dx != Dy)
+};
+
+struct WienerParams
+{
+    WienerMode mode = WienerMode::Off;
+
+    double D = 0.01;        // diffusion coefficient
+    double dt = 1e-3;       // fixed timestep
+    unsigned long seed = 0; // RNG seed
+    double rx = 1;
+    double ry = 0.1;
+    std::mt19937_64 rng;
+};
 
 class Grid2D;
 
@@ -72,6 +92,8 @@ public:
                        const std::string& qx_name = "qx",
                        const std::string& qy_name = "qy");
 
+    double trackParticleDiffusion(const double &dt, const double &rx, const double &ry, const double &D);
+
     // Check if pathway has uniform x-spacing
     bool isUniformX(double tolerance = 1e-6) const;
     void cacheUniformXStatus(double tolerance = 1e-6);
@@ -86,11 +108,13 @@ public:
     // Extract two random particles separated by distance Delta_x
     std::pair<Particle, Particle> extractRandomPairWithSeparation(double Delta_x) const;
 
+    void setWienerParams(WienerParams _wp) {wp= _wp;}
 private:
     std::vector<Particle> particles_;
     int id_;
     bool uniform_x_;
     bool uniform_x_checked_;
+    WienerParams wp;
 };
 
 #endif // PATHWAY_H

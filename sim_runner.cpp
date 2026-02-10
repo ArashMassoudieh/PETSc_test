@@ -16,7 +16,6 @@
 #include "grid.h"
 #include "Pathway.h"
 #include "PathwaySet.h"
-#include "PathwaySetWiener.h"
 
 static inline double du_from_nu(int nu)
 {
@@ -351,22 +350,31 @@ static double computeAndFitAdvectiveCorrelation(
         WienerParams wp;
         wp.dt   = opts.wiener_dt;
         wp.seed = opts.wiener_seed + (unsigned long)r;
-        wp.Dx   = opts.wiener_Dx;
-        wp.Dy   = opts.wiener_Dy;
+        wp.D   = opts.wiener_Dx;
+
 
         if (m == "1dx") wp.mode = WienerMode::W1D_X;
         else if (m == "1dy") wp.mode = WienerMode::W1D_Y;
         else wp.mode = WienerMode::W2D; // default
 
         // Release mode
-        std::string rels = to_lower_copy(trim_copy(opts.wiener_release));
-        PathwaySetWiener::Release rel = PathwaySetWiener::Release::LeftFluxWeighted;
-        if (rels == "center") rel = PathwaySetWiener::Release::CenterPoint;
-        else if (rels == "left-uniform") rel = PathwaySetWiener::Release::LeftUniform;
-        else rel = PathwaySetWiener::Release::LeftFluxWeighted;
+        //std::string rels = to_lower_copy(trim_copy(opts.wiener_release));
+        //PathwaySetWiener::Release rel = PathwaySetWiener::Release::LeftFluxWeighted;
+        //if (rels == "center") rel = PathwaySetWiener::Release::CenterPoint;
+        //else if (rels == "left-uniform") rel = PathwaySetWiener::Release::LeftUniform;
+        //else rel = PathwaySetWiener::Release::LeftFluxWeighted;
 
-        pathways = PathwaySetWiener::initialize(1000, rel, &g);
-        PathwaySetWiener::trackAll(pathways, &g, wp, /*max_steps=*/2000000);
+        //pathways = PathwaySetWiener::initialize(1000, rel, &g);
+        //PathwaySetWiener::trackAll(pathways, &g, wp, /*max_steps=*/2000000);
+
+        PathwaySet pathwaysetDiff;
+        pathwaysetDiff.InitializeAtOrigin(10000);
+        TimeSeries<double> times = pathwaysetDiff.trackDiffusion(wp.dt,wp.rx, wp.ry,wp.D);
+        pathwaysetDiff.writeCombinedVTK(joinPath(fine_dir,"diffusionpaths.vtk"));
+        times.writefile(joinPath(fine_dir,"diffusiontimes.csv"));
+        TimeSeries<double> FirstPassageTimeDistribution = times.distribution(100,0);
+        FirstPassageTimeDistribution.writefile(joinPath(fine_dir,"FirstPassageTimeDistribution.csv"));
+        return 0;
 
     } else {
         // ORIGINAL behavior (unchanged)

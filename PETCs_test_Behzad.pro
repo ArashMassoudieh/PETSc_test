@@ -237,8 +237,6 @@ SOURCES += \
     Particle.cpp \
     Pathway.cpp \
     PathwaySet.cpp \
-    PathwaySetWiener.cpp \
-    PathwayWiener.cpp \
     Utilities/QuickSort.cpp \
     Utilities/Utilities.cpp \
     main.cpp \
@@ -258,8 +256,6 @@ HEADERS += \
     Particle.h \
     Pathway.h \
     PathwaySet.h \
-    PathwaySetWiener.h \
-    PathwayWiener.h \
     Utilities/Matrix.h \
     Utilities/Matrix_arma.h \
     Utilities/QuickSort.h \

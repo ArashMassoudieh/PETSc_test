@@ -29,6 +29,18 @@ void PathwaySet::addPathway(int id)
     pathways_.emplace_back(id);
 }
 
+void PathwaySet::InitializeAtOrigin(size_t number_of_pathways)
+{
+    pathways_.clear();
+    pathways_.reserve(number_of_pathways);
+
+    for (size_t i = 0; i < number_of_pathways; ++i) {
+        Pathway path(i);
+        path.addParticle(0.0, 0.0 , 0.0);  // x=0, y=0, t=0
+        pathways_.push_back(path);
+    }
+}
+
 void PathwaySet::Initialize(size_t number_of_pathways, Weighting weighting, Grid2D* grid)
 {
     if (!grid) {
@@ -122,6 +134,17 @@ void PathwaySet::Initialize(size_t number_of_pathways, Weighting weighting, Grid
     }
 
     std::cout << "Initialized " << number_of_pathways << " pathways at left boundary" << std::endl;
+}
+
+TimeSeries<double> PathwaySet::trackDiffusion(double dt, const double &rx, const double &ry, const double &D)
+{
+    TimeSeries<double> output;
+    for (size_t i = 0; i < pathways_.size(); ++i)
+    {
+        double first_passage_time = pathways_[i].trackParticleDiffusion(dt,rx,ry,D);
+        output.append(double(i),first_passage_time);
+    }
+    return output;
 }
 
 void PathwaySet::trackAllPathways(Grid2D* grid, double dx_step,

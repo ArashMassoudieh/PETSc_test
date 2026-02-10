@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include <utility>
+#include "TimeSeries.h"
 
 class Grid2D;  // Forward declaration
 
@@ -27,7 +28,7 @@ public:
 
     // Initialize pathways at left boundary
     void Initialize(size_t number_of_pathways, Weighting weighting, Grid2D* grid);
-
+    void InitializeAtOrigin(size_t number_of_pathways);
     // Particle tracking
     void trackAllPathways(Grid2D* grid, double dx_step,
                           const std::string& qx_name = "qx",
@@ -74,6 +75,8 @@ public:
     // Calculate correlation between corresponding particles in two pathways
     double calculateCorrelation(size_t pathway1_idx, size_t pathway2_idx,
                                 const std::string& quantity = "qx") const;
+
+    TimeSeries<double> trackDiffusion(double dt, const double &rx, const double &ry, const double &D);
 
 private:
     std::vector<Pathway> pathways_;
