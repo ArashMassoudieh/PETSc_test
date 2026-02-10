@@ -88,14 +88,14 @@ int main(int argc, char** argv)
     // Calibration options
     // -----------------------------
     bool do_calib = true;
-    double calib_min = 0.1, calib_max = 0.25, calib_step = 0.05;
+    double calib_min = 0.3, calib_max = 0.5, calib_step = 0.05;
 
     // Set AFTER resume_run_dir finalized
-    std::string black_mean_csv = "";
+    std::string black_mean_csv = joinPath(resume_run_dir, "BTC_mean.csv");
 
     // Score-only mode: DO NOT run simulations; just scan existing run folders and score them.
     bool score_only = false;         // default OFF (enable via --score-only)
-    std::string score_root_dir = ""; // if empty -> calib_root_dir (NOT output_dir)
+    std::string score_root_dir = joinPath(output_dir, "Calibration"); // same as calib_root_dir
 
     // Calibration root folder (where df-run folders should live)
     std::string calib_root_dir = joinPath(output_dir, "Calibration");
@@ -200,7 +200,7 @@ int main(int argc, char** argv)
     P.diffusion_factor = 0.15;
 
     // "D" in naming = diffusion coefficient (physics diffusion)
-    P.Diffusion_coefficient = 0.01;
+    P.Diffusion_coefficient = 0.1;
 
     P.stdev = 1.0;
     P.g_mean = 0.0;
