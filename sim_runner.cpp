@@ -332,6 +332,78 @@ static pair<double, double> computeAndFitVelocityCorrelations(
     return {lambda_x, lambda_y};
 }
 
+int runDiffusionSimulation(const RunOptions &opts, int realization, const std::string &output_dir)
+{
+    std::string m = to_lower_copy(trim_copy(opts.wiener_mode));
+    WienerParams wp;
+    wp.dt   = opts.wiener_dt;
+    wp.D    = opts.wiener_Dx;
+    wp.rx   = opts.wiener_rx;
+    wp.ry   = opts.wiener_ry;
+    wp.seed = opts.wiener_seed + (unsigned long)realization;
+    if (m == "1dx")      wp.mode = WienerMode::W1D_X;
+    else if (m == "1dy") wp.mode = WienerMode::W1D_Y;
+    else                 wp.mode = WienerMode::W2D;
+
+    std::cout << "Running diffusion simulation\n"
+              << "  Mode: " << opts.wiener_mode << "\n"
+              << "  D = " << wp.D << ", dt = " << wp.dt << "\n"
+              << "  Ellipse: rx = " << wp.rx << ", ry = " << wp.ry << "\n"
+              << "  Particles: " << realization << "\n";
+
+    PathwaySet pathwaySet;
+    pathwaySet.InitializeAtOrigin(realization);
+
+    TimeSeries<double> times = pathwaySet.trackDiffusion(wp.dt, wp.rx, wp.ry, wp.D);
+
+    //pathwaySet.writeCombinedVTK(joinPath(output_dir, "diffusionpaths.vtk"));
+    times.writefile(joinPath(output_dir, "diffusiontimes.csv"));
+
+    double mean     = times.mean();
+    double stdev    = times.stddev();
+    double meanlog  = times.mean_log();
+    double stdevlog = times.log().stddev();
+    auto [tmin, tmax] = pathwaySet.travelTimeRange();
+
+    TimeSeries<double> fptDist = times.distribution(100, 0);
+    fptDist.writefile(joinPath(output_dir, "FirstPassageTimeDistribution.csv"));
+
+    // Write statistics file
+    {
+        std::ofstream f(joinPath(output_dir, "diffusion_stats.txt"));
+        if (!f.is_open()) {
+            std::cerr << "WARNING: could not write diffusion_stats.txt\n";
+        } else {
+            f << "# First Passage Time Statistics\n"
+              << "# Brownian diffusion escape from ellipse\n"
+              << "#\n"
+              << "# Parameters\n"
+              << "mode            = " << opts.wiener_mode << "\n"
+              << "D               = " << wp.D << "\n"
+              << "dt              = " << wp.dt << "\n"
+              << "rx              = " << wp.rx << "\n"
+              << "ry              = " << wp.ry << "\n"
+              << "seed            = " << wp.seed << "\n"
+              << "num_particles   = " << realization << "\n"
+              << "#\n"
+              << "# Results\n"
+              << "mean            = " << mean << "\n"
+              << "stdev           = " << stdev << "\n"
+              << "mean_log        = " << meanlog << "\n"
+              << "stdev_log       = " << stdevlog << "\n"
+              << "min             = " << tmin << "\n"
+              << "max             = " << tmax << "\n";
+        }
+    }
+
+    std::cout << "  Mean FPT: " << mean << "  StdDev: " << stdev << "\n"
+              << "  Mean(log): " << meanlog << "  StdDev(log): " << stdevlog << "\n"
+              << "  Range: [" << tmin << ", " << tmax << "]\n"
+              << "  Stats written to: " << joinPath(output_dir, "diffusion_stats.txt") << "\n";
+
+    return 0;
+}
+
 static double computeAndFitAdvectiveCorrelation(
     Grid2D& g,
     const SimParams& P,
@@ -343,44 +415,10 @@ static double computeAndFitAdvectiveCorrelation(
 {
     PathwaySet pathways;
 
-    if (opts.wiener_enable) {
-        // Decide Wiener mode
-        std::string m = to_lower_copy(trim_copy(opts.wiener_mode));
 
-        WienerParams wp;
-        wp.dt   = opts.wiener_dt;
-        wp.seed = opts.wiener_seed + (unsigned long)r;
-        wp.D   = opts.wiener_Dx;
+    pathways.Initialize(1000, PathwaySet::Weighting::FluxWeighted, &g);
+    pathways.trackAllPathways(&g, 0.01);
 
-
-        if (m == "1dx") wp.mode = WienerMode::W1D_X;
-        else if (m == "1dy") wp.mode = WienerMode::W1D_Y;
-        else wp.mode = WienerMode::W2D; // default
-
-        // Release mode
-        //std::string rels = to_lower_copy(trim_copy(opts.wiener_release));
-        //PathwaySetWiener::Release rel = PathwaySetWiener::Release::LeftFluxWeighted;
-        //if (rels == "center") rel = PathwaySetWiener::Release::CenterPoint;
-        //else if (rels == "left-uniform") rel = PathwaySetWiener::Release::LeftUniform;
-        //else rel = PathwaySetWiener::Release::LeftFluxWeighted;
-
-        //pathways = PathwaySetWiener::initialize(1000, rel, &g);
-        //PathwaySetWiener::trackAll(pathways, &g, wp, /*max_steps=*/2000000);
-
-        PathwaySet pathwaysetDiff;
-        pathwaysetDiff.InitializeAtOrigin(10000);
-        TimeSeries<double> times = pathwaysetDiff.trackDiffusion(wp.dt,wp.rx, wp.ry,wp.D);
-        pathwaysetDiff.writeCombinedVTK(joinPath(fine_dir,"diffusionpaths.vtk"));
-        times.writefile(joinPath(fine_dir,"diffusiontimes.csv"));
-        TimeSeries<double> FirstPassageTimeDistribution = times.distribution(100,0);
-        FirstPassageTimeDistribution.writefile(joinPath(fine_dir,"FirstPassageTimeDistribution.csv"));
-        return 0;
-
-    } else {
-        // ORIGINAL behavior (unchanged)
-        pathways.Initialize(1000, PathwaySet::Weighting::FluxWeighted, &g);
-        pathways.trackAllPathways(&g, 0.01);
-    }
 
     double Delta_x_min = 0.001, Delta_x_max = 0.5;
     int num_Delta_x = 30;
@@ -1173,3 +1211,4 @@ bool run_simulation_blocks(
 
     return true;
 }
+

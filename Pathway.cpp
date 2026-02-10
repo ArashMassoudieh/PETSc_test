@@ -285,25 +285,28 @@ void Pathway::writeVTK(const std::string& filename) const
 
 // In Pathway.cpp - update trackParticle function:
 
-double Pathway::trackParticleDiffusion(const double &dt, const double &rx, const double &ry, const double &D)
+double Pathway::trackParticleDiffusion(const double &dt, const double &rx, const double &ry, const double &D, std::mt19937_64 &rng)
 {
-    Particle myParticle = particles_[0];
+    if (particles_.empty()) {
+        throw std::runtime_error("trackParticleDiffusion: pathway has no starting particle");
+    }
 
+    Particle myParticle = particles_[0];
     std::normal_distribution<double> N01(0.0, 1.0);
     double t = 0;
 
-    while (pow(myParticle.x(),2)/pow(rx,2)+pow(myParticle.y(),2)/pow(ry,2)<1.0)
+    while (myParticle.x() * myParticle.x() / (rx * rx) +
+               myParticle.y() * myParticle.y() / (ry * ry) < 1.0)
     {
-        t+=dt;
-        const double dWx = N01(wp.rng);
-        const double dWy = N01(wp.rng);
-        myParticle.setX(myParticle.x()+dWx*sqrt(2.0*D*dt));
-        myParticle.setY(myParticle.x()+dWy*sqrt(2.0*D*dt));
+        t += dt;
+        const double dWx = N01(rng);
+        const double dWy = N01(rng);
+        myParticle.setX(myParticle.x() + dWx * std::sqrt(2.0 * D * dt));
+        myParticle.setY(myParticle.y() + dWy * std::sqrt(2.0 * D * dt));
         myParticle.setT(t);
         this->addParticle(myParticle);
     }
     return myParticle.t();
-
 }
 
 void Pathway::trackParticle(Grid2D* grid, double dx_step,

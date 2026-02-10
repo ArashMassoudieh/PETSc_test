@@ -48,7 +48,8 @@ struct RunOptions
 
         // axis-aligned anisotropic diffusion (ellipse when Dx != Dy)
         double wiener_Dx = 0.0;
-        double wiener_Dy = 0.0;
+        double wiener_rx = 0.0;
+        double wiener_ry = 0.0;
         double wiener_dt = 1e-3;
         unsigned long wiener_seed = 12345UL;
 
@@ -181,3 +182,5 @@ bool run_simulation_blocks(
     RunOutputs& out,
     int rank);
 
+
+int runDiffusionSimulation(const RunOptions &opts, int realization, const std::string &output_dir);

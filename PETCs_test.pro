@@ -43,6 +43,9 @@ QMAKE_LINK_SHLIB = mpicxx
 PETSC_DIR = $$(PETSC_DIR)
 PETSC_ARCH = $$(PETSC_ARCH)
 
+message("PETSC_DIR from env = $$PETSC_DIR")
+message("PETSC_ARCH from env = $$PETSC_ARCH")
+
 INCLUDEPATH += $$PETSC_DIR/include $$PETSC_DIR/$$PETSC_ARCH/include
 LIBS += -L$$PETSC_DIR/$$PETSC_ARCH/lib -lpetsc
 

@@ -92,7 +92,7 @@ public:
                        const std::string& qx_name = "qx",
                        const std::string& qy_name = "qy");
 
-    double trackParticleDiffusion(const double &dt, const double &rx, const double &ry, const double &D);
+    double trackParticleDiffusion(const double &dt, const double &rx, const double &ry, const double &D, std::mt19937_64 &rng);
 
     // Check if pathway has uniform x-spacing
     bool isUniformX(double tolerance = 1e-6) const;
