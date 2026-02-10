@@ -45,14 +45,17 @@ int main(int argc, char** argv)
     RunOptions opts;
 
     opts.upscale_only   = false;
-    opts.hardcoded_mean = false; // keeps calibration fast
+
+    // IMPORTANT: "hardcoded mean" mode ON, but we will LOAD H from file.
+    opts.hardcoded_mean = true;
+
     opts.solve_fine_scale_transport = false;
-    opts.solve_upscale_transport    = false;
+    opts.solve_upscale_transport    = true;
 
     // -----------------------------
     // NEW: Wiener defaults (OFF unless --wiener)
     // -----------------------------
-    opts.wiener_enable  = true;
+    opts.wiener_enable  = false;
     opts.wiener_mode    = "2d";         // 1dx | 1dy | 2d
     opts.wiener_Dx      = 0.1;
     //opts.wiener_Dy      = 0.0;
@@ -64,11 +67,15 @@ int main(int argc, char** argv)
     bool user_set_qx_cdf  = false;
     bool user_set_run_dir = false;
 
-    // Existing resume folder naming (input source)
-    std::string resume_run_dir = joinPath(output_dir, "100Realizations_20260202_003241_std2_D0.1_aniso");
-    resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso"); //uncomment if you are running for D = 0.1
-    resume_run_dir = joinPath(output_dir, "std=2, D=0, aniso"); // uncomment for if you are running upscaled for std = 2
-    resume_run_dir = joinPath(output_dir, "std=1, D=0, aniso"); // uncomment for if you are running upscaled for std = 1
+    // ---------------------------------------------------------
+    // Pick ONE resume folder here (only ONE assignment!)
+    //   (You can still override via --run-dir=...)
+    // ---------------------------------------------------------
+    //std::string resume_run_dir = joinPath(output_dir, "100Realizations_20260202_003241_std2_D0.1_aniso");
+    // std::string resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso");
+    // std::string resume_run_dir = joinPath(output_dir, "std=2, D=0, aniso");
+    // std::string resume_run_dir = joinPath(output_dir, "std=1, D=0, aniso");
+    std::string resume_run_dir = joinPath(output_dir, "100Realizations_20260207_111642_std1_D0.1_aniso0.1&1_df0.15");
 
     // -----------------------------
     // Plot options (kept in main only)
@@ -81,9 +88,11 @@ int main(int argc, char** argv)
     // -----------------------------
     // Calibration options
     // -----------------------------
-    bool do_calib = false;
+    bool do_calib = true;
     double calib_min = 0.1, calib_max = 0.25, calib_step = 0.05;
-    std::string black_mean_csv = joinPath(resume_run_dir, "BTC_mean.csv"); // can be overridden
+
+    // Set AFTER resume_run_dir finalized
+    std::string black_mean_csv = "";
 
     // Score-only mode: DO NOT run simulations; just scan existing run folders and score them.
     bool score_only = false;         // default OFF (enable via --score-only)
@@ -106,7 +115,7 @@ int main(int argc, char** argv)
             user_set_run_dir = true;
         }
 
-        // --- hardcoded qx inverse-CDF path (u,v csv; header optional) ---
+        // --- qx inverse-CDF path override ---
         else if (a.rfind("--qx-cdf=", 0) == 0) {
             opts.hardcoded_qx_cdf_path = a.substr(std::string("--qx-cdf=").size());
             user_set_qx_cdf = true;
@@ -225,9 +234,23 @@ int main(int argc, char** argv)
         MPI_Abort(PETSC_COMM_WORLD, 66);
     }
 
-    // If user did NOT provide --qx-cdf, point to expected mean file in resume_run_dir
+    // If user did NOT provide --qx-cdf, point to expected file in resume_run_dir
     if (!user_set_qx_cdf) {
         opts.hardcoded_qx_cdf_path = joinPath(resume_run_dir, "mean_qx_inverse_cdf.txt");
+    }
+
+    // qx file must exist (no silent fallback)
+    if (!fileExists(opts.hardcoded_qx_cdf_path)) {
+        if (rank == 0) {
+            std::cerr << "ERROR: qx inverse-CDF file not found:\n"
+                      << "  " << opts.hardcoded_qx_cdf_path << "\n";
+        }
+        MPI_Abort(PETSC_COMM_WORLD, 88);
+    }
+
+    // Default black mean from the same resume folder (unless overridden)
+    if (black_mean_csv.empty()) {
+        black_mean_csv = joinPath(resume_run_dir, "BTC_mean.csv");
     }
 
     // warning-only sanity check
@@ -243,32 +266,55 @@ int main(int argc, char** argv)
     }
 
     // -----------------------------
-    // Hardcoded means (used only when --hardcoded-mean)
+    // HardcodedMean H is REQUIRED in hardcoded_mean mode,
+    // BUT we populate it from mean_params.txt (not hardcoded numbers).
     // -----------------------------
     HardcodedMean H;
-    H.lc_mean  = 0.396413;
-    H.lx_mean  = 1.24365;
-    H.ly_mean  = 0.124846;
-    H.dt_mean  = 7.31122e-05;
-    H.nu_x = 1.5;
-    H.nu_y = 1.5;
+
+    // Make it obvious if something accidentally remains unset (optional, but helpful)
+    H.lc_mean  = std::numeric_limits<double>::quiet_NaN();
+    H.lx_mean  = std::numeric_limits<double>::quiet_NaN();
+    H.ly_mean  = std::numeric_limits<double>::quiet_NaN();
+    H.dt_mean  = std::numeric_limits<double>::quiet_NaN();
+    H.nu_x     = std::numeric_limits<double>::quiet_NaN();
+    H.nu_y     = std::numeric_limits<double>::quiet_NaN();
+
+    // Keep constants as you had (unless you also want them read from file)
     H.qx_const = 1.0;
 
-    // Optional overwrite from mean_params.txt (if present)
+    // Load from mean_params.txt (REQUIRED)
     {
         const std::string mean_path = joinPath(resume_run_dir, "mean_params.txt");
-        if (fileExists(mean_path)) {
-            double lc = H.lc_mean, lx = H.lx_mean, ly = H.ly_mean, dt = H.dt_mean;
-            double nu_x = H.nu_x, nu_y = H.nu_y;
-            if (read_mean_params_txt(mean_path, lc, lx, ly, dt, nu_x, nu_y)) {
-                H.lc_mean = lc;
-                H.lx_mean = lx;
-                H.ly_mean = ly;
-                H.dt_mean = dt;
-                H.nu_x = nu_x;
-                H.nu_y = nu_y;
-                if (rank == 0) std::cout << "Loaded mean params: " << mean_path << "\n";
+        if (!fileExists(mean_path)) {
+            if (rank == 0) {
+                std::cerr << "ERROR: mean_params.txt not found in resume folder:\n"
+                          << "  " << mean_path << "\n";
             }
+            MPI_Abort(PETSC_COMM_WORLD, 80);
+        }
+
+        double lc = 0, lx = 0, ly = 0, dt = 0;
+        double nu_x = 0, nu_y = 0;
+
+        if (!read_mean_params_txt(mean_path, lc, lx, ly, dt, nu_x, nu_y)) {
+            if (rank == 0) {
+                std::cerr << "ERROR: failed to parse mean_params.txt:\n"
+                          << "  " << mean_path << "\n";
+            }
+            MPI_Abort(PETSC_COMM_WORLD, 81);
+        }
+
+        H.lc_mean = lc;
+        H.lx_mean = lx;
+        H.ly_mean = ly;
+        H.dt_mean = dt;
+        H.nu_x    = nu_x;
+        H.nu_y    = nu_y;
+
+        if (rank == 0) {
+            std::cout << "Resume folder (input source): " << resume_run_dir << "\n";
+            std::cout << "Loaded mean params: " << mean_path << "\n";
+            std::cout << "Using qx inverse-CDF: " << opts.hardcoded_qx_cdf_path << "\n";
         }
     }
 
@@ -277,13 +323,10 @@ int main(int argc, char** argv)
     // -----------------------------
     if (do_calib) {
 
-        // IMPORTANT FIX:
         // Score-only should scan the CALIBRATION folder by default, not output_dir.
         if (score_root_dir.empty()) score_root_dir = calib_root_dir;
 
-        // -------------------------------------------------
-        // SCORE-ONLY: scan existing runs and score them
-        // -------------------------------------------------
+        // SCORE-ONLY
         if (score_only) {
             if (rank == 0) {
                 std::cout << "\n=== SCORE-ONLY calibration ===\n";
@@ -315,8 +358,8 @@ int main(int argc, char** argv)
                     const double dfv = dfs[i];
                     const std::string& rdir = dirs[i];
 
-                    // NOTE: scorer reads <run_dir>/x=0.50BTC_Compare.csv etc (matches gnuplot)
-                    const double score = score_upscaled_vs_black_mean_from_compare(black_mean_csv, rdir, P.xLocations);
+                    const double score = score_upscaled_vs_black_mean_from_compare(
+                        black_mean_csv, rdir, P.xLocations);
 
                     f << dfv << "," << score << "," << rdir << "\n";
                     std::cout << "df=" << dfv << "  score=" << score << "  run=" << rdir << "\n";
@@ -339,9 +382,7 @@ int main(int argc, char** argv)
             return 0;
         }
 
-        // -------------------------------------------------
-        // FULL calibration: run all dfs first, then score
-        // -------------------------------------------------
+        // RUN-THEN-SCORE
         if (rank == 0) {
             std::cout << "\n=== CALIBRATING diffusion_factor (run-then-score) ===\n";
             std::cout << "Range: [" << calib_min << ", " << calib_max << "] step " << calib_step << "\n";
@@ -350,21 +391,18 @@ int main(int argc, char** argv)
             std::cout << "Scoring uses per-x BTC_Compare: <run_dir>/x=0.50BTC_Compare.csv etc\n\n";
         }
 
-        // Ensure folders exist
         createDirectory(output_dir);
         createDirectory(calib_root_dir);
 
         std::vector<double> df_list_rank0;
         std::vector<std::string> run_dirs_rank0;
 
-        // sweep: RUNS ONLY
         for (double df = calib_min; df <= calib_max + 0.5 * calib_step; df += calib_step) {
             P.diffusion_factor = df;
 
             const std::string run_tag = make_run_tag_std_D_aniso_df(P);
 
             RunOutputs out;
-            // Put calibration runs under calib_root_dir
             out.run_dir = prepare_run_dir_mpi(calib_root_dir, resume_run_dir, opts, rank, run_tag);
 
             const bool ok = run_simulation_blocks(P, opts, H, out, rank);
@@ -373,7 +411,6 @@ int main(int argc, char** argv)
                 MPI_Abort(PETSC_COMM_WORLD, 123);
             }
 
-            // optional: write compare/mean for plotting
             if (rank == 0) {
                 for (int i = 0; i < (int)P.xLocations.size(); ++i) {
                     const std::string out_cmp = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare.csv");
@@ -391,7 +428,6 @@ int main(int argc, char** argv)
             MPI_Barrier(PETSC_COMM_WORLD);
         }
 
-        // SCORE AFTER ALL RUNS
         if (rank == 0) {
             const std::string calib_csv = joinPath(calib_root_dir, "calibration_summary.csv");
             std::ofstream f(calib_csv);
@@ -405,7 +441,8 @@ int main(int argc, char** argv)
                 const double dfv = df_list_rank0[i];
                 const std::string& rdir = run_dirs_rank0[i];
 
-                const double score = score_upscaled_vs_black_mean_from_compare(black_mean_csv, rdir, P.xLocations);
+                const double score = score_upscaled_vs_black_mean_from_compare(
+                    black_mean_csv, rdir, P.xLocations);
 
                 f << dfv << "," << score << "," << rdir << "\n";
                 std::cout << "df=" << dfv << "  score=" << score << "  run=" << rdir << "\n";
@@ -482,7 +519,6 @@ int main(int argc, char** argv)
                       << " dt=" << opts.wiener_dt
                       << " release=" << opts.wiener_release
                       << " seed=" << opts.wiener_seed << "\n";
-
         }
     }
 
