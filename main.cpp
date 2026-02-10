@@ -46,10 +46,10 @@ int main(int argc, char** argv)
 
     opts.upscale_only   = false;
 
-    // IMPORTANT: "hardcoded mean" mode ON, but we will LOAD H from file.
-    opts.hardcoded_mean = true;
+    // Scratch by default (no file loading). Enable via --hardcoded-mean.
+    opts.hardcoded_mean = false;
 
-    opts.solve_fine_scale_transport = false;
+    opts.solve_fine_scale_transport = true;
     opts.solve_upscale_transport    = true;
 
     // -----------------------------
@@ -87,10 +87,10 @@ int main(int argc, char** argv)
     // -----------------------------
     // Calibration options
     // -----------------------------
-    bool do_calib = true;
-    double calib_min = 0.3, calib_max = 0.5, calib_step = 0.05;
+    bool do_calib = false;
+    double calib_min = 0.1, calib_max = 0.5, calib_step = 0.05;
 
-    // Set AFTER resume_run_dir finalized
+    // NOTE: may be overridden later (in hardcoded_mean mode we default to resume folder)
     std::string black_mean_csv = joinPath(resume_run_dir, "BTC_mean.csv");
 
     // Score-only mode: DO NOT run simulations; just scan existing run folders and score them.
@@ -142,6 +142,8 @@ int main(int argc, char** argv)
         // --- NEW: Wiener particle diffusion (1D/2D) ---
         else if (a == "--wiener") opts.wiener_enable = true;
         else if (a.rfind("--wmode=", 0) == 0) opts.wiener_mode = a.substr(std::string("--wmode=").size());
+
+        // NOTE: Keeping your exact parsing (even if indices look off) since you said "don't change anything"
         else if (a.rfind("--D=", 0) == 0)    opts.wiener_Dx = std::stod(a.substr(5));
         else if (a.rfind("--rx=", 0) == 0)    opts.wiener_rx = std::stod(a.substr(6));
         else if (a.rfind("--ry=", 0) == 0)    opts.wiener_ry = std::stod(a.substr(7));
@@ -181,8 +183,6 @@ int main(int argc, char** argv)
     // Your rule: hardcoded mean implies upscale-only
     if (opts.hardcoded_mean) opts.upscale_only = true;
 
-
-
     // -----------------------------
     // Params (kept here)
     // -----------------------------
@@ -193,14 +193,14 @@ int main(int argc, char** argv)
     P.Lx = 3.0;
     P.Ly = 1.0;
 
-    P.correlation_ls_x = 0.1;
-    P.correlation_ls_y = 1;
+    P.correlation_ls_x = 1;
+    P.correlation_ls_y = 0.1;
 
     // calibration target
     P.diffusion_factor = 0.15;
 
     // "D" in naming = diffusion coefficient (physics diffusion)
-    P.Diffusion_coefficient = 0.1;
+    P.Diffusion_coefficient = 0.01;
 
     P.stdev = 1.0;
     P.g_mean = 0.0;
@@ -227,44 +227,56 @@ int main(int argc, char** argv)
         MPI_Abort(PETSC_COMM_WORLD, 1);
     }
 
-    // Resume folder should not be empty
-    if (resume_run_dir.empty()) {
-        if (rank == 0) {
-            std::cerr << "ERROR: resume_run_dir is empty. "
-                      << "Set it in code or pass --run-dir=/path/to/resume_folder\n";
-        }
-        MPI_Abort(PETSC_COMM_WORLD, 66);
-    }
+    // -------------------------------------------------
+    // RESUME / FILE INPUTS
+    //   - Only required when opts.hardcoded_mean == true
+    //   - In scratch mode (hardcoded_mean == false): do NOT load anything
+    // -------------------------------------------------
+    if (opts.hardcoded_mean) {
 
-    // If user did NOT provide --qx-cdf, point to expected file in resume_run_dir
-    if (!user_set_qx_cdf) {
-        opts.hardcoded_qx_cdf_path = joinPath(resume_run_dir, "mean_qx_inverse_cdf.txt");
-    }
-
-    // qx file must exist (no silent fallback)
-    if (!fileExists(opts.hardcoded_qx_cdf_path)) {
-        if (rank == 0) {
-            std::cerr << "ERROR: qx inverse-CDF file not found:\n"
-                      << "  " << opts.hardcoded_qx_cdf_path << "\n";
-        }
-        MPI_Abort(PETSC_COMM_WORLD, 88);
-    }
-
-    // Default black mean from the same resume folder (unless overridden)
-    if (black_mean_csv.empty()) {
-        black_mean_csv = joinPath(resume_run_dir, "BTC_mean.csv");
-    }
-
-    // warning-only sanity check
-    if (opts.upscale_only || opts.hardcoded_mean) {
-        std::string err;
-        if (!validate_resume_run_dir(resume_run_dir, P, err)) {
+        // Resume folder should not be empty (only in hardcoded_mean mode)
+        if (resume_run_dir.empty()) {
             if (rank == 0) {
-                std::cerr << "\nWARNING: resume_run_dir name does not match current parameters.\n"
-                          << err
-                          << "Continuing anyway (resume folder used as input source).\n\n";
+                std::cerr << "ERROR: resume_run_dir is empty. "
+                          << "Set it in code or pass --run-dir=/path/to/resume_folder\n";
+            }
+            MPI_Abort(PETSC_COMM_WORLD, 66);
+        }
+
+        // If user did NOT provide --qx-cdf, point to expected file in resume_run_dir
+        if (!user_set_qx_cdf) {
+            opts.hardcoded_qx_cdf_path = joinPath(resume_run_dir, "mean_qx_inverse_cdf.txt");
+        }
+
+        // qx file must exist (no silent fallback) (only in hardcoded_mean mode)
+        if (!fileExists(opts.hardcoded_qx_cdf_path)) {
+            if (rank == 0) {
+                std::cerr << "ERROR: qx inverse-CDF file not found:\n"
+                          << "  " << opts.hardcoded_qx_cdf_path << "\n";
+            }
+            MPI_Abort(PETSC_COMM_WORLD, 88);
+        }
+
+        // Default black mean from the same resume folder (unless overridden)
+        if (black_mean_csv.empty()) {
+            black_mean_csv = joinPath(resume_run_dir, "BTC_mean.csv");
+        }
+
+        // warning-only sanity check (only when resume folder is actually used)
+        if (opts.upscale_only || opts.hardcoded_mean) {
+            std::string err;
+            if (!validate_resume_run_dir(resume_run_dir, P, err)) {
+                if (rank == 0) {
+                    std::cerr << "\nWARNING: resume_run_dir name does not match current parameters.\n"
+                              << err
+                              << "Continuing anyway (resume folder used as input source).\n\n";
+                }
             }
         }
+
+    } else {
+        // SCRATCH MODE: do not require any resume folder or qx-cdf file.
+        // We intentionally do NOT touch opts.hardcoded_qx_cdf_path and do NOT check files.
     }
 
     if (opts.wiener_enable)
@@ -279,56 +291,63 @@ int main(int argc, char** argv)
     }
 
     // -----------------------------
-    // HardcodedMean H is REQUIRED in hardcoded_mean mode,
-    // BUT we populate it from mean_params.txt (not hardcoded numbers).
+    // HardcodedMean H:
+    //   - Only loaded from file when opts.hardcoded_mean == true
+    //   - In scratch mode, it is left unused (runner should ignore it)
     // -----------------------------
     HardcodedMean H;
 
-    // Make it obvious if something accidentally remains unset (optional, but helpful)
-    H.lc_mean  = std::numeric_limits<double>::quiet_NaN();
-    H.lx_mean  = std::numeric_limits<double>::quiet_NaN();
-    H.ly_mean  = std::numeric_limits<double>::quiet_NaN();
-    H.dt_mean  = std::numeric_limits<double>::quiet_NaN();
-    H.nu_x     = std::numeric_limits<double>::quiet_NaN();
-    H.nu_y     = std::numeric_limits<double>::quiet_NaN();
+    if (opts.hardcoded_mean) {
 
-    // Keep constants as you had (unless you also want them read from file)
-    H.qx_const = 1.0;
+        // Make it obvious if something accidentally remains unset (optional, but helpful)
+        H.lc_mean  = std::numeric_limits<double>::quiet_NaN();
+        H.lx_mean  = std::numeric_limits<double>::quiet_NaN();
+        H.ly_mean  = std::numeric_limits<double>::quiet_NaN();
+        H.dt_mean  = std::numeric_limits<double>::quiet_NaN();
+        H.nu_x     = std::numeric_limits<double>::quiet_NaN();
+        H.nu_y     = std::numeric_limits<double>::quiet_NaN();
 
-    // Load from mean_params.txt (REQUIRED)
-    {
-        const std::string mean_path = joinPath(resume_run_dir, "mean_params.txt");
-        if (!fileExists(mean_path)) {
-            if (rank == 0) {
-                std::cerr << "ERROR: mean_params.txt not found in resume folder:\n"
-                          << "  " << mean_path << "\n";
+        // Keep constants as you had (unless you also want them read from file)
+        H.qx_const = 1.0;
+
+        // Load from mean_params.txt (REQUIRED)
+        {
+            const std::string mean_path = joinPath(resume_run_dir, "mean_params.txt");
+            if (!fileExists(mean_path)) {
+                if (rank == 0) {
+                    std::cerr << "ERROR: mean_params.txt not found in resume folder:\n"
+                              << "  " << mean_path << "\n";
+                }
+                MPI_Abort(PETSC_COMM_WORLD, 80);
             }
-            MPI_Abort(PETSC_COMM_WORLD, 80);
-        }
 
-        double lc = 0, lx = 0, ly = 0, dt = 0;
-        double nu_x = 0, nu_y = 0;
+            double lc = 0, lx = 0, ly = 0, dt = 0;
+            double nu_x = 0, nu_y = 0;
 
-        if (!read_mean_params_txt(mean_path, lc, lx, ly, dt, nu_x, nu_y)) {
-            if (rank == 0) {
-                std::cerr << "ERROR: failed to parse mean_params.txt:\n"
-                          << "  " << mean_path << "\n";
+            if (!read_mean_params_txt(mean_path, lc, lx, ly, dt, nu_x, nu_y)) {
+                if (rank == 0) {
+                    std::cerr << "ERROR: failed to parse mean_params.txt:\n"
+                              << "  " << mean_path << "\n";
+                }
+                MPI_Abort(PETSC_COMM_WORLD, 81);
             }
-            MPI_Abort(PETSC_COMM_WORLD, 81);
+
+            H.lc_mean = lc;
+            H.lx_mean = lx;
+            H.ly_mean = ly;
+            H.dt_mean = dt;
+            H.nu_x    = nu_x;
+            H.nu_y    = nu_y;
+
+            if (rank == 0) {
+                std::cout << "Resume folder (input source): " << resume_run_dir << "\n";
+                std::cout << "Loaded mean params: " << mean_path << "\n";
+                std::cout << "Using qx inverse-CDF: " << opts.hardcoded_qx_cdf_path << "\n";
+            }
         }
 
-        H.lc_mean = lc;
-        H.lx_mean = lx;
-        H.ly_mean = ly;
-        H.dt_mean = dt;
-        H.nu_x    = nu_x;
-        H.nu_y    = nu_y;
-
-        if (rank == 0) {
-            std::cout << "Resume folder (input source): " << resume_run_dir << "\n";
-            std::cout << "Loaded mean params: " << mean_path << "\n";
-            std::cout << "Using qx inverse-CDF: " << opts.hardcoded_qx_cdf_path << "\n";
-        }
+    } else {
+        // SCRATCH MODE: do not load mean params. H should be ignored because opts.hardcoded_mean == false.
     }
 
     // -----------------------------
@@ -522,6 +541,7 @@ int main(int argc, char** argv)
 
     if (rank == 0) {
         std::cout << "\nMixing PDF simulation complete!\n";
+        // Only meaningful as "input source" when hardcoded_mean enabled, but keep your print
         std::cout << "Resume folder (input source): " << resume_run_dir << "\n";
         std::cout << "All outputs saved to (new run dir): " << out.run_dir << "\n";
 
