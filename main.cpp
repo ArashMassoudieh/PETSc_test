@@ -191,7 +191,7 @@ int main(int argc, char** argv)
     P.diffusion_factor = 0.15;
 
     // "D" in naming = diffusion coefficient (physics diffusion)
-    P.Diffusion_coefficient = 0.1;
+    P.Diffusion_coefficient = 0.01;
 
     P.stdev = 1.0;
     P.g_mean = 0.0;
@@ -251,6 +251,7 @@ int main(int argc, char** argv)
 
         opts.wiener_rx = P.correlation_ls_x;
         opts.wiener_ry = P.correlation_ls_y;
+        opts.wiener_Dx = P.Diffusion_coefficient;
         return runDiffusionSimulation(opts, 1000000, wiener_dir);
     }
 

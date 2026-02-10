@@ -356,7 +356,7 @@ int runDiffusionSimulation(const RunOptions &opts, int realization, const std::s
 
     TimeSeries<double> times = pathwaySet.trackDiffusion(wp.dt, wp.rx, wp.ry, wp.D);
 
-    pathwaySet.writeCombinedVTK(joinPath(output_dir, "diffusionpaths.vtk"));
+    //pathwaySet.writeCombinedVTK(joinPath(output_dir, "diffusionpaths.vtk"));
     times.writefile(joinPath(output_dir, "diffusiontimes.csv"));
 
     double mean     = times.mean();
