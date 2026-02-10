@@ -138,11 +138,15 @@ void PathwaySet::Initialize(size_t number_of_pathways, Weighting weighting, Grid
 
 TimeSeries<double> PathwaySet::trackDiffusion(double dt, const double &rx, const double &ry, const double &D)
 {
+    std::random_device rd;
+    std::mt19937_64 seed_gen(rd());
+
     TimeSeries<double> output;
     for (size_t i = 0; i < pathways_.size(); ++i)
     {
-        double first_passage_time = pathways_[i].trackParticleDiffusion(dt,rx,ry,D);
-        output.append(double(i),first_passage_time);
+        std::mt19937_64 rng(seed_gen());
+        double first_passage_time = pathways_[i].trackParticleDiffusion(dt, rx, ry, D, rng);
+        output.append(double(i), first_passage_time);
     }
     return output;
 }

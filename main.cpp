@@ -55,7 +55,6 @@ int main(int argc, char** argv)
     opts.wiener_enable  = true;
     opts.wiener_mode    = "2d";         // 1dx | 1dy | 2d
     opts.wiener_Dx      = 0.1;
-    //opts.wiener_Dy      = 0.0;
     opts.wiener_dt      = 1e-3;
     opts.wiener_seed    = 12345UL;
     opts.wiener_release = "left-flux";  // left-uniform | left-flux | center
@@ -134,10 +133,11 @@ int main(int argc, char** argv)
         // --- NEW: Wiener particle diffusion (1D/2D) ---
         else if (a == "--wiener") opts.wiener_enable = true;
         else if (a.rfind("--wmode=", 0) == 0) opts.wiener_mode = a.substr(std::string("--wmode=").size());
-        else if (a.rfind("--Dx=", 0) == 0)    opts.wiener_Dx = std::stod(a.substr(5));
-        else if (a.rfind("--Dy=", 0) == 0)    opts.wiener_Dy = std::stod(a.substr(5));
-        else if (a.rfind("--wdt=", 0) == 0)   opts.wiener_dt = std::stod(a.substr(6));
-        else if (a.rfind("--wseed=", 0) == 0) opts.wiener_seed = (unsigned long)std::stoull(a.substr(8));
+        else if (a.rfind("--D=", 0) == 0)    opts.wiener_Dx = std::stod(a.substr(5));
+        else if (a.rfind("--rx=", 0) == 0)    opts.wiener_rx = std::stod(a.substr(6));
+        else if (a.rfind("--ry=", 0) == 0)    opts.wiener_ry = std::stod(a.substr(7));
+        else if (a.rfind("--wdt=", 0) == 0)   opts.wiener_dt = std::stod(a.substr(8));
+        else if (a.rfind("--wseed=", 0) == 0) opts.wiener_seed = (unsigned long)std::stoull(a.substr(9));
         else if (a.rfind("--wrelease=", 0) == 0) opts.wiener_release = a.substr(std::string("--wrelease=").size());
 
         // --- calibration ---
@@ -171,6 +171,8 @@ int main(int argc, char** argv)
 
     // Your rule: hardcoded mean implies upscale-only
     if (opts.hardcoded_mean) opts.upscale_only = true;
+
+
 
     // -----------------------------
     // Params (kept here)
@@ -240,6 +242,16 @@ int main(int argc, char** argv)
                           << "Continuing anyway (resume folder used as input source).\n\n";
             }
         }
+    }
+
+    if (opts.wiener_enable)
+    {
+        const std::string run_tag = make_run_tag_std_D_aniso_df(P);
+        const std::string wiener_dir = prepare_run_dir_mpi(output_dir, resume_run_dir, opts, rank, run_tag);
+
+        opts.wiener_rx = P.correlation_ls_x;
+        opts.wiener_ry = P.correlation_ls_y;
+        return runDiffusionSimulation(opts, 1000000, wiener_dir);
     }
 
     // -----------------------------
@@ -478,7 +490,6 @@ int main(int argc, char** argv)
         if (opts.wiener_enable) {
             std::cout << "Wiener enabled: mode=" << opts.wiener_mode
                       << " Dx=" << opts.wiener_Dx
-                      << " Dy=" << opts.wiener_Dy
                       << " dt=" << opts.wiener_dt
                       << " release=" << opts.wiener_release
                       << " seed=" << opts.wiener_seed << "\n";
