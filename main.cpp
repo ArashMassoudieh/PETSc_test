@@ -70,12 +70,12 @@ int main(int argc, char** argv)
     // Pick ONE resume folder here (only ONE assignment!)
     //   (You can still override via --run-dir=...)
     // ---------------------------------------------------------
-    //std::string resume_run_dir = joinPath(output_dir, "100Realizations_20260202_003241_std2_D0.1_aniso");
-    // std::string resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso");
-    // std::string resume_run_dir = joinPath(output_dir, "std=2, D=0, aniso");
-    // std::string resume_run_dir = joinPath(output_dir, "std=1, D=0, aniso");
+    //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260202_003241_std2_D0.1_aniso");
+    //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_std2_D0.01_aniso");
+    std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=2, D=0, aniso1&0.1");
+    //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=1, D=0, aniso1&0.1");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260210_183158_std1_D0.01_aniso1&0.1_df0.15");
-    std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260211_083055_std1_D0.1_aniso1&0.1_df0.15");
+    //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260211_083055_std1_D0.1_aniso1&0.1_df0.15");
 
     // -----------------------------
     // Plot options (kept in main only)
@@ -88,7 +88,7 @@ int main(int argc, char** argv)
     // -----------------------------
     // Calibration options
     // -----------------------------
-    bool do_calib = true;
+    bool do_calib = false;
     double calib_min = 0.1, calib_max = 0.25, calib_step = 0.01;
 
     // NOTE: may be overridden later (in hardcoded_mean mode we default to resume folder)
@@ -198,7 +198,7 @@ int main(int argc, char** argv)
     P.correlation_ls_y = 0.1;
 
     // calibration target
-    P.diffusion_factor = 0.15;
+    P.diffusion_factor = 1;
 
     // "D" in naming = diffusion coefficient (physics diffusion)
     P.Diffusion_coefficient = 0.1;
