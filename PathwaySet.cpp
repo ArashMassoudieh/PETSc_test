@@ -190,6 +190,61 @@ void PathwaySet::trackAllPathways(Grid2D* grid, double dx_step,
               << failed << " failed" << std::endl;
 }
 
+#include <gsl/gsl_rng.h>
+
+void PathwaySet::trackAllPathwaysWithDiffusion(Grid2D* grid, double dx_step,
+                                               double D, unsigned long seed,
+                                               const std::string& qx_name,
+                                               const std::string& qy_name)
+{
+    if (!grid) {
+        throw std::runtime_error("trackAllPathwaysWithDiffusion: grid pointer is null");
+    }
+
+    std::cout << "Tracking " << pathways_.size()
+              << " pathways with diffusion (D=" << D << ")..." << std::endl;
+
+    // Master RNG to generate independent seeds for each pathway
+    gsl_rng* master = gsl_rng_alloc(gsl_rng_mt19937);
+    gsl_rng_set(master, seed);
+
+    int completed = 0;
+    int failed = 0;
+
+    for (size_t i = 0; i < pathways_.size(); ++i) {
+        try {
+            // Create per-pathway RNG with unique seed from master
+            gsl_rng* rng = gsl_rng_alloc(gsl_rng_mt19937);
+            gsl_rng_set(rng, gsl_rng_get(master));
+
+            pathways_[i].trackParticleWithDiffusion(grid, dx_step, D, rng,
+                                                    qx_name, qy_name);
+            gsl_rng_free(rng);
+
+            if (pathways_[i].last().isActive()) {
+                completed++;
+            } else {
+                failed++;
+            }
+
+            // Progress reporting
+            if ((i + 1) % 100 == 0 || i == pathways_.size() - 1) {
+                std::cout << "  Tracked " << (i + 1) << "/" << pathways_.size()
+                << " pathways (completed: " << completed
+                << ", failed: " << failed << ")" << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Error tracking pathway " << i << ": " << e.what() << std::endl;
+            failed++;
+        }
+    }
+
+    gsl_rng_free(master);
+
+    std::cout << "Tracking complete: " << completed << " completed, "
+              << failed << " failed" << std::endl;
+}
+
 Pathway& PathwaySet::operator[](size_t i)
 {
     return pathways_[i];
