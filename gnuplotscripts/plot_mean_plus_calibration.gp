@@ -36,16 +36,23 @@ set style line 18 lc rgb '#d60000' lw 3 dt 8
 set style line 19 lc rgb '#d60000' lw 3 dt 9
 
 # ===============================
-# Parameters (edit this path)
+# USER PARAMETERS (edit these only)
 # ===============================
-Xvals = "0.50 1.50 2.50"
+Xvals     = "0.50 1.50 2.50"
 
 # Script should be run from: .../UpscalingResults/Calibration
-CALIB_ROOT = "."
+CALIB_ROOT     = "."
+UPSCALING_ROOT = ".."   # parent of Calibration/
 
-# Resume folder containing BTC_mean.csv (black mean source)
-RESUME_DIR = "/mnt/3rd900/Projects/PETSc_test/UpscalingResults/100Realizations_20260202_003241_std2_D0.1_aniso"
-BLACK_MEAN = sprintf("%s/BTC_mean.csv", RESUME_DIR)
+# --- folder tags you want to match ---
+STD_TAG   = "std1"      # e.g. std1, std2
+D_TAG     = "D0.01"     # e.g. D0.01, D0.1
+ANISO_TAG = "aniso"     # "aniso" or "iso"
+
+# OPTIONAL:
+# If you want to FORCE the mean/resume folder to a specific df token, set e.g. "df0.15"
+# If empty "", mean folder will be chosen as the LATEST matching folder.
+DF_TAG_FOR_MEAN = ""    # e.g. "df0.15" or ""
 
 # ===============================
 # Helpers
@@ -61,27 +68,55 @@ col_t(x) = (x eq "0.50") ? 1 : (x eq "1.50") ? 3 : 5
 col_c(x) = (x eq "0.50") ? 2 : (x eq "1.50") ? 4 : 6
 
 # Extract df from folder name using bash (no gnuplot regex pain)
-# returns e.g. "0.15"
 df_from_dir(d) = stripnl(system(sprintf("bash -lc \"basename '%s' | sed -n 's/.*_df\\([0-9.]*\\).*/\\1/p'\"", d)))
 
+# Return latest directory matching a glob (empty if none)
+latest_dir(glob) = stripnl(system(sprintf("bash -lc \"ls -1dt %s 2>/dev/null | head -n 1\"", glob)))
+
 # ===============================
-# Get calibration run directories (string list)
+# Auto-detect RESUME_DIR (mean folder)
 # ===============================
-calib_dirs = stripnl(system(sprintf("bash -lc 'ls -1d %s/run_*_df* 2>/dev/null | sort'", CALIB_ROOT)))
+# If DF_TAG_FOR_MEAN is set, prefer that exact df; else take latest matching folder.
+if (strlen(DF_TAG_FOR_MEAN) > 0) {
+    mean_glob  = sprintf("'%s'/100Realizations_*_%s_%s_%s_%s", UPSCALING_ROOT, STD_TAG, D_TAG, ANISO_TAG, DF_TAG_FOR_MEAN)
+    RESUME_DIR = latest_dir(mean_glob)
+} else {
+    mean_glob  = sprintf("'%s'/100Realizations_*_%s_%s_%s*", UPSCALING_ROOT, STD_TAG, D_TAG, ANISO_TAG)
+    RESUME_DIR = latest_dir(mean_glob)
+}
+
+if (strlen(RESUME_DIR) == 0) {
+    print "ERROR: Could not find a matching mean/resume folder."
+    print sprintf("       Looked under %s with glob: %s", UPSCALING_ROOT, mean_glob)
+    exit
+}
+
+BLACK_MEAN = sprintf("%s/BTC_mean.csv", RESUME_DIR)
+
+# ===============================
+# Get calibration run directories (filtered by std/D/aniso|iso)
+# ===============================
+calib_glob = sprintf("%s/run_*_%s_%s_%s_df*", CALIB_ROOT, STD_TAG, D_TAG, ANISO_TAG)
+calib_dirs = stripnl(system(sprintf("bash -lc \"ls -1d %s 2>/dev/null | sort\"", calib_glob)))
 
 if (strlen(calib_dirs) == 0) {
-    print "ERROR: No calibration run folders found (expected run_*_df* under Calibration/)."
-    print "       Run this script from the Calibration folder, or fix CALIB_ROOT."
+    print "ERROR: No matching calibration run folders found."
+    print sprintf("       Expected something like: %s", calib_glob)
+    print "       (Run this script from the Calibration folder, or fix CALIB_ROOT/UPSCALING_ROOT.)"
+    exit
 }
+
+print sprintf("Using RESUME_DIR: %s", RESUME_DIR)
+print sprintf("Using calibration glob: %s", calib_glob)
 
 # ===============================
 # One plot per X
 # ===============================
 do for [X in Xvals] {
 
-    outfile = sprintf("BTC_mean_plus_calibration_x%s.png", X)
+    outfile = sprintf("BTC_mean_plus_calibration_%s_%s_%s_x%s.png", STD_TAG, D_TAG, ANISO_TAG, X)
     set output outfile
-    set title sprintf("BTC Mean (black) + Calibration (red)  |  x = %s", X) font "Arial,32"
+    set title sprintf("BTC Mean + Calibration  |  %s %s %s  |  x = %s", STD_TAG, D_TAG, ANISO_TAG, X) font "Arial,32"
 
     # ---- start plot with black mean ----
     plotcmd = sprintf("'%s' every ::1 using %d:%d with lines ls 1 title 'Mean'", \
@@ -115,3 +150,4 @@ do for [X in Xvals] {
 }
 
 unset output
+
