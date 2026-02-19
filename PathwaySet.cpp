@@ -663,3 +663,120 @@ double PathwaySet::calculateCorrelation(size_t pathway1_idx, size_t pathway2_idx
 
     return correlation;
 }
+
+TimeSeriesSet<double> PathwaySet::getBreakthroughData(
+    const std::vector<double>& x_locations) const
+{
+    TimeSeriesSet<double> result(static_cast<int>(x_locations.size()));
+
+    for (size_t k = 0; k < x_locations.size(); ++k) {
+        double x_target = x_locations[k];
+        result[k].setName("x=" + std::to_string(x_target));
+
+        for (size_t i = 0; i < pathways_.size(); ++i) {
+            const Pathway& path = pathways_[i];
+
+            if (path.size() < 2) continue;
+
+            // Check if pathway reaches x_target
+            double x_min = path.first().x();
+            double x_max = path.last().x();
+            if (x_target < x_min || x_target > x_max) continue;
+
+            // Only use active (completed) pathways
+            if (!path.last().isActive()) continue;
+
+            try {
+                Particle p = path.interpolateAtX(x_target);
+                // t = crossing time, c = v_x at crossing
+                result[k].append(p.t(), p.qx());
+            } catch (const std::exception& e) {
+                // Skip pathways where interpolation fails
+                continue;
+            }
+        }
+    }
+
+    return result;
+}
+
+TimeSeriesSet<double> PathwaySet::getBreakthroughCurve(
+    const std::vector<double>& x_locations,
+    bool resident,
+    BTCType type,
+    int n_bins) const
+{
+    TimeSeriesSet<double> raw = getBreakthroughData(x_locations);
+    TimeSeriesSet<double> btc(static_cast<int>(x_locations.size()));
+
+    for (size_t k = 0; k < x_locations.size(); ++k) {
+        btc[k].setName(raw[k].name());
+
+        if (raw[k].size() == 0) continue;
+
+        // Collect (time, weight) pairs
+        std::vector<std::pair<double, double>> tw;
+        tw.reserve(raw[k].size());
+
+        for (size_t i = 0; i < raw[k].size(); ++i) {
+            double t_i = raw[k].getTime(i);
+            double vx_i = raw[k].getValue(i);
+
+            if (resident) {
+                if (std::abs(vx_i) < 1e-15) continue;
+                tw.push_back({t_i, 1.0 / vx_i});
+            } else {
+                tw.push_back({t_i, 1.0});
+            }
+        }
+
+        if (tw.empty()) continue;
+
+        // Sort by time
+        std::sort(tw.begin(), tw.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+
+        double total_weight = 0.0;
+        for (const auto& p : tw) total_weight += p.second;
+
+        if (type == BTCType::CDF) {
+            // Step-wise CDF
+            double cumulative = 0.0;
+            for (const auto& p : tw) {
+                cumulative += p.second;
+                btc[k].append(p.first, cumulative / total_weight);
+            }
+        }
+        else {  // BTCType::PDF
+            // Weighted histogram
+            double t_min = tw.front().first;
+            double t_max = tw.back().first;
+            double bin_width = (t_max - t_min) / n_bins;
+
+            if (bin_width < 1e-15) {
+                // All arrivals at same time
+                btc[k].append(t_min, 1.0);
+                continue;
+            }
+
+            // Initialize bins
+            std::vector<double> bin_weights(n_bins, 0.0);
+
+            // Accumulate weights into bins
+            for (const auto& p : tw) {
+                int bin = static_cast<int>((p.first - t_min) / bin_width);
+                if (bin >= n_bins) bin = n_bins - 1;
+                bin_weights[bin] += p.second;
+            }
+
+            // Normalize to get density: weight / (total_weight * bin_width)
+            for (int b = 0; b < n_bins; ++b) {
+                double t_center = t_min + (b + 0.5) * bin_width;
+                double density = bin_weights[b] / (total_weight * bin_width);
+                btc[k].append(t_center, density);
+            }
+        }
+    }
+
+    return btc;
+}
