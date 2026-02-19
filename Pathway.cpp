@@ -281,9 +281,6 @@ void Pathway::writeVTK(const std::string& filename) const
     file.close();
 }
 
-// Add to Pathway.cpp
-
-// In Pathway.cpp - update trackParticle function:
 
 double Pathway::trackParticleDiffusion(const double &dt, const double &rx, const double &ry, const double &D, std::mt19937_64 &rng)
 {
@@ -408,6 +405,147 @@ void Pathway::trackParticle(Grid2D* grid, double dx_step,
         current.setActive(false);
     }
     setUniformX(true);
+}
+
+void Pathway::trackParticleWithDiffusion(Grid2D* grid, double dx_step,
+                                         double D, gsl_rng* rng,
+                                         const std::string& qx_name,
+                                         const std::string& qy_name)
+{
+    if (!grid)
+        throw std::runtime_error("trackParticleWithDiffusion: grid pointer is null");
+    if (particles_.empty())
+        throw std::runtime_error("trackParticleWithDiffusion: pathway has no starting particle");
+    if (dx_step <= 0.0)
+        throw std::runtime_error("trackParticleWithDiffusion: dx_step must be positive");
+
+    const double Lx = grid->Lx();
+    const double Ly = grid->Ly();
+    const int nx = grid->nx();
+    const int ny = grid->ny();
+    const double gdx = grid->dx();
+    const double gdy = grid->dy();
+
+    const bool has_Dy = grid->hasFlux("D_y");
+
+    Particle current = particles_.back();
+    double t = current.t();
+
+    const int max_steps = 1000000;
+    int step_count = 0;
+
+    while (current.x() < Lx && step_count < max_steps) {
+
+        double vx, vy;
+        try {
+            auto vel = grid->getVelocityAt(current.x(), current.y(), qx_name, qy_name);
+            vx = vel.first;
+            vy = vel.second;
+        } catch (const std::exception& e) {
+            current.setActive(false);
+            particles_.push_back(current);
+            break;
+        }
+
+        double v_mag = std::sqrt(vx*vx + vy*vy);
+
+        if (v_mag < 1e-12) {
+            current.setActive(false);
+            particles_.push_back(current);
+            break;
+        }
+
+        double dt = dx_step / v_mag;
+
+        // Advective displacement
+        double adv_dx = vx * dt;
+        double adv_dy = vy * dt;
+
+        // Longitudinal diffusion (always uses constant D)
+        double diff_dx = std::sqrt(2.0 * D * dt) * gsl_ran_gaussian_ziggurat(rng, 1.0);
+
+        // Transverse diffusion: use spatially varying D_y if available
+        double D_y_local = D;
+        if (has_Dy) {
+            // Interpolate D_y at current position
+            // D_y is on horizontal faces: layout nx * (ny+1), same as qy
+            const std::vector<double>& D_y = grid->flux("D_y");
+
+            double px = current.x();
+            double py = current.y();
+
+            int i = static_cast<int>(px / gdx);
+            int j = static_cast<int>(py / gdy);
+            i = std::min(i, nx - 1);
+            j = std::min(j, ny - 1);
+
+            double xi  = (px - i * gdx) / gdx;
+            double eta = (py - j * gdy) / gdy;
+            xi  = std::max(0.0, std::min(1.0, xi));
+            eta = std::max(0.0, std::min(1.0, eta));
+
+            // Same interpolation pattern as qy in getVelocityAt
+            int idx_bottom = j * nx + i;
+            int idx_top    = (j + 1) * nx + i;
+
+            if (i < nx - 1) {
+                int idx_bottom_right = j * nx + (i + 1);
+                int idx_top_right    = (j + 1) * nx + (i + 1);
+
+                double Dy_left  = (1.0 - eta) * D_y[idx_bottom]       + eta * D_y[idx_top];
+                double Dy_right = (1.0 - eta) * D_y[idx_bottom_right] + eta * D_y[idx_top_right];
+                D_y_local = (1.0 - xi) * Dy_left + xi * Dy_right;
+            } else {
+                D_y_local = (1.0 - eta) * D_y[idx_bottom] + eta * D_y[idx_top];
+            }
+
+            // D_y can be zero at boundaries (u=0, u=1); clamp to non-negative
+            D_y_local = std::max(0.0, D_y_local);
+        }
+
+        double diff_dy = std::sqrt(2.0 * D_y_local * dt) * gsl_ran_gaussian_ziggurat(rng, 1.0);
+
+        double new_x = current.x() + adv_dx + diff_dx;
+        double new_y = current.y() + adv_dy + diff_dy;
+
+        // Right boundary exit
+        if (new_x >= Lx) {
+            double t_exit = (Lx - current.x()) / vx;
+            new_x = Lx;
+            new_y = current.y() + vy * t_exit;
+            t += t_exit;
+
+            current.setPosition(new_x, new_y);
+            current.setT(t);
+            current.setVelocity(vx, vy);
+            current.setActive(true);
+            particles_.push_back(current);
+            break;
+        }
+
+        // Reflect off top/bottom boundaries
+        if (new_y < 0.0) {
+            new_y = -new_y;
+        } else if (new_y > Ly) {
+            new_y = 2.0 * Ly - new_y;
+        }
+
+        t += dt;
+        current.setPosition(new_x, new_y);
+        current.setT(t);
+        current.setVelocity(vx, vy);
+        particles_.push_back(current);
+
+        step_count++;
+    }
+
+    if (step_count >= max_steps) {
+        std::cerr << "Warning: Particle tracking reached maximum steps ("
+                  << max_steps << ") for pathway " << id_ << std::endl;
+        current.setActive(false);
+    }
+    setUniformX(false);
+    setUniformXChecked(true);
 }
 
 bool Pathway::isUniformX(double tolerance) const

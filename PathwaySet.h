@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 #include "TimeSeries.h"
+#include <gsl/gsl_rng.h>
 
 class Grid2D;  // Forward declaration
 
@@ -33,6 +34,11 @@ public:
     void trackAllPathways(Grid2D* grid, double dx_step,
                           const std::string& qx_name = "qx",
                           const std::string& qy_name = "qy");
+
+    void trackAllPathwaysWithDiffusion(Grid2D* grid, double dx_step,
+                                       double D, unsigned long seed = 0,
+                                       const std::string& qx_name = "qx",
+                                       const std::string& qy_name = "qy");
 
     // Access pathways
     Pathway& operator[](size_t i);

@@ -6,6 +6,8 @@
 #include <vector>
 #include <string>
 #include <random>
+#include <gsl/gsl_rng.h>
+#include <gsl/gsl_randist.h>
 
 enum class WienerMode {
     Off = 0,
@@ -92,7 +94,13 @@ public:
                        const std::string& qx_name = "qx",
                        const std::string& qy_name = "qy");
 
+    void trackParticleWithDiffusion(Grid2D* grid, double dx_step,
+                                    double D, gsl_rng* rng,
+                                    const std::string& qx_name,
+                                    const std::string& qy_name);
+
     double trackParticleDiffusion(const double &dt, const double &rx, const double &ry, const double &D, std::mt19937_64 &rng);
+
 
     // Check if pathway has uniform x-spacing
     bool isUniformX(double tolerance = 1e-6) const;
