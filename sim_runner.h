@@ -30,6 +30,7 @@ struct RunOptions
     bool solve_fine_scale_transport = true;
     bool solve_upscale_transport    = true;
     bool perform_particle_tracking = true;
+    bool perform_upscaled_PT = true;
     // When hardcoded_mean=true, you can supply a qx inverse-CDF file (u,v).
     // Priority used by sim_runner.cpp (hardcoded_mean case):
     //   1) load mean_qx_inverse_cdf.txt from this path (if exists / valid)

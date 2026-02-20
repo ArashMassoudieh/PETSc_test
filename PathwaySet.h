@@ -68,7 +68,7 @@ public:
     void writeToFile(const std::string& filename) const;
     void readFromFile(const std::string& filename);
     void writeAllVTK(const std::string& prefix) const;  // Write each pathway as separate VTK
-    void writeCombinedVTK(const std::string& filename) const;  // All pathways in one file
+    void writeCombinedVTK(const std::string& filename, size_t max_pathways = 100) const;
 
     // Statistics
     double meanPathLength() const;

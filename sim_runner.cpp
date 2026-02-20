@@ -446,7 +446,7 @@ static double computeAndFitAdvectiveCorrelation(
     qx_correlation.writefile(joinPath(fine_dir, pfx + "qx_correlation_vs_distance.txt"));
     outputs.advective_correlations.append(qx_correlation, "Realization" + aquiutils::numbertostring(r + 1));
     pathways.writeToFile(joinPath(fine_dir, pfx + "pathway_summary.txt"));
-    pathways.writeCombinedVTK(joinPath(fine_dir, pfx + "all_pathways.vtk"));
+    pathways.writeCombinedVTK(joinPath(fine_dir, pfx + "all_pathways.vtk"),1000);
     return qx_correlation.fitExponentialDecay();
 }
 
@@ -1110,6 +1110,39 @@ static bool run_upscaled(
 
         g_u.writeNamedVTI_Auto("C", joinPath(up_dir, "Cu.vti"));
         g_u.writeNamedMatrix("C", Grid2D::ArrayKind::Cell, joinPath(up_dir, up_pfx + "Cu.txt"));
+    }
+
+    if (opts.solve_upscale_transport) {
+        const int n_particles = 100000;
+        const double dx_step = 0.01;
+
+        PathwaySet pathways;
+        pathways.Initialize(n_particles, PathwaySet::Weighting::FluxWeighted, &g_u);
+        pathways.trackAllPathwaysWithDiffusion(&g_u, dx_step, g_u.getDiffusion());
+
+        // Breakthrough curves
+        const std::vector<double>& btc_locations = g_u.getBTCLocations();
+        if (!btc_locations.empty()) {
+            TimeSeriesSet<double> btc_pdf = pathways.getBreakthroughCurve(
+                btc_locations, true, PathwaySet::BTCType::PDF, 200);
+            btc_pdf.write(joinPath(up_dir, up_pfx + "PT_btc_pdf.csv"));
+
+            TimeSeriesSet<double> btc_cdf = pathways.getBreakthroughCurve(
+                btc_locations, true, PathwaySet::BTCType::CDF);
+            btc_cdf.write(joinPath(up_dir, up_pfx + "PT_btc_cdf.csv"));
+
+            // Append PT derivative BTCs to fine-scale comparison set
+            for (int i = 0; i < (int)btc_locations.size() && i < (int)btc_pdf.size(); ++i) {
+                Fine_Scale_BTCs[i].append(btc_pdf[i], "Upscaled_PT" + fmt_x(btc_locations[i]));
+            }
+        }
+
+        // Save 1000 pathways to VTK
+        pathways.writeCombinedVTK(joinPath(up_dir, up_pfx + "pathways.vtk"), 1000);
+
+        if (rank == 0)
+            std::cout << "Upscaled particle tracking: " << n_particles
+                      << " particles, " << pathways.size() << " completed\n";
     }
 
     up_dir_out = up_dir;

@@ -390,39 +390,37 @@ void PathwaySet::writeAllVTK(const std::string& prefix) const
 }
 
 // In PathwaySet.cpp - update writeCombinedVTK:
-void PathwaySet::writeCombinedVTK(const std::string& filename) const
+void PathwaySet::writeCombinedVTK(const std::string& filename, size_t max_pathways) const
 {
+    const size_t num_pathways = std::min(max_pathways, pathways_.size());
+
     std::ofstream file(filename);
     if (!file.is_open()) {
         throw std::runtime_error("Cannot open file: " + filename);
     }
-
     // Count total points
     size_t total_points = 0;
-    for (const auto& p : pathways_) {
-        total_points += p.size();
+    for (size_t pi = 0; pi < num_pathways; ++pi) {
+        total_points += pathways_[pi].size();
     }
-
     // Write VTK header
     file << "# vtk DataFile Version 3.0\n";
-    file << "All pathways\n";
+    file << "All pathways (" << num_pathways << " of " << pathways_.size() << ")\n";
     file << "ASCII\n";
     file << "DATASET POLYDATA\n";
     file << "POINTS " << total_points << " double\n";
-
     // Write all points
-    for (const auto& p : pathways_) {
-        for (const auto& particle : p) {
+    for (size_t pi = 0; pi < num_pathways; ++pi) {
+        for (const auto& particle : pathways_[pi]) {
             file << particle.x() << " " << particle.y() << " 0.0\n";
         }
     }
-
     // Write line connectivity
-    file << "\nLINES " << pathways_.size() << " "
-         << (total_points + pathways_.size()) << "\n";
-
+    file << "\nLINES " << num_pathways << " "
+         << (total_points + num_pathways) << "\n";
     size_t point_offset = 0;
-    for (const auto& p : pathways_) {
+    for (size_t pi = 0; pi < num_pathways; ++pi) {
+        const auto& p = pathways_[pi];
         file << p.size();
         for (size_t i = 0; i < p.size(); ++i) {
             file << " " << (point_offset + i);
@@ -430,35 +428,29 @@ void PathwaySet::writeCombinedVTK(const std::string& filename) const
         file << "\n";
         point_offset += p.size();
     }
-
     // Write pathway IDs as cell data
-    file << "\nCELL_DATA " << pathways_.size() << "\n";
+    file << "\nCELL_DATA " << num_pathways << "\n";
     file << "SCALARS pathway_id int\n";
     file << "LOOKUP_TABLE default\n";
-    for (const auto& p : pathways_) {
-        file << p.id() << "\n";
+    for (size_t pi = 0; pi < num_pathways; ++pi) {
+        file << pathways_[pi].id() << "\n";
     }
-
     // Add point data for velocities and time
     file << "\nPOINT_DATA " << total_points << "\n";
-
-    // Write time
     file << "SCALARS time double\n";
     file << "LOOKUP_TABLE default\n";
-    for (const auto& p : pathways_) {
-        for (const auto& particle : p) {
+    for (size_t pi = 0; pi < num_pathways; ++pi) {
+        for (const auto& particle : pathways_[pi]) {
             file << particle.t() << "\n";
         }
     }
-
     // Write velocity vectors
     file << "\nVECTORS velocity double\n";
-    for (const auto& p : pathways_) {
-        for (const auto& particle : p) {
+    for (size_t pi = 0; pi < num_pathways; ++pi) {
+        for (const auto& particle : pathways_[pi]) {
             file << particle.qx() << " " << particle.qy() << " 0.0\n";
         }
     }
-
     file.close();
 }
 double PathwaySet::meanPathLength() const

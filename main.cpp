@@ -44,13 +44,14 @@ int main(int argc, char** argv)
     // -----------------------------
     RunOptions opts;
 
-    opts.upscale_only   = false;
+    opts.upscale_only   = true;
 
     // Scratch by default (no file loading). Enable via --hardcoded-mean.
-    opts.hardcoded_mean = false;
+    opts.hardcoded_mean = true;
 
     opts.solve_fine_scale_transport = false;
     opts.perform_particle_tracking = true;
+    opts.perform_upscaled_PT = true;
     opts.solve_upscale_transport    = true;
 
     // -----------------------------
@@ -73,7 +74,9 @@ int main(int argc, char** argv)
     // ---------------------------------------------------------
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260202_003241_std2_D0.1_aniso");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_std2_D0.01_aniso");
-    std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=2, D=0, aniso1&0.1");
+    //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=2, D=0, aniso1&0.1");
+    std::string resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso");
+
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=1, D=0, aniso1&0.1");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260210_183158_std1_D0.01_aniso1&0.1_df0.15");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260211_083055_std1_D0.1_aniso1&0.1_df0.15");
