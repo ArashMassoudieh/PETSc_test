@@ -1112,7 +1112,7 @@ static bool run_upscaled(
         g_u.writeNamedMatrix("C", Grid2D::ArrayKind::Cell, joinPath(up_dir, up_pfx + "Cu.txt"));
     }
 
-    if (opts.solve_upscale_transport) {
+    if (opts.perform_upscaled_PT) {
         const int n_particles = 100000;
         const double dx_step = 0.01;
 
