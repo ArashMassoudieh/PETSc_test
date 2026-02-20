@@ -47,9 +47,10 @@ int main(int argc, char** argv)
     opts.upscale_only   = false;
 
     // Scratch by default (no file loading). Enable via --hardcoded-mean.
-    opts.hardcoded_mean = true;
+    opts.hardcoded_mean = false;
 
     opts.solve_fine_scale_transport = false;
+    opts.perform_particle_tracking = true;
     opts.solve_upscale_transport    = true;
 
     // -----------------------------
@@ -201,7 +202,7 @@ int main(int argc, char** argv)
     P.diffusion_factor = 1;
 
     // "D" in naming = diffusion coefficient (physics diffusion)
-    P.Diffusion_coefficient = 0.1;
+    P.Diffusion_coefficient = 0.01;
 
     P.stdev = 1.0;
     P.g_mean = 0.0;
@@ -288,6 +289,7 @@ int main(int argc, char** argv)
         opts.wiener_rx = P.correlation_ls_x;
         opts.wiener_ry = P.correlation_ls_y;
         opts.wiener_Dx = P.Diffusion_coefficient;
+        opts.wiener_dt = 1.0/(opts.wiener_Dx*(1.0/pow(opts.wiener_rx,2) + 1.0/pow(opts.wiener_ry,2)))*0.001;
         return runDiffusionSimulation(opts, 1000000, wiener_dir);
     }
 

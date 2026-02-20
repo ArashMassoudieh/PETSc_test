@@ -414,16 +414,25 @@ static double computeAndFitAdvectiveCorrelation(
     int r)
 {
     PathwaySet pathways;
+    pathways.Initialize(10000, PathwaySet::Weighting::FluxWeighted, &g);
+    pathways.trackAllPathwaysWithDiffusion(&g, 0.01, g.getDiffusion());
 
+    // --- Breakthrough curves ---
+    const std::vector<double>& btc_locations = g.getBTCLocations();
+    if (!btc_locations.empty()) {
+        TimeSeriesSet<double> btc_pdf = pathways.getBreakthroughCurve(
+            btc_locations, true, PathwaySet::BTCType::PDF, 200);
+        btc_pdf.write(joinPath(fine_dir, pfx + "btc_pdf.csv"));
 
-    pathways.Initialize(1000, PathwaySet::Weighting::FluxWeighted, &g);
-    pathways.trackAllPathways(&g, 0.01);
+        TimeSeriesSet<double> btc_cdf = pathways.getBreakthroughCurve(
+            btc_locations, true, PathwaySet::BTCType::CDF);
+        btc_cdf.write(joinPath(fine_dir, pfx + "btc_cdf.csv"));
+    }
 
-
+    // --- Correlation analysis ---
     double Delta_x_min = 0.001, Delta_x_max = 0.5;
     int num_Delta_x = 30;
     int num_samples_per_Delta_x = 10000;
-
     TimeSeries<double> qx_correlation;
     for (int i = 0; i < num_Delta_x; ++i) {
         double exponent = static_cast<double>(i) / (num_Delta_x - 1);
@@ -434,15 +443,13 @@ static double computeAndFitAdvectiveCorrelation(
             qx_correlation.append(Delta_x, correlation);
         } catch (...) {}
     }
-
     qx_correlation.writefile(joinPath(fine_dir, pfx + "qx_correlation_vs_distance.txt"));
     outputs.advective_correlations.append(qx_correlation, "Realization" + aquiutils::numbertostring(r + 1));
-
     pathways.writeToFile(joinPath(fine_dir, pfx + "pathway_summary.txt"));
     pathways.writeCombinedVTK(joinPath(fine_dir, pfx + "all_pathways.vtk"));
-
     return qx_correlation.fitExponentialDecay();
 }
+
 
 static void writeRealizationMeta(
     const std::string& fine_dir,

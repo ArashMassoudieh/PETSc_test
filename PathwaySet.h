@@ -8,6 +8,7 @@
 #include <utility>
 #include "TimeSeries.h"
 #include <gsl/gsl_rng.h>
+#include "TimeSeriesSet.h"
 
 class Grid2D;  // Forward declaration
 
@@ -82,7 +83,19 @@ public:
     double calculateCorrelation(size_t pathway1_idx, size_t pathway2_idx,
                                 const std::string& quantity = "qx") const;
 
+
     TimeSeries<double> trackDiffusion(double dt, const double &rx, const double &ry, const double &D);
+
+    enum class BTCType {
+        CDF,
+        PDF
+    };
+
+    TimeSeriesSet<double> getBreakthroughData(const std::vector<double>& x_locations) const;
+    TimeSeriesSet<double> getBreakthroughCurve(const std::vector<double>& x_locations,
+                                               bool resident = false,
+                                               BTCType type = BTCType::CDF,
+                                               int n_bins = 200) const;
 
 private:
     std::vector<Pathway> pathways_;
