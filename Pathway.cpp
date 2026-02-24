@@ -428,6 +428,9 @@ void Pathway::trackParticleWithDiffusion(Grid2D* grid, double dx_step,
 
     const bool has_Dy = grid->hasFlux("D_y");
 
+    // Cap: diffusive jump <= cap_factor * dy
+    const double cap_factor = 2.0;
+
     Particle current = particles_.back();
     double t = current.t();
 
@@ -436,6 +439,7 @@ void Pathway::trackParticleWithDiffusion(Grid2D* grid, double dx_step,
 
     while (current.x() < Lx && step_count < max_steps) {
 
+        // --- 1. Get velocity at current position ---
         double vx, vy;
         try {
             auto vel = grid->getVelocityAt(current.x(), current.y(), qx_name, qy_name);
@@ -455,20 +459,11 @@ void Pathway::trackParticleWithDiffusion(Grid2D* grid, double dx_step,
             break;
         }
 
-        double dt = dx_step / v_mag;
-
-        // Advective displacement
-        double adv_dx = vx * dt;
-        double adv_dy = vy * dt;
-
-        // Longitudinal diffusion (always uses constant D)
-        double diff_dx = std::sqrt(2.0 * D * dt) * gsl_ran_gaussian_ziggurat(rng, 1.0);
-
-        // Transverse diffusion: use spatially varying D_y if available
+        // --- 2. Get local D_y AND its y-gradient (BEFORE dt) ---
         double D_y_local = D;
+        double dDy_dy = 0.0;   // Ito drift correction: d(D_y)/dy
+
         if (has_Dy) {
-            // Interpolate D_y at current position
-            // D_y is on horizontal faces: layout nx * (ny+1), same as qy
             const std::vector<double>& D_y = grid->flux("D_y");
 
             double px = current.x();
@@ -484,10 +479,10 @@ void Pathway::trackParticleWithDiffusion(Grid2D* grid, double dx_step,
             xi  = std::max(0.0, std::min(1.0, xi));
             eta = std::max(0.0, std::min(1.0, eta));
 
-            // Same interpolation pattern as qy in getVelocityAt
             int idx_bottom = j * nx + i;
             int idx_top    = (j + 1) * nx + i;
 
+            // --- Interpolate D_y at particle position ---
             if (i < nx - 1) {
                 int idx_bottom_right = j * nx + (i + 1);
                 int idx_top_right    = (j + 1) * nx + (i + 1);
@@ -498,15 +493,50 @@ void Pathway::trackParticleWithDiffusion(Grid2D* grid, double dx_step,
             } else {
                 D_y_local = (1.0 - eta) * D_y[idx_bottom] + eta * D_y[idx_top];
             }
-
-            // D_y can be zero at boundaries (u=0, u=1); clamp to non-negative
             D_y_local = std::max(0.0, D_y_local);
+
+            // --- Compute dD_y/dy via finite difference on face values ---
+            // D_y at face j and face j+1 are the values bounding this cell.
+            // Gradient within cell (i,j): (D_y[top] - D_y[bottom]) / dy
+            // Interpolate in x for consistency.
+            double grad_left = (D_y[idx_top] - D_y[idx_bottom]) / gdy;
+            if (i < nx - 1) {
+                int idx_bottom_right = j * nx + (i + 1);
+                int idx_top_right    = (j + 1) * nx + (i + 1);
+                double grad_right = (D_y[idx_top_right] - D_y[idx_bottom_right]) / gdy;
+                dDy_dy = (1.0 - xi) * grad_left + xi * grad_right;
+            } else {
+                dDy_dy = grad_left;
+            }
         }
 
-        double diff_dy = std::sqrt(2.0 * D_y_local * dt) * gsl_ran_gaussian_ziggurat(rng, 1.0);
+        // --- 3. Adaptive dt: cap based on local diffusion ---
+        double dt_adv = dx_step / v_mag;
+
+        double D_eff = std::max(D, D_y_local);
+        double dt_cap = (D_eff > 1e-15)
+                            ? (cap_factor * cap_factor * gdy * gdy) / (2.0 * D_eff)
+                            : 1e10;
+
+        double dt = std::min(dt_adv, dt_cap);
+
+        // --- 4. Compute displacements ---
+        double adv_dx = vx * dt;
+        double adv_dy = vy * dt;
+
+        // Longitudinal diffusion (constant D)
+        double diff_dx = std::sqrt(2.0 * D * dt) * gsl_ran_gaussian_ziggurat(rng, 1.0);
+
+        // Transverse: Ito drift correction + diffusive noise
+        // SDE: dy = (dD_y/dy) dt + sqrt(2 D_y) dW
+        double drift_dy = dDy_dy * dt;
+        double noise_dy = std::sqrt(2.0 * D_y_local * dt) * gsl_ran_gaussian_ziggurat(rng, 1.0);
+        double diff_dy = drift_dy + noise_dy;
 
         double new_x = current.x() + adv_dx + diff_dx;
         double new_y = current.y() + adv_dy + diff_dy;
+
+        // --- 5. Boundary conditions ---
 
         // Right boundary exit
         if (new_x >= Lx) {
@@ -523,7 +553,12 @@ void Pathway::trackParticleWithDiffusion(Grid2D* grid, double dx_step,
             break;
         }
 
-        // Reflect off top/bottom boundaries
+        // Left boundary: reflect
+        if (new_x < 0.0) {
+            new_x = -new_x;
+        }
+
+        // Top/bottom boundaries: reflect
         if (new_y < 0.0) {
             new_y = -new_y;
         } else if (new_y > Ly) {
@@ -547,6 +582,8 @@ void Pathway::trackParticleWithDiffusion(Grid2D* grid, double dx_step,
     setUniformX(false);
     setUniformXChecked(true);
 }
+
+
 
 bool Pathway::isUniformX(double tolerance) const
 {

@@ -52,7 +52,7 @@ int main(int argc, char** argv)
     opts.solve_fine_scale_transport = false;
     opts.solve_upscale_transport    = false;
 
-    opts.perform_particle_tracking = false;
+    opts.perform_particle_tracking = true;
     opts.perform_upscaled_PT = true;
 
 
@@ -76,8 +76,8 @@ int main(int argc, char** argv)
     // ---------------------------------------------------------
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260202_003241_std2_D0.1_aniso");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_std2_D0.01_aniso");
-    std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=2, D=0, aniso1&0.1");
-    //std::string resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso");
+    //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=2, D=0, aniso1&0.1");
+    std::string resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso");
 
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=1, D=0, aniso1&0.1");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260210_183158_std1_D0.01_aniso1&0.1_df0.15");
@@ -194,9 +194,9 @@ int main(int argc, char** argv)
     // Params (kept here)
     // -----------------------------
     SimParams P;
-    P.nx = 150;
-    P.ny = 100;
-    P.nu = 100;
+    P.nx = 300;
+    P.ny = 50;
+    P.nu = 50;
     P.Lx = 3.0;
     P.Ly = 1.0;
 
@@ -204,7 +204,7 @@ int main(int argc, char** argv)
     P.correlation_ls_y = 0.1;
 
     // calibration target
-    P.diffusion_factor = 0.15;
+    P.diffusion_factor = 1;
 
     // "D" in naming = diffusion coefficient (physics diffusion)
     P.Diffusion_coefficient = 0;
