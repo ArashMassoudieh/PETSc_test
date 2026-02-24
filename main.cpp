@@ -7,7 +7,7 @@
 #include <iostream>
 #include <string>
 #include <mpi.h>
-#include <cmath>        // std::round, std::abs
+#include <cmath>        // std::round, std::abs, pow
 #include <limits>
 #include <fstream>
 
@@ -55,7 +55,6 @@ int main(int argc, char** argv)
     opts.perform_particle_tracking = true;
     opts.perform_upscaled_PT = true;
 
-
     // -----------------------------
     // NEW: Wiener defaults (OFF unless --wiener)
     // -----------------------------
@@ -78,7 +77,6 @@ int main(int argc, char** argv)
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_std2_D0.01_aniso");
     std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=2, D=0, aniso1&0.1");
     //std::string resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso");
-
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=1, D=0, aniso1&0.1");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260210_183158_std1_D0.01_aniso1&0.1_df0.15");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260211_083055_std1_D0.1_aniso1&0.1_df0.15");
@@ -135,6 +133,7 @@ int main(int argc, char** argv)
 
         // --- plotter switches ---
         else if (a == "--plotter") plotter = true;
+        else if (a == "--no-plotter") plotter = false;
 
         else if (a == "--tbase")      tbase_mode = TBaseMode::Fixed;
         else if (a == "--t-upscaled") tbase_mode = TBaseMode::FromUpscaled;
@@ -241,7 +240,6 @@ int main(int argc, char** argv)
     // -------------------------------------------------
     if (opts.hardcoded_mean) {
 
-        // Resume folder should not be empty (only in hardcoded_mean mode)
         if (resume_run_dir.empty()) {
             if (rank == 0) {
                 std::cerr << "ERROR: resume_run_dir is empty. "
@@ -250,12 +248,10 @@ int main(int argc, char** argv)
             MPI_Abort(PETSC_COMM_WORLD, 66);
         }
 
-        // If user did NOT provide --qx-cdf, point to expected file in resume_run_dir
         if (!user_set_qx_cdf) {
             opts.hardcoded_qx_cdf_path = joinPath(resume_run_dir, "mean_qx_inverse_cdf.txt");
         }
 
-        // qx file must exist (no silent fallback) (only in hardcoded_mean mode)
         if (!fileExists(opts.hardcoded_qx_cdf_path)) {
             if (rank == 0) {
                 std::cerr << "ERROR: qx inverse-CDF file not found:\n"
@@ -264,12 +260,10 @@ int main(int argc, char** argv)
             MPI_Abort(PETSC_COMM_WORLD, 88);
         }
 
-        // Default black mean from the same resume folder (unless overridden)
         if (black_mean_csv.empty()) {
             black_mean_csv = joinPath(resume_run_dir, "BTC_mean.csv");
         }
 
-        // warning-only sanity check (only when resume folder is actually used)
         if (opts.upscale_only || opts.hardcoded_mean) {
             std::string err;
             if (!validate_resume_run_dir(resume_run_dir, P, err)) {
@@ -283,9 +277,11 @@ int main(int argc, char** argv)
 
     } else {
         // SCRATCH MODE: do not require any resume folder or qx-cdf file.
-        // We intentionally do NOT touch opts.hardcoded_qx_cdf_path and do NOT check files.
     }
 
+    // -----------------------------
+    // Wiener run (early exit)
+    // -----------------------------
     if (opts.wiener_enable)
     {
         const std::string run_tag = make_run_tag_std_D_aniso_df(P);
@@ -299,15 +295,12 @@ int main(int argc, char** argv)
     }
 
     // -----------------------------
-    // HardcodedMean H:
-    //   - Only loaded from file when opts.hardcoded_mean == true
-    //   - In scratch mode, it is left unused (runner should ignore it)
+    // HardcodedMean H (only loaded when hardcoded_mean == true)
     // -----------------------------
     HardcodedMean H;
 
     if (opts.hardcoded_mean) {
 
-        // Make it obvious if something accidentally remains unset (optional, but helpful)
         H.lc_mean  = std::numeric_limits<double>::quiet_NaN();
         H.lx_mean  = std::numeric_limits<double>::quiet_NaN();
         H.ly_mean  = std::numeric_limits<double>::quiet_NaN();
@@ -315,10 +308,8 @@ int main(int argc, char** argv)
         H.nu_x     = std::numeric_limits<double>::quiet_NaN();
         H.nu_y     = std::numeric_limits<double>::quiet_NaN();
 
-        // Keep constants as you had (unless you also want them read from file)
         H.qx_const = 1.0;
 
-        // Load from mean_params.txt (REQUIRED)
         {
             const std::string mean_path = joinPath(resume_run_dir, "mean_params.txt");
             if (!fileExists(mean_path)) {
@@ -353,9 +344,6 @@ int main(int argc, char** argv)
                 std::cout << "Using qx inverse-CDF: " << opts.hardcoded_qx_cdf_path << "\n";
             }
         }
-
-    } else {
-        // SCRATCH MODE: do not load mean params. H should be ignored because opts.hardcoded_mean == false.
     }
 
     // -----------------------------
@@ -363,7 +351,6 @@ int main(int argc, char** argv)
     // -----------------------------
     if (do_calib) {
 
-        // Score-only should scan the CALIBRATION folder by default, not output_dir.
         if (score_root_dir.empty()) score_root_dir = calib_root_dir;
 
         // SCORE-ONLY
@@ -456,8 +443,23 @@ int main(int argc, char** argv)
                     const std::string out_cmp = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare.csv");
                     out.Fine_Scale_BTCs[i].write(out_cmp);
                 }
+
                 const std::string out_mean = joinPath(out.run_dir, "BTC_mean.csv");
                 out.mean_BTCs.write(out_mean);
+
+                // separated means (NO mixing)
+                {
+                    const std::string out_tr = joinPath(out.run_dir, "BTC_mean_transport_full.csv");
+                    out.mean_transport_full.write(out_tr);
+                }
+                {
+                    const std::string out_pt_pdf = joinPath(out.run_dir, "PT_mean_pdf.csv");
+                    out.mean_pt_pdf.write(out_pt_pdf);
+                }
+                {
+                    const std::string out_pt_cdf = joinPath(out.run_dir, "PT_mean_cdf.csv");
+                    out.mean_pt_cdf.write(out_pt_cdf);
+                }
 
                 df_list_rank0.push_back(df);
                 run_dirs_rank0.push_back(out.run_dir);
@@ -519,37 +521,54 @@ int main(int argc, char** argv)
         MPI_Abort(PETSC_COMM_WORLD, 123);
     }
 
-    // Write compare + mean CSVs
-    for (int i = 0; i < (int)P.xLocations.size(); ++i) {
-        const std::string out_cmp = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare.csv");
-        out.Fine_Scale_BTCs[i].write(out_cmp);
-        if (rank == 0) std::cout << "Wrote: " << out_cmp << "\n";
-    }
-    {
-        const std::string out_mean = joinPath(out.run_dir, "BTC_mean.csv");
-        out.mean_BTCs.write(out_mean);
-        if (rank == 0) std::cout << "Wrote: " << out_mean << "\n";
-    }
-
-    // Plotter (rank 0 only)
-    if (plotter && rank == 0) {
-        const bool okp = run_final_aggregation_and_plots(
-            out.run_dir,
-            out.up_btc_path,
-            out.up_btc_deriv_path,
-            tbase_mode,
-            align_mode,
-            use_timeseriesset_mean,
-            /*t_end_cmp=*/10.0,
-            /*dt_cmp=*/0.001
-        );
-
-        if (!okp) std::cerr << "WARNING: final aggregation/plotting reported failure.\n";
-    }
-
+    // Write compare + mean CSVs (RANK 0 ONLY — avoid clobber/races)
     if (rank == 0) {
+        for (int i = 0; i < (int)P.xLocations.size(); ++i) {
+            const std::string out_cmp = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare.csv");
+            out.Fine_Scale_BTCs[i].write(out_cmp);
+            std::cout << "Wrote: " << out_cmp << "\n";
+        }
+        {
+            // Keep legacy scoring mean exactly as before
+            const std::string out_mean = joinPath(out.run_dir, "BTC_mean.csv");
+            out.mean_BTCs.write(out_mean);
+            std::cout << "Wrote: " << out_mean << "\n";
+        }
+
+        // separated means (NO mixing)
+        {
+            const std::string out_tr = joinPath(out.run_dir, "BTC_mean_transport_full.csv");
+            out.mean_transport_full.write(out_tr);
+            std::cout << "Wrote: " << out_tr << "\n";
+        }
+        {
+            const std::string out_pt_pdf = joinPath(out.run_dir, "PT_mean_pdf.csv");
+            out.mean_pt_pdf.write(out_pt_pdf);
+            std::cout << "Wrote: " << out_pt_pdf << "\n";
+        }
+        {
+            const std::string out_pt_cdf = joinPath(out.run_dir, "PT_mean_cdf.csv");
+            out.mean_pt_cdf.write(out_pt_cdf);
+            std::cout << "Wrote: " << out_pt_cdf << "\n";
+        }
+
+        // Plotter (rank 0 only) — AFTER writing outputs
+        if (plotter) {
+            const bool okp = run_final_aggregation_and_plots(
+                out.run_dir,
+                out.up_btc_path,
+                out.up_btc_deriv_path,
+                tbase_mode,
+                align_mode,
+                use_timeseriesset_mean,
+                /*t_end_cmp=*/10.0,
+                /*dt_cmp=*/0.001
+            );
+
+            if (!okp) std::cerr << "WARNING: final aggregation/plotting reported failure.\n";
+        }
+
         std::cout << "\nMixing PDF simulation complete!\n";
-        // Only meaningful as "input source" when hardcoded_mean enabled, but keep your print
         std::cout << "Resume folder (input source): " << resume_run_dir << "\n";
         std::cout << "All outputs saved to (new run dir): " << out.run_dir << "\n";
 

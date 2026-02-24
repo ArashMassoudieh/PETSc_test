@@ -7,15 +7,8 @@
 
 // Keep sim_runner.h LIGHT.
 // Do NOT include grid.h here (it causes heavy include chains / incomplete type issues).
-// Only include what we must for types used in signatures.
 #include "TimeSeries.h"
 #include "TimeSeriesSet.h"
-
-// NOTE:
-// Do NOT include sim_helpers.h here.
-// sim_runner.cpp can include sim_helpers.h as needed.
-// This avoids circular / heavy include chains (plotter.cpp includes sim_helpers.h).
-// sim_runner.h is meant to stay lightweight.
 
 // -----------------------------
 // Simulation switches / options
@@ -31,7 +24,7 @@ struct RunOptions
     bool solve_upscale_transport    = true;
 
     // particle tracking toggles
-    bool perform_particle_tracking  = true; // fine-scale PT (per realization) if your sim_runner.cpp uses it
+    bool perform_particle_tracking  = true; // fine-scale PT (per realization)
     bool perform_upscaled_PT        = true; // upscaled PT
 
     // When hardcoded_mean=true, you can supply a qx inverse-CDF file (u,v).
@@ -44,22 +37,16 @@ struct RunOptions
     std::string hardcoded_qx_cdf_path;
 
     // -----------------------------
-    // NEW: Wiener particle tracker (1D/2D)
+    // Wiener particle tracker (1D/2D)
     // -----------------------------
     bool wiener_enable = false;          // default OFF
-
-    // "1dx" | "1dy" | "2d"
-    std::string wiener_mode = "2d";
-
-    // axis-aligned anisotropic diffusion (ellipse when Dx != Dy)
+    std::string wiener_mode = "2d";      // "1dx" | "1dy" | "2d"
     double wiener_Dx = 0.0;
     double wiener_rx = 0.0;
     double wiener_ry = 0.0;
     double wiener_dt = 1e-3;
     unsigned long wiener_seed = 12345UL;
-
-    // "left-uniform" | "left-flux" | "center"
-    std::string wiener_release = "left-flux";
+    std::string wiener_release = "left-flux"; // "left-uniform" | "left-flux" | "center"
 };
 
 struct FineScaleOutputs
@@ -76,30 +63,31 @@ struct FineScaleOutputs
     TimeSeriesSet<double> qx_pdfs;
 
     // Fitted parameters per realization
-    std::vector<double> lc_all;           // advective correlation length
-    std::vector<double> velocity_lx_all;  // velocity lambda_x
-    std::vector<double> velocity_ly_all;  // velocity lambda_y
-    std::vector<double> K_lx_all;         // K lambda_x
-    std::vector<double> K_ly_all;         // K lambda_y
-    std::vector<double> dt_all;           // optimal timesteps
+    std::vector<double> lc_all;
+    std::vector<double> velocity_lx_all;
+    std::vector<double> velocity_ly_all;
+    std::vector<double> K_lx_all;
+    std::vector<double> K_ly_all;
+    std::vector<double> dt_all;
 
     // Mean parameters
     double nu_x_mean = 1.5;
     double nu_y_mean = 1.5;
     double lambda_K_x_mean = 0.0;
     double lambda_K_y_mean = 0.0;
-    double lc_mean = 0.0;              // advective correlation mean
-    double velocity_lx_mean = 0.0;     // velocity lambda_x mean
-    double velocity_ly_mean = 0.0;     // velocity lambda_y mean
+    double lc_mean = 0.0;
+    double velocity_lx_mean = 0.0;
+    double velocity_ly_mean = 0.0;
     double dt_mean = 0.0;
 
-    // BTCs per location (each TimeSeriesSet holds all realizations; upscaled may be appended later)
+    // TRANSPORT compare stacks (per-x), stores derivative curves
     std::vector<TimeSeriesSet<double>> BTCs;
+
+    // PT compare stacks (SEPARATE)
+    std::vector<TimeSeriesSet<double>> PT_pdfs;
+    std::vector<TimeSeriesSet<double>> PT_cdfs;
 };
 
-// -----------------------------
-// Hardcoded mean parameters
-// -----------------------------
 struct HardcodedMean
 {
     double lc_mean = 0.0;
@@ -113,9 +101,6 @@ struct HardcodedMean
     double qx_const = 0.0;
 };
 
-// -----------------------------
-// Simulation parameters (input)
-// -----------------------------
 struct SimParams
 {
     int nx = 0;
@@ -149,18 +134,26 @@ struct SimParams
     std::pair<double,double> correlation_y_range = {0.001, 0.02};
 };
 
-// -----------------------------
-// Outputs (written by runner)
-// -----------------------------
 struct RunOutputs
 {
     std::string run_dir;
 
-    // per-location stacks (each element is a TimeSeriesSet holding all realizations + upscaled)
+    // TRANSPORT compare stacks (per-x)
     std::vector<TimeSeriesSet<double>> Fine_Scale_BTCs;
 
-    // mean BTC per location (one series per x)
+    // Backward-compatible mean container (TRANSPORT mean)
     TimeSeriesSet<double> mean_BTCs;
+
+    // Preferred explicit transport mean
+    TimeSeriesSet<double> mean_transport_full;
+
+    // PT compare stacks (SEPARATE)
+    std::vector<TimeSeriesSet<double>> Fine_Scale_PT_pdf;
+    std::vector<TimeSeriesSet<double>> Fine_Scale_PT_cdf;
+
+    // PT means (per-x)
+    TimeSeriesSet<double> mean_pt_pdf;
+    TimeSeriesSet<double> mean_pt_cdf;
 
     // upscaled outputs (paths)
     std::string up_dir;
@@ -168,12 +161,8 @@ struct RunOutputs
     std::string up_btc_deriv_path;
 };
 
-// -----------------------------
-// API
-// -----------------------------
-
 // Creates/chooses a run directory (rank0 decides; broadcasts to all ranks).
-// NOTE: In upscale-only mode, sim_runner.cpp now ALWAYS creates a NEW output run_dir.
+// NOTE: In upscale-only mode, sim_runner.cpp ALWAYS creates a NEW output run_dir.
 //       resume_run_dir is treated as INPUT source only.
 std::string prepare_run_dir_mpi(
     const std::string& output_dir,
@@ -183,10 +172,8 @@ std::string prepare_run_dir_mpi(
     const std::string& run_tag = "");
 
 // Runs fine loop (unless upscale_only) + mean building + upscaled run.
-// Requires out.run_dir already set (usually from prepare_run_dir_mpi).
-//
-// IMPORTANT: For strict upscale-only (hardcoded_mean==false), the mean files are loaded
-//            from resume_run_dir (INPUT SOURCE), while outputs are written to out.run_dir (NEW folder).
+// IMPORTANT: For strict upscale-only (hardcoded_mean==false), mean files are loaded
+//            from resume_run_dir (INPUT SOURCE), outputs are written to out.run_dir (NEW folder).
 bool run_simulation_blocks(
     const SimParams& P,
     const RunOptions& opts,
@@ -195,5 +182,5 @@ bool run_simulation_blocks(
     RunOutputs& out,
     int rank);
 
-// Optional Wiener diffusion runner (as you had)
+// Optional Wiener diffusion runner
 int runDiffusionSimulation(const RunOptions &opts, int realization, const std::string &output_dir);
