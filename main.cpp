@@ -44,10 +44,10 @@ int main(int argc, char** argv)
     // -----------------------------
     RunOptions opts;
 
-    opts.upscale_only   = true;
+    opts.upscale_only   = false;
 
     // Scratch by default (no file loading). Enable via --hardcoded-mean.
-    opts.hardcoded_mean = true;
+    opts.hardcoded_mean = false;
 
     opts.solve_fine_scale_transport = false;
     opts.solve_upscale_transport    = false;
@@ -76,8 +76,8 @@ int main(int argc, char** argv)
     // ---------------------------------------------------------
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260202_003241_std2_D0.1_aniso");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_std2_D0.01_aniso");
-    //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=2, D=0, aniso1&0.1");
-    std::string resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso");
+    std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=2, D=0, aniso1&0.1");
+    //std::string resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso");
 
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=1, D=0, aniso1&0.1");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260210_183158_std1_D0.01_aniso1&0.1_df0.15");
@@ -151,7 +151,7 @@ int main(int argc, char** argv)
         else if (a.rfind("--wmode=", 0) == 0) opts.wiener_mode = a.substr(std::string("--wmode=").size());
 
         // NOTE: Keeping your exact parsing (even if indices look off) since you said "don't change anything"
-        else if (a.rfind("--D=", 0) == 0)    opts.wiener_Dx = std::stod(a.substr(5));
+        else if (a.rfind("--D=", 0) == 0)     opts.wiener_Dx = std::stod(a.substr(5));
         else if (a.rfind("--rx=", 0) == 0)    opts.wiener_rx = std::stod(a.substr(6));
         else if (a.rfind("--ry=", 0) == 0)    opts.wiener_ry = std::stod(a.substr(7));
         else if (a.rfind("--wdt=", 0) == 0)   opts.wiener_dt = std::stod(a.substr(8));
@@ -445,7 +445,7 @@ int main(int argc, char** argv)
             RunOutputs out;
             out.run_dir = prepare_run_dir_mpi(calib_root_dir, resume_run_dir, opts, rank, run_tag);
 
-            const bool ok = run_simulation_blocks(P, opts, H, out, rank);
+            const bool ok = run_simulation_blocks(P, opts, H, resume_run_dir, out, rank);
             if (!ok) {
                 if (rank == 0) std::cerr << "ERROR: simulation failed for df=" << df << "\n";
                 MPI_Abort(PETSC_COMM_WORLD, 123);
@@ -513,7 +513,7 @@ int main(int argc, char** argv)
     RunOutputs out;
     out.run_dir = prepare_run_dir_mpi(output_dir, resume_run_dir, opts, rank, run_tag);
 
-    const bool ok = run_simulation_blocks(P, opts, H, out, rank);
+    const bool ok = run_simulation_blocks(P, opts, H, resume_run_dir, out, rank);
     if (!ok) {
         if (rank == 0) std::cerr << "ERROR: simulation runner failed.\n";
         MPI_Abort(PETSC_COMM_WORLD, 123);

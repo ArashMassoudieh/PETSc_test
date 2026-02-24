@@ -1,9 +1,9 @@
 // sim_runner.h
-
 #pragma once
 
 #include <string>
 #include <vector>
+#include <utility>   // std::pair
 
 // Keep sim_runner.h LIGHT.
 // Do NOT include grid.h here (it causes heavy include chains / incomplete type issues).
@@ -23,14 +23,17 @@
 struct RunOptions
 {
     // run modes
-    bool upscale_only   = false;   // skip fine loop; do only upscaled (requires run_dir unless hardcoded_mean)
+    bool upscale_only   = false;   // skip fine loop; do only upscaled (requires input dir unless hardcoded_mean)
     bool hardcoded_mean = false;   // use hardcoded lc/lx/ly/dt; and optionally load qx inverse-CDF from file
 
     // transport toggles
     bool solve_fine_scale_transport = true;
     bool solve_upscale_transport    = true;
-    bool perform_particle_tracking = true;
-    bool perform_upscaled_PT = true;
+
+    // particle tracking toggles
+    bool perform_particle_tracking  = true; // fine-scale PT (per realization) if your sim_runner.cpp uses it
+    bool perform_upscaled_PT        = true; // upscaled PT
+
     // When hardcoded_mean=true, you can supply a qx inverse-CDF file (u,v).
     // Priority used by sim_runner.cpp (hardcoded_mean case):
     //   1) load mean_qx_inverse_cdf.txt from this path (if exists / valid)
@@ -40,22 +43,23 @@ struct RunOptions
     // NOTE: sim_runner.cpp will ALSO copy/write mean_qx_inverse_cdf.txt into the new run_dir.
     std::string hardcoded_qx_cdf_path;
 
-        // -----------------------------
-        // NEW: Wiener particle tracker (1D/2D)
-        // -----------------------------
-        bool wiener_enable = false;          // default OFF
-        // "1dx" | "1dy" | "2d"
-        std::string wiener_mode = "2d";
+    // -----------------------------
+    // NEW: Wiener particle tracker (1D/2D)
+    // -----------------------------
+    bool wiener_enable = false;          // default OFF
 
-        // axis-aligned anisotropic diffusion (ellipse when Dx != Dy)
-        double wiener_Dx = 0.0;
-        double wiener_rx = 0.0;
-        double wiener_ry = 0.0;
-        double wiener_dt = 1e-3;
-        unsigned long wiener_seed = 12345UL;
+    // "1dx" | "1dy" | "2d"
+    std::string wiener_mode = "2d";
 
-        // "left-uniform" | "left-flux" | "center"
-        std::string wiener_release = "left-flux";
+    // axis-aligned anisotropic diffusion (ellipse when Dx != Dy)
+    double wiener_Dx = 0.0;
+    double wiener_rx = 0.0;
+    double wiener_ry = 0.0;
+    double wiener_dt = 1e-3;
+    unsigned long wiener_seed = 12345UL;
+
+    // "left-uniform" | "left-flux" | "center"
+    std::string wiener_release = "left-flux";
 };
 
 struct FineScaleOutputs
@@ -79,7 +83,6 @@ struct FineScaleOutputs
     std::vector<double> K_ly_all;         // K lambda_y
     std::vector<double> dt_all;           // optimal timesteps
 
-
     // Mean parameters
     double nu_x_mean = 1.5;
     double nu_y_mean = 1.5;
@@ -88,9 +91,9 @@ struct FineScaleOutputs
     double lc_mean = 0.0;              // advective correlation mean
     double velocity_lx_mean = 0.0;     // velocity lambda_x mean
     double velocity_ly_mean = 0.0;     // velocity lambda_y mean
-    double dt_mean;
+    double dt_mean = 0.0;
 
-    // BTCs per location
+    // BTCs per location (each TimeSeriesSet holds all realizations; upscaled may be appended later)
     std::vector<TimeSeriesSet<double>> BTCs;
 };
 
@@ -129,7 +132,7 @@ struct SimParams
     double correlation_ls_y = 0.0;
     double stdev = 0.0;
     double g_mean = 0.0;
-    double diffusion_factor = 1;
+    double diffusion_factor = 1.0;
 
     unsigned long run_seed = 0UL;
 
@@ -138,9 +141,12 @@ struct SimParams
     double t_end_pdf = 0.0;
 
     std::vector<double> xLocations;
-    enum class correlationmode {exponentialfit, derivative, gaussian, matern, oneoversums} CorrelationModel = correlationmode::derivative;
-    pair<double,double> correlation_x_range = {0.001,0.02};
-    pair<double,double> correlation_y_range = {0.001,0.02};
+
+    enum class correlationmode { exponentialfit, derivative, gaussian, matern, oneoversums }
+        CorrelationModel = correlationmode::derivative;
+
+    std::pair<double,double> correlation_x_range = {0.001, 0.02};
+    std::pair<double,double> correlation_y_range = {0.001, 0.02};
 };
 
 // -----------------------------
@@ -167,6 +173,8 @@ struct RunOutputs
 // -----------------------------
 
 // Creates/chooses a run directory (rank0 decides; broadcasts to all ranks).
+// NOTE: In upscale-only mode, sim_runner.cpp now ALWAYS creates a NEW output run_dir.
+//       resume_run_dir is treated as INPUT source only.
 std::string prepare_run_dir_mpi(
     const std::string& output_dir,
     const std::string& resume_run_dir,
@@ -176,12 +184,16 @@ std::string prepare_run_dir_mpi(
 
 // Runs fine loop (unless upscale_only) + mean building + upscaled run.
 // Requires out.run_dir already set (usually from prepare_run_dir_mpi).
+//
+// IMPORTANT: For strict upscale-only (hardcoded_mean==false), the mean files are loaded
+//            from resume_run_dir (INPUT SOURCE), while outputs are written to out.run_dir (NEW folder).
 bool run_simulation_blocks(
     const SimParams& P,
     const RunOptions& opts,
     const HardcodedMean& H,
+    const std::string& resume_run_dir,
     RunOutputs& out,
     int rank);
 
-
+// Optional Wiener diffusion runner (as you had)
 int runDiffusionSimulation(const RunOptions &opts, int realization, const std::string &output_dir);

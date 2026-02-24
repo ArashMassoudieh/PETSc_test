@@ -12,6 +12,8 @@
 #include <sstream>
 #include <cctype>
 #include <cmath>
+#include <limits>
+#include <iomanip>
 
 #include "grid.h"
 #include "Pathway.h"
@@ -34,30 +36,38 @@ std::string prepare_run_dir_mpi(
     if (rank == 0) {
         createDirectory(output_dir);
 
+        // -------------------------------------------------------------
+        // IMPORTANT CHANGE:
+        //   In upscale-only mode, ALWAYS create a NEW output run_dir.
+        //   resume_run_dir is treated as INPUT SOURCE only.
+        // -------------------------------------------------------------
         if (opts.upscale_only) {
-            if (opts.hardcoded_mean) {
-                // ALWAYS create a fresh run directory
-                std::string name = "run_" + makeTimestamp();
-                if (!run_tag.empty()) name += "_" + run_tag;
-                run_dir = joinPath(output_dir, name);
-                createDirectory(run_dir);
 
-                std::cout << "Hardcoded-mean upscaled-only: created NEW run_dir: "
-                          << run_dir << "\n";
-            }
-            else {
-                // strict upscale-only: must point to existing run dir
+            // In strict upscale-only (no hardcoded mean), REQUIRE existing input folder.
+            if (!opts.hardcoded_mean) {
                 if (resume_run_dir.empty()) {
-                    std::cerr << "ERROR: --upscale-only requires --run-dir=/path/to/run_YYYYMMDD_HHMMSS\n";
+                    std::cerr << "ERROR: --upscale-only (without --hardcoded-mean) requires --run-dir=/path/to/input_run\n";
                     MPI_Abort(PETSC_COMM_WORLD, 1);
                 }
-                run_dir = resume_run_dir;
-                if (!dirExists(run_dir)) {
-                    std::cerr << "ERROR: run_dir does not exist: " << run_dir << "\n";
+                if (!dirExists(resume_run_dir)) {
+                    std::cerr << "ERROR: input resume_run_dir does not exist: " << resume_run_dir << "\n";
                     MPI_Abort(PETSC_COMM_WORLD, 2);
                 }
-                std::cout << "Upscale-only: using run_dir: " << run_dir << "\n";
             }
+
+            std::string name = "run_" + makeTimestamp();
+            if (!run_tag.empty()) name += "_" + run_tag;
+            run_dir = joinPath(output_dir, name);
+            createDirectory(run_dir);
+
+            if (opts.hardcoded_mean) {
+                std::cout << "Hardcoded-mean upscaled-only: created NEW run_dir: "
+                          << run_dir << "\n";
+            } else {
+                std::cout << "Upscale-only: INPUT source = " << resume_run_dir << "\n";
+                std::cout << "Upscale-only: OUTPUT run_dir = " << run_dir << "\n";
+            }
+
         } else {
             std::string name = "run_" + makeTimestamp();
             if (!run_tag.empty()) name += "_" + run_tag;
@@ -191,6 +201,89 @@ static bool build_mean_qx_inverse_cdf_from_multi(
 }
 
 // ============================================================================
+// NEW: Particle-tracking mean arrival time helpers (per-realization + mean)
+// ============================================================================
+
+static inline double trapz_integral(const TimeSeries<double>& ts)
+{
+    const int n = (int)ts.size();
+    if (n < 2) return 0.0;
+
+    double area = 0.0;
+    for (int i = 1; i < n; ++i) {
+        const double t0 = ts.getTime(i - 1);
+        const double t1 = ts.getTime(i);
+        const double y0 = ts.getValue(i - 1);
+        const double y1 = ts.getValue(i);
+        const double dt = (t1 - t0);
+        if (!std::isfinite(dt) || dt <= 0.0) continue;
+        if (!std::isfinite(y0) || !std::isfinite(y1)) continue;
+        area += 0.5 * (y0 + y1) * dt;
+    }
+    return area;
+}
+
+static inline double trapz_integral_t_times_y(const TimeSeries<double>& ts)
+{
+    const int n = (int)ts.size();
+    if (n < 2) return 0.0;
+
+    double area = 0.0;
+    for (int i = 1; i < n; ++i) {
+        const double t0 = ts.getTime(i - 1);
+        const double t1 = ts.getTime(i);
+        const double y0 = ts.getValue(i - 1);
+        const double y1 = ts.getValue(i);
+        const double dt = (t1 - t0);
+        if (!std::isfinite(dt) || dt <= 0.0) continue;
+        if (!std::isfinite(y0) || !std::isfinite(y1)) continue;
+
+        // trapezoid on (t*y)
+        area += 0.5 * (t0 * y0 + t1 * y1) * dt;
+    }
+    return area;
+}
+
+static inline double mean_time_from_pdf(const TimeSeries<double>& pdf_ts)
+{
+    const double den = trapz_integral(pdf_ts);
+    if (!(den > 0.0) || !std::isfinite(den)) return std::numeric_limits<double>::quiet_NaN();
+    const double num = trapz_integral_t_times_y(pdf_ts);
+    return num / den;
+}
+
+// Reads: x,mean_arrival_time (delimiter-robust)
+static bool read_pt_mean_csv(const std::string& path, std::vector<double>& x, std::vector<double>& mu)
+{
+    x.clear(); mu.clear();
+
+    std::ifstream f(path);
+    if (!f) return false;
+
+    std::string header;
+    if (!std::getline(f, header)) return false;
+    const char delim = detect_delim(header);
+
+    std::string line;
+    while (std::getline(f, line)) {
+        line = trim_copy(line);
+        if (line.empty()) continue;
+
+        const auto tok = split_line_delim(line, delim);
+        if (tok.size() < 2) continue;
+
+        double xv = 0.0, muv = 0.0;
+        if (!try_parse_double(tok[0], xv)) continue;
+        if (!try_parse_double(tok[1], muv)) continue;
+
+        x.push_back(xv);
+        mu.push_back(muv);
+    }
+
+    return !x.empty();
+}
+
+// ============================================================================
 // Helper functions for fine-scale loop
 // ============================================================================
 
@@ -207,7 +300,7 @@ static void generateKField(Grid2D& g, const SimParams& P, unsigned long seed)
     }
 }
 
-static pair<double, double> computeAndFitKCorrelations(
+static std::pair<double, double> computeAndFitKCorrelations(
     Grid2D& g,
     const SimParams& P,
     const std::string& fine_dir,
@@ -270,7 +363,7 @@ static pair<double, double> computeAndFitKCorrelations(
     return {lambda_K_x, lambda_K_y};
 }
 
-static pair<double, double> computeAndFitVelocityCorrelations(
+static std::pair<double, double> computeAndFitVelocityCorrelations(
     Grid2D& g,
     const SimParams& P,
     const std::string& fine_dir,
@@ -424,6 +517,19 @@ static double computeAndFitAdvectiveCorrelation(
             btc_locations, true, PathwaySet::BTCType::PDF, 200);
         btc_pdf.write(joinPath(fine_dir, pfx + "btc_pdf.csv"));
 
+        // --- NEW: per-realization PT mean arrival time (from PDF) ---
+        {
+            const std::string mean_csv = joinPath(fine_dir, pfx + "PT_mean_arrival_time.csv");
+            std::ofstream mf(mean_csv);
+            mf << "x,mean_arrival_time\n";
+            mf << std::setprecision(15);
+
+            for (int i = 0; i < (int)btc_locations.size() && i < (int)btc_pdf.size(); ++i) {
+                const double mu = mean_time_from_pdf(btc_pdf[i]);
+                mf << btc_locations[i] << "," << mu << "\n";
+            }
+        }
+
         TimeSeriesSet<double> btc_cdf = pathways.getBreakthroughCurve(
             btc_locations, true, PathwaySet::BTCType::CDF);
         btc_cdf.write(joinPath(fine_dir, pfx + "btc_cdf.csv"));
@@ -449,7 +555,6 @@ static double computeAndFitAdvectiveCorrelation(
     pathways.writeCombinedVTK(joinPath(fine_dir, pfx + "all_pathways.vtk"),1000);
     return qx_correlation.fitExponentialDecay();
 }
-
 
 static void writeRealizationMeta(
     const std::string& fine_dir,
@@ -749,7 +854,7 @@ static bool run_fine_loop_collect(
 
         PetscTime(&t_total1);
 
-        // Compute advective correlation
+        // Compute advective correlation (also writes PT mean per realization)
         double lc_emp = computeAndFitAdvectiveCorrelation(g, P, opts, fine_dir, pfx, outputs, r);
         outputs.lc_all.push_back(lc_emp);
 
@@ -789,6 +894,45 @@ static bool run_fine_loop_collect(
         writeMeanCorrelations(run_dir, P, outputs);
         computeFinalMeans(outputs);
         writeCorrelationSummary(run_dir, P, outputs);
+
+        // --- NEW: mean PT arrival time over realizations (fine loop) ---
+        if (opts.perform_particle_tracking) {
+            std::vector<double> sum_mu(P.xLocations.size(), 0.0);
+            std::vector<int>    cnt_mu(P.xLocations.size(), 0);
+
+            for (int r = 1; r <= nReal; ++r) {
+                const std::string rlab = makeRealLabel(r);
+                const std::string pfx  = rlab + "_";
+                const std::string fine_dir = joinPath(run_dir, makeFineFolder(r));
+
+                const std::string mean_csv = joinPath(fine_dir, pfx + "PT_mean_arrival_time.csv");
+                if (!fileExists(mean_csv)) continue;
+
+                std::vector<double> x, mu;
+                if (!read_pt_mean_csv(mean_csv, x, mu)) continue;
+
+                const int nmin = std::min((int)P.xLocations.size(), (int)mu.size());
+                for (int i = 0; i < nmin; ++i) {
+                    if (std::isfinite(mu[i])) {
+                        sum_mu[i] += mu[i];
+                        cnt_mu[i] += 1;
+                    }
+                }
+            }
+
+            const std::string out_mean_csv = joinPath(run_dir, "PT_mean_arrival_time_mean.csv");
+            std::ofstream outm(out_mean_csv);
+            outm << "x,mean_arrival_time\n";
+            outm << std::setprecision(15);
+
+            for (int i = 0; i < (int)P.xLocations.size(); ++i) {
+                const double m = (cnt_mu[i] > 0) ? (sum_mu[i] / (double)cnt_mu[i])
+                                                 : std::numeric_limits<double>::quiet_NaN();
+                outm << P.xLocations[i] << "," << m << "\n";
+            }
+
+            std::cout << "Wrote mean PT arrival times over realizations: " << out_mean_csv << "\n";
+        }
     }
 
     return true;
@@ -884,13 +1028,16 @@ static void writeComputedMeanParams(
     f << "correlation_model=" << (int)P.CorrelationModel << "\n";
 }
 
-static bool loadMeanParamsForUpscaleOnly(
-    const std::string& run_dir,
+// -----------------------------------------------------------------------------
+// STRICT upscale-only mean loading must use INPUT SOURCE folder, not run_dir.
+// -----------------------------------------------------------------------------
+static bool loadMeanParamsForUpscaleOnly_FromInputSource(
+    const std::string& input_dir,
     FineScaleOutputs& outputs,
     TimeSeries<double>& invcdf_mean)
 {
-    const std::string mean_params_path = joinPath(run_dir, "mean_params.txt");
-    const std::string mean_cdf_path = joinPath(run_dir, "mean_qx_inverse_cdf.txt");
+    const std::string mean_params_path = joinPath(input_dir, "mean_params.txt");
+    const std::string mean_cdf_path = joinPath(input_dir, "mean_qx_inverse_cdf.txt");
 
     bool ok_params = fileExists(mean_params_path) &&
                      read_mean_params_txt(mean_params_path,
@@ -906,14 +1053,14 @@ static bool loadMeanParamsForUpscaleOnly(
                   read_inverse_cdf_any_format(mean_cdf_path, mean_qx_cdf);
 
     if (!ok_params || !ok_cdf) {
-        std::cerr << "ERROR: --upscale-only requires existing mean_params.txt and mean_qx_inverse_cdf.txt in:\n"
-                  << "  " << run_dir << "\n"
+        std::cerr << "ERROR: --upscale-only requires existing mean_params.txt and mean_qx_inverse_cdf.txt in INPUT folder:\n"
+                  << "  " << input_dir << "\n"
                   << "If you don't have them, run with --hardcoded-mean.\n";
         return false;
     }
 
     invcdf_mean = mean_qx_cdf;
-    std::cout << "Loaded mean_params.txt and mean_qx_inverse_cdf.txt\n";
+    std::cout << "Loaded mean_params.txt and mean_qx_inverse_cdf.txt from INPUT folder\n";
     return true;
 }
 
@@ -926,6 +1073,7 @@ static bool build_mean_for_upscaled(
     const RunOptions& opts,
     const HardcodedMean& H,
     const std::string& run_dir,
+    const std::string& resume_run_dir,
     FineScaleOutputs& fine_outputs,
     TimeSeries<double>& invcdf_mean,
     int rank)
@@ -983,11 +1131,25 @@ static bool build_mean_for_upscaled(
     }
 
     // ========================================================================
-    // Case 3: Upscale-only mode - load existing mean files
+    // Case 3: Upscale-only mode - load existing mean files from INPUT SOURCE
     // ========================================================================
-    if (!loadMeanParamsForUpscaleOnly(run_dir, fine_outputs, invcdf_mean)) {
+    if (resume_run_dir.empty()) {
+        std::cerr << "ERROR: strict --upscale-only requires resume_run_dir as INPUT source.\n";
+        return false;
+    }
+
+    if (!loadMeanParamsForUpscaleOnly_FromInputSource(resume_run_dir, fine_outputs, invcdf_mean)) {
         MPI_Abort(PETSC_COMM_WORLD, 99);
         return false;
+    }
+
+    // Copy mean CDF into OUTPUT run folder (self-contained)
+    invcdf_mean.writefile(run_cdf_copy_path);
+
+    // Record provenance (optional)
+    {
+        std::ofstream f(joinPath(run_dir, "input_source.txt"));
+        f << "input_source_run_dir=" << resume_run_dir << "\n";
     }
 
     return true;
@@ -1197,6 +1359,7 @@ bool run_simulation_blocks(
     const SimParams& P,
     const RunOptions& opts,
     const HardcodedMean& H,
+    const std::string& resume_run_dir,
     RunOutputs& out,
     int rank)
 {
@@ -1221,7 +1384,8 @@ bool run_simulation_blocks(
 
     // Build mean parameters for upscaled model
     TimeSeries<double> invcdf_mean;
-    build_mean_for_upscaled(P, opts, H, out.run_dir, fine_outputs, invcdf_mean, rank);
+    const bool ok_mean = build_mean_for_upscaled(P, opts, H, out.run_dir, resume_run_dir, fine_outputs, invcdf_mean, rank);
+    if (!ok_mean) return false;
 
     // Broadcast parameters to all MPI ranks
     broadcastMeanParameters(fine_outputs, invcdf_mean, rank);
@@ -1251,4 +1415,3 @@ bool run_simulation_blocks(
 
     return true;
 }
-
