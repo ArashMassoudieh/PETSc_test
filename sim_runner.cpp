@@ -236,50 +236,27 @@ static bool build_mean_qx_inverse_cdf_from_multi(
 }
 
 // ============================================================================
-// ✅ NEW mean helper: use TimeSeriesSet::mean_ts_grid (uniform grid)
+// ✅ NEW mean helper: use TimeSeriesSet::mean_ts_longest (longest grid, no union-time annoyance)
+//   - mean is as long as the longest series
+//   - at each ref time, averages only series that have data (available-only)
 // ============================================================================
 
-static double estimate_dt_from_set(const TimeSeriesSet<double>& s,
-                                   int start_item = 0,
-                                   int max_series_to_scan = 5,
-                                   int max_diffs_per_series = 200)
+static TimeSeries<double> mean_ts_new_longest(const TimeSeriesSet<double>& s,
+                                             int start_item = 0,
+                                             double time_eps = 1e-10)
 {
-    double dt_min = std::numeric_limits<double>::infinity();
-    const int ns = (int)s.size();
-    const int scan = std::min(ns, max_series_to_scan);
-
-    for (int j = 0; j < scan; ++j) {
-        const auto& ts = s[j];
-        const int n = (int)ts.size();
-        const int st = std::max(0, start_item);
-        if (n < st + 2) continue;
-
-        int diffs = 0;
-        for (int i = st + 1; i < n && diffs < max_diffs_per_series; ++i, ++diffs) {
-            const double t0 = (double)ts.getTime(i - 1);
-            const double t1 = (double)ts.getTime(i);
-            const double d  = t1 - t0;
-            if (std::isfinite(d) && d > 0.0) dt_min = std::min(dt_min, d);
-        }
+    // If there is 0/1 series or something degenerate, fall back to legacy mean_ts (keeps behavior safe)
+    if (s.empty()) return TimeSeries<double>();
+    if (s.size() == 1) {
+        TimeSeries<double> out = s[0];
+        out.setName("Mean");
+        return out;
     }
 
-    if (!std::isfinite(dt_min) || dt_min <= 0.0) return 0.0;
-    return dt_min;
-}
-
-static TimeSeries<double> mean_ts_new_grid(const TimeSeriesSet<double>& s,
-                                          int start_item = 0,
-                                          MeanGridMode mode = MeanGridMode::UnionAvailable,
-                                          double time_eps = 1e-10,
-                                          double dt_hint = 0.0)
-{
-    double dt = dt_hint;
-    if (!(dt > 0.0 && std::isfinite(dt))) dt = estimate_dt_from_set(s, start_item);
-
-    // If we truly can't infer a dt, fall back to legacy aligned-time mean to avoid crash.
-    if (!(dt > 0.0 && std::isfinite(dt))) return s.mean_ts(start_item);
-
-    return s.mean_ts_grid(dt, start_item, mode, time_eps);
+    // This is the behavior you asked for:
+    // - ref grid = longest one
+    // - skip missing series at each time
+    return s.mean_ts_longest(start_item, time_eps);
 }
 
 // ============================================================================
@@ -491,12 +468,12 @@ static void writeMeanCorrelations(
     outputs.K_x_correlations.write(joinPath(run_dir, "K_x_correlations.txt"));
     outputs.K_y_correlations.write(joinPath(run_dir, "K_y_correlations.txt"));
 
-    // IMPORTANT: NEW mean_ts_grid (uniform grid)
-    auto mean_corr_a    = mean_ts_new_grid(outputs.advective_correlations, 0, MeanGridMode::UnionAvailable);
-    auto mean_corr_x    = mean_ts_new_grid(outputs.velocity_x_correlations, 0, MeanGridMode::UnionAvailable);
-    auto mean_corr_y    = mean_ts_new_grid(outputs.velocity_y_correlations, 0, MeanGridMode::UnionAvailable);
-    auto mean_K_corr_x  = mean_ts_new_grid(outputs.K_x_correlations,        0, MeanGridMode::UnionAvailable);
-    auto mean_K_corr_y  = mean_ts_new_grid(outputs.K_y_correlations,        0, MeanGridMode::UnionAvailable);
+    // IMPORTANT: NEW mean_ts_longest (longest grid; available-only)
+    auto mean_corr_a    = mean_ts_new_longest(outputs.advective_correlations, 0);
+    auto mean_corr_x    = mean_ts_new_longest(outputs.velocity_x_correlations, 0);
+    auto mean_corr_y    = mean_ts_new_longest(outputs.velocity_y_correlations, 0);
+    auto mean_K_corr_x  = mean_ts_new_longest(outputs.K_x_correlations,        0);
+    auto mean_K_corr_y  = mean_ts_new_longest(outputs.K_y_correlations,        0);
 
     mean_corr_a.writefile(joinPath(run_dir, "advective_correlations_mean.txt"));
     mean_corr_x.writefile(joinPath(run_dir, "diffusion_x_correlations_mean.txt"));
@@ -747,7 +724,7 @@ static bool run_fine_loop_collect(
                     for (int i = 0; i < num_deltas; ++i) {
                         double exponent = static_cast<double>(i) / (num_deltas - 1);
                         double delta = P.correlation_y_range.first *
-                                       std::pow(P.correlation_y_range.second / P.correlation_y_range.first, exponent);
+                                       std::pow(P.correlation_x_range.second / P.correlation_x_range.first, exponent);
                         try {
                             TimeSeries<double> samples = g.sampleGaussianPerturbation(
                                 "qx_normal_score", Grid2D::ArrayKind::Fx,
@@ -945,8 +922,8 @@ static bool run_fine_loop_collect(
         outputs.inverse_qx_cdfs.write(joinPath(run_dir, "qx_inverse_cdfs.txt"));
         outputs.qx_pdfs.write(joinPath(run_dir, "qx_pdfs.txt"));
 
-        // IMPORTANT: NEW mean_ts_grid (uniform grid)
-        mean_ts_new_grid(outputs.qx_pdfs, 0, MeanGridMode::UnionAvailable)
+        // IMPORTANT: NEW mean_ts_longest (longest grid; available-only)
+        mean_ts_new_longest(outputs.qx_pdfs, 0)
             .writefile(joinPath(run_dir, "qx_mean_pdf.txt"));
 
         writeMeanCorrelations(run_dir, P, outputs);
@@ -1134,13 +1111,8 @@ static bool build_mean_for_upscaled(
 
     // Case 2: computed from fine loop
     if (!opts.upscale_only) {
-        // inverse_qx_cdfs were forced to uniform du in fine loop
-        const double du = du_from_nu(P.nu);
-        invcdf_mean = mean_ts_new_grid(fine_outputs.inverse_qx_cdfs,
-                                       /*start_item*/0,
-                                       MeanGridMode::Intersection,
-                                       /*time_eps*/1e-12,
-                                       /*dt_hint*/du);
+        // old working behavior: inverse_qx_cdfs are forced to uniform du, so aligned mean is correct
+        invcdf_mean = fine_outputs.inverse_qx_cdfs.mean_ts(/*start_item*/0);
         invcdf_mean.writefile(run_cdf_copy_path);
         writeComputedMeanParams(run_dir, P, fine_outputs);
         return true;
@@ -1176,7 +1148,7 @@ static void computeMeanBTCs(
 {
     mean_out.clear();
     for (int i = 0; i < (int)xLocations.size(); ++i) {
-        auto m = mean_ts_new_grid(stacks[i], 0, MeanGridMode::UnionAvailable);
+        auto m = mean_ts_new_longest(stacks[i], 0);
         mean_out.append(m, fmt_x(xLocations[i]));
     }
 }
@@ -1237,8 +1209,9 @@ static bool run_upscaled(
 
     Grid2D g_u(nx, ny, Lx, Ly);
 
+    // keep EXACT old working mapping
     if (P.CorrelationModel == SimParams::correlationmode::exponentialfit)
-        g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::exponential_vdep;
+        g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::exponential;
     else if (P.CorrelationModel == SimParams::correlationmode::gaussian)
         g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::gaussian;
     else if (P.CorrelationModel == SimParams::correlationmode::matern)
