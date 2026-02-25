@@ -44,13 +44,13 @@ int main(int argc, char** argv)
     // -----------------------------
     RunOptions opts;
 
-    opts.upscale_only   = false;
+    opts.upscale_only   = true;
 
     // Scratch by default (no file loading). Enable via --hardcoded-mean.
     opts.hardcoded_mean = false;
 
     opts.solve_fine_scale_transport = false;
-    opts.solve_upscale_transport    = false;
+    opts.solve_upscale_transport    = true;
 
     opts.perform_particle_tracking = true;
     opts.perform_upscaled_PT = true;
@@ -75,8 +75,8 @@ int main(int argc, char** argv)
     // ---------------------------------------------------------
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260202_003241_std2_D0.1_aniso");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_std2_D0.01_aniso");
-    std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=2, D=0, aniso1&0.1");
-    //std::string resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso");
+    //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=2, D=0, aniso1&0.1");
+    std::string resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=1, D=0, aniso1&0.1");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260210_183158_std1_D0.01_aniso1&0.1_df0.15");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260211_083055_std1_D0.1_aniso1&0.1_df0.15");
@@ -206,7 +206,7 @@ int main(int argc, char** argv)
     P.diffusion_factor = 1;
 
     // "D" in naming = diffusion coefficient (physics diffusion)
-    P.Diffusion_coefficient = 0;
+    P.Diffusion_coefficient = 0.01;
 
     P.stdev = 2.0;
     P.g_mean = 0.0;

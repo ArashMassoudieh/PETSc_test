@@ -3,6 +3,7 @@
 #include <gsl/gsl_rng.h>
 #include <gsl/gsl_randist.h>
 #include <gsl/gsl_cdf.h>
+#include <gsl/gsl_sf_erf.h>
 #include <cmath>
 #include <random>
 #include <limits>
@@ -2101,27 +2102,53 @@ double Grid2D::kappa(double v, double lc, double lambda_x, double lambda_y) cons
 {
     double D = diffusion_coeff_;
 
-    double factor_x = diffusionfactor_, factor_y = diffusionfactor_;
-    if (VelocityCorrelationModel == velocity_correlation_model::gaussian) {
-        factor_x = 2.0;
-        factor_y = 2.0;
-    } else if (VelocityCorrelationModel == velocity_correlation_model::matern) {
-        factor_x = matern_exchange_factor(nu_x_);
-        factor_y = matern_exchange_factor(nu_y_);
+    // Advective contribution (common to all models)
+    double term_adv = v / lc;
+
+    // Pure advection: no diffusive exchange
+    if (D <= 0.0) return term_adv;
+
+    // Diffusive exchange
+    switch (VelocityCorrelationModel) {
+
+    case velocity_correlation_model::exponential_vdep: {
+        // Velocity-dependent exchange rate (Eq. A.17):
+        //   kappa(v) = v/lc + (D/lam_x^2)*h(D*lc/(v*lam_x^2))
+        //                   + (D/lam_y^2)*h(D*lc/(v*lam_y^2))
+        double v_safe = std::max(v, 1.0e-30);
+        double alpha_x = D * lc / (v_safe * lambda_x * lambda_x);
+        double alpha_y = D * lc / (v_safe * lambda_y * lambda_y);
+        return term_adv
+               + (D / (lambda_x * lambda_x)) * h_exchange(alpha_x)
+               + (D / (lambda_y * lambda_y)) * h_exchange(alpha_y);
     }
-    // exponential: factors stay 1
 
-    if (VelocityCorrelationModel == velocity_correlation_model::oneoversum)
-    {
-        return v/lc + D/(lambda_x * lambda_x + lambda_y * lambda_y);
+    case velocity_correlation_model::gaussian: {
+        return term_adv
+               + 2.0 * D / (lambda_x * lambda_x)
+               + 2.0 * D / (lambda_y * lambda_y);
     }
 
-    double term1 = v / lc;
-    double term2 = factor_x * D / (lambda_x * lambda_x);
-    double term3 = factor_y * D / (lambda_y * lambda_y);
+    case velocity_correlation_model::matern: {
+        return term_adv
+               + matern_exchange_factor(nu_x_) * D / (lambda_x * lambda_x)
+               + matern_exchange_factor(nu_y_) * D / (lambda_y * lambda_y);
+    }
 
-    return term1 + term2 + term3;
+    case velocity_correlation_model::oneoversum: {
+        return term_adv + D / (lambda_x * lambda_x + lambda_y * lambda_y);
+    }
+
+    case velocity_correlation_model::exponential:
+    default: {
+        return term_adv
+               + diffusionfactor_ * D / (lambda_x * lambda_x)
+               + diffusionfactor_ * D / (lambda_y * lambda_y);
+    }
+
+    }
 }
+
 
 void Grid2D::setMixingParams(double lc, double lambda_x, double lambda_y,
                              double nu_x, double nu_y)
@@ -2655,4 +2682,15 @@ void Grid2D::generateLogNormalK(const std::string& K_field_name,
 
     // Optionally remove the intermediate log field
     dropField(Y_field_name);
+}
+
+static double h_exchange(double alpha)
+{
+    if (alpha <= 0.0) return 0.0;
+    if (alpha < 1.0e-8) {
+        return 2.0 / std::sqrt(M_PI * alpha);
+    }
+    // h(alpha) = -1 - ln(erfc(sqrt(alpha))) / alpha
+    double log_erfc = gsl_sf_log_erfc(std::sqrt(alpha));
+    return -1.0 - log_erfc / alpha;
 }
