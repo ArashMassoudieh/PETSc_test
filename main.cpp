@@ -214,7 +214,7 @@ int main(int argc, char** argv)
 
     P.stdev = 2.0;
     P.g_mean = 0.0;
-    P.CorrelationModel = SimParams::correlationmode::exponentialfit;
+    P.CorrelationModel = SimParams::correlationmode::exponentialfit; //or gaussian
     P.correlation_x_range = {0.001, P.correlation_ls_x};
     P.correlation_y_range = {0.001, P.correlation_ls_y};
 
