@@ -75,11 +75,14 @@ int main(int argc, char** argv)
     // ---------------------------------------------------------
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260202_003241_std2_D0.1_aniso");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_std2_D0.01_aniso");
-    std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=2, D=0, aniso1&0.1");
+    //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=2, D=0, aniso1&0.1");
     //std::string resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=1, D=0, aniso1&0.1");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260210_183158_std1_D0.01_aniso1&0.1_df0.15");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260211_083055_std1_D0.1_aniso1&0.1_df0.15");
+
+    // DEFAULT (your current canonical):
+    std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260207_111642_std1_D0.1_aniso0.1&1_df0.15");
 
     // -----------------------------
     // Plot options (kept in main only)
@@ -193,9 +196,9 @@ int main(int argc, char** argv)
     // Params (kept here)
     // -----------------------------
     SimParams P;
-    P.nx = 300;
-    P.ny = 100;
-    P.nu = 100;
+    P.nx = 300; // 300
+    P.ny = 100; // 100
+    P.nu = 100; // 100
     P.Lx = 3.0;
     P.Ly = 1.0;
 
@@ -216,7 +219,7 @@ int main(int argc, char** argv)
 
     P.t_end_pdf = 20.0;
 
-    P.nReal_default = 100;
+    P.nReal_default = 100; // 100
     P.run_seed = 20260115UL;
 
     P.xLocations = {0.5, 1.5, 2.5};

@@ -6,7 +6,7 @@
 #include <utility>   // std::pair
 
 // Keep sim_runner.h LIGHT.
-// Do NOT include grid.h here (it causes heavy include chains / incomplete type issues).
+// Do NOT include grid.h here (heavy include chain / incomplete type issues).
 #include "TimeSeries.h"
 #include "TimeSeriesSet.h"
 
@@ -49,6 +49,9 @@ struct RunOptions
     std::string wiener_release = "left-flux"; // "left-uniform" | "left-flux" | "center"
 };
 
+// -----------------------------
+// Fine-scale outputs (collected + aggregated)
+// -----------------------------
 struct FineScaleOutputs
 {
     // Correlation time series sets (all realizations)
@@ -70,7 +73,7 @@ struct FineScaleOutputs
     std::vector<double> K_ly_all;
     std::vector<double> dt_all;
 
-    // Mean parameters
+    // Mean parameters (filled after fine loop OR via hardcoded/input-source load)
     double nu_x_mean = 1.5;
     double nu_y_mean = 1.5;
     double lambda_K_x_mean = 0.0;
@@ -88,6 +91,9 @@ struct FineScaleOutputs
     std::vector<TimeSeriesSet<double>> PT_cdfs;
 };
 
+// -----------------------------
+// Hardcoded mean parameters
+// -----------------------------
 struct HardcodedMean
 {
     double lc_mean = 0.0;
@@ -101,6 +107,9 @@ struct HardcodedMean
     double qx_const = 0.0;
 };
 
+// -----------------------------
+// Simulation parameters
+// -----------------------------
 struct SimParams
 {
     int nx = 0;
@@ -134,6 +143,9 @@ struct SimParams
     std::pair<double,double> correlation_y_range = {0.001, 0.02};
 };
 
+// -----------------------------
+// Outputs written/returned by runner
+// -----------------------------
 struct RunOutputs
 {
     std::string run_dir;

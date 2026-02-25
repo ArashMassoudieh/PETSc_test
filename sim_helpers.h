@@ -104,6 +104,20 @@ std::vector<double> finalize_mean_vec(
 );
 
 // --------------------
+// NEW: union-t mean of a TimeSeriesSet
+// --------------------
+//
+// Builds mean(t) on a UNION of all timestamps from all series.
+// For each union-time, linearly interpolates each series (only if inside its [t0,t1])
+// then averages ignoring NaN.
+//
+// If there are no valid contributions at a time, that point is skipped (not appended).
+TimeSeries<double> mean_ts_union_t(
+    const TimeSeriesSet<double>& set,
+    double t_merge_tol = 1e-12
+);
+
+// --------------------
 // delimiter-robust parsing
 // --------------------
 char detect_delim(const std::string& header);
@@ -271,29 +285,17 @@ bool read_upscaled_from_btc_compare(
 
 double rmse_ignore_nan(const std::vector<double>& a, const std::vector<double>& b);
 
-// Score a run directory against BLACK curves in BTC_mean.csv.
-// Reads UPSCALED breakthrough curves from per-x compare files (matches gnuplot):
-//   <run_dir>/x=0.50BTC_Compare.csv
-//   <run_dir>/x=1.50BTC_Compare.csv
-//   <run_dir>/x=2.50BTC_Compare.csv
-// Uses the LAST column in each compare CSV as the upscaled curve.
-// Compares in log10 space (log-RMSE), averaged across xLocations.
-//
-// Returns +inf if required files/columns are missing.
 double score_upscaled_vs_black_mean_from_compare(
     const std::string& black_mean_csv,
     const std::string& run_dir,
     const std::vector<double>& xLocations
 );
 
-// Convenience overload: uses default x locations {0.5,1.5,2.5}
 double score_upscaled_vs_black_mean_from_compare(
     const std::string& black_mean_csv,
     const std::string& run_dir
 );
 
-// Scan a directory and collect subfolders that contain a "df" token in the folder name.
-// Recognizes patterns like: ..._df0.15, ..._df0.150, ...df=0.15
 bool list_calibration_runs_with_df(
     const std::string& root_dir,
     std::vector<double>& dfs_out,
@@ -303,11 +305,8 @@ bool list_calibration_runs_with_df(
 // --------------------
 // gnuplot helpers (needed by sim_helpers.cpp)
 // --------------------
-
-// Read only the first line (header) and split by delimiter into column names
 bool read_csv_header(const std::string& csv_path, std::vector<std::string>& headers);
 
-// Basic string helpers used for grouping and output naming
 bool starts_with(const std::string& s, const std::string& prefix);
 std::string sanitize_token(const std::string& s);
 std::string base_name_from_header(const std::string& header);

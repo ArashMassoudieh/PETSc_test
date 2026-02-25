@@ -19,6 +19,10 @@
 #include <cctype>
 #include <cstdlib>
 #include <limits>
+#include <map>
+#include <vector>
+#include <string>
+#include <cmath>
 
 // ============================================================
 // FS / path helpers
@@ -494,6 +498,7 @@ std::vector<double> resample_col_linear(const std::vector<double>& t_src,
 
         while (k + 1 < t_src.size() && t_src[k+1] < td) k++;
 
+        // IMPORTANT: no extrapolation -> NaN outside support
         if (td < t_src.front() || td > t_src.back()) {
             out[i] = std::numeric_limits<double>::quiet_NaN();
             continue;
@@ -525,6 +530,117 @@ void resample_table_linear(const std::vector<double>& t_src,
     cols_dst.clear();
     cols_dst.reserve(cols_src.size());
     for (auto& c : cols_src) cols_dst.push_back(resample_col_linear(t_src, c, t_dst));
+}
+
+// ============================================================
+// UNION-time helpers (NEW)
+//   - union time extends to largest end-time among inputs
+// ============================================================
+static std::vector<double> unique_sorted_with_tol(std::vector<double> t, double tol)
+{
+    t.erase(std::remove_if(t.begin(), t.end(),
+                           [](double x){ return !std::isfinite(x); }),
+            t.end());
+    if (t.empty()) return t;
+
+    std::sort(t.begin(), t.end());
+
+    std::vector<double> out;
+    out.reserve(t.size());
+    out.push_back(t[0]);
+
+    for (size_t i = 1; i < t.size(); ++i) {
+        if (std::abs(t[i] - out.back()) > tol) out.push_back(t[i]);
+    }
+    return out;
+}
+
+static std::vector<double> build_union_time(const std::vector<double>& a,
+                                            const std::vector<double>& b,
+                                            double tol = 1e-12)
+{
+    std::vector<double> t;
+    t.reserve(a.size() + b.size());
+    t.insert(t.end(), a.begin(), a.end());
+    t.insert(t.end(), b.begin(), b.end());
+    return unique_sorted_with_tol(std::move(t), tol);
+}
+
+static std::vector<double> build_union_time_many(const std::vector<std::vector<double>>& tv,
+                                                 double tol = 1e-12)
+{
+    std::vector<double> t;
+    size_t total = 0;
+    for (const auto& v : tv) total += v.size();
+    t.reserve(total);
+
+    for (const auto& v : tv) t.insert(t.end(), v.begin(), v.end());
+    return unique_sorted_with_tol(std::move(t), tol);
+}
+
+// ============================================================
+// NEW: mean_ts on UNION(t) for TimeSeriesSet<double>
+//   - builds union time grid across all series (merge tol)
+//   - interpolates each series only within its [t0,t1] (NO extrapolation)
+//   - NaN-safe average; skips times with zero contributors
+// ============================================================
+TimeSeries<double> mean_ts_union_t(const TimeSeriesSet<double>& set, double t_merge_tol)
+{
+    TimeSeries<double> out;
+    out.clear();
+
+    const int nS = (int)set.size();
+    if (nS <= 0) return out;
+
+    // Collect all time vectors (for union)
+    std::vector<std::vector<double>> tv;
+    tv.reserve((size_t)nS);
+
+    for (int s = 0; s < nS; ++s) {
+        const TimeSeries<double>& ts = set[s];
+        const int n = (int)ts.size();
+
+        std::vector<double> t;
+        t.reserve((size_t)std::max(0, n));
+
+        for (int i = 0; i < n; ++i) {
+            const double ti = ts.getTime(i);
+            if (std::isfinite(ti)) t.push_back(ti);
+        }
+        tv.push_back(std::move(t));
+    }
+
+    // Build union time grid
+    std::vector<double> T = build_union_time_many(tv, t_merge_tol);
+    if (T.size() < 2) return out;
+
+    // For each union time, interpolate each series if inside support, average ignoring NaN
+    for (double t : T) {
+        double sum = 0.0;
+        int cnt = 0;
+
+        for (int s = 0; s < nS; ++s) {
+            const TimeSeries<double>& ts = set[s];
+            const int n = (int)ts.size();
+            if (n < 2) continue;
+
+            const double t0 = ts.getTime(0);
+            const double t1 = ts.getTime(n - 1);
+
+            // No extrapolation
+            if (!(t >= t0 && t <= t1)) continue;
+
+            const double y = ts.interpol(t);
+            if (std::isfinite(y)) {
+                sum += y;
+                cnt += 1;
+            }
+        }
+
+        if (cnt > 0) out.append(t, sum / (double)cnt);
+    }
+
+    return out;
 }
 
 // ============================================================
@@ -1041,15 +1157,24 @@ double score_upscaled_vs_black_mean_from_compare(
         const std::vector<double>& cb = B->second;
         if (tb.size() < 2 || cb.size() != tb.size()) return std::numeric_limits<double>::infinity();
 
-        std::vector<double> cu_i = resample_col_linear(tu, cu, tb);
+        // ============================================================
+        // UNION TIME GRID (NEW):
+        // - uses largest end time across BLACK and RED
+        // - no extrapolation: outside each support becomes NaN
+        // ============================================================
+        const std::vector<double> t_union = build_union_time(tb, tu, 1e-12);
+
+        std::vector<double> cb_i = resample_col_linear(tb, cb, t_union);
+        std::vector<double> cu_i = resample_col_linear(tu, cu, t_union);
 
         double sse = 0.0;
         int n = 0;
-        for (size_t i = 0; i < tb.size() && i < cb.size() && i < cu_i.size(); ++i) {
-            const double t = tb[i];
+
+        for (size_t i = 0; i < t_union.size(); ++i) {
+            const double t = t_union[i];
             if (!(t >= tmin && t <= tmax)) continue;
 
-            const double b = cb[i];
+            const double b = cb_i[i];
             const double u = cu_i[i];
             if (!std::isfinite(b) || !std::isfinite(u)) continue;
 
@@ -1060,6 +1185,7 @@ double score_upscaled_vs_black_mean_from_compare(
             sse += d * d;
             ++n;
         }
+
         if (n < 10) return std::numeric_limits<double>::infinity();
 
         const double rmse = std::sqrt(sse / (double)n);

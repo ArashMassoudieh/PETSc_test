@@ -444,11 +444,12 @@ static void writeMeanCorrelations(
     outputs.K_x_correlations.write(joinPath(run_dir, "K_x_correlations.txt"));
     outputs.K_y_correlations.write(joinPath(run_dir, "K_y_correlations.txt"));
 
-    auto mean_corr_a    = outputs.advective_correlations.mean_ts();
-    auto mean_corr_x    = outputs.velocity_x_correlations.mean_ts();
-    auto mean_corr_y    = outputs.velocity_y_correlations.mean_ts();
-    auto mean_K_corr_x  = outputs.K_x_correlations.mean_ts();
-    auto mean_K_corr_y  = outputs.K_y_correlations.mean_ts();
+    // IMPORTANT: union-t mean (NEW)
+    auto mean_corr_a    = mean_ts_union_t(outputs.advective_correlations);
+    auto mean_corr_x    = mean_ts_union_t(outputs.velocity_x_correlations);
+    auto mean_corr_y    = mean_ts_union_t(outputs.velocity_y_correlations);
+    auto mean_K_corr_x  = mean_ts_union_t(outputs.K_x_correlations);
+    auto mean_K_corr_y  = mean_ts_union_t(outputs.K_y_correlations);
 
     mean_corr_a.writefile(joinPath(run_dir, "advective_correlations_mean.txt"));
     mean_corr_x.writefile(joinPath(run_dir, "diffusion_x_correlations_mean.txt"));
@@ -896,7 +897,9 @@ static bool run_fine_loop_collect(
     if (rank == 0) {
         outputs.inverse_qx_cdfs.write(joinPath(run_dir, "qx_inverse_cdfs.txt"));
         outputs.qx_pdfs.write(joinPath(run_dir, "qx_pdfs.txt"));
-        outputs.qx_pdfs.mean_ts().writefile(joinPath(run_dir, "qx_mean_pdf.txt"));
+
+        // IMPORTANT: union-t mean (NEW)
+        mean_ts_union_t(outputs.qx_pdfs).writefile(joinPath(run_dir, "qx_mean_pdf.txt"));
 
         writeMeanCorrelations(run_dir, P, outputs);
         computeFinalMeans(outputs);
@@ -1083,7 +1086,8 @@ static bool build_mean_for_upscaled(
 
     // Case 2: computed from fine loop
     if (!opts.upscale_only) {
-        invcdf_mean = fine_outputs.inverse_qx_cdfs.mean_ts();
+        // IMPORTANT: union-t mean (NEW)
+        invcdf_mean = mean_ts_union_t(fine_outputs.inverse_qx_cdfs);
         invcdf_mean.writefile(run_cdf_copy_path);
         writeComputedMeanParams(run_dir, P, fine_outputs);
         return true;
@@ -1119,7 +1123,8 @@ static void computeMeanBTCs(
 {
     mean_out.clear();
     for (int i = 0; i < (int)xLocations.size(); ++i) {
-        mean_out.append(stacks[i].mean_ts(), fmt_x(xLocations[i]));
+        // IMPORTANT: union-t mean (NEW)
+        mean_out.append(mean_ts_union_t(stacks[i]), fmt_x(xLocations[i]));
     }
 }
 
@@ -1340,7 +1345,7 @@ bool run_simulation_blocks(
     out.up_btc_path = up_btc_path;
     out.up_btc_deriv_path = up_btc_deriv_path;
 
-    // Means (SEPARATED)
+    // Means (SEPARATED) — union-t mean used inside computeMeanBTCs now
     computeMeanBTCs(P.xLocations, out.Fine_Scale_BTCs,   out.mean_transport_full);
     computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_pdf, out.mean_pt_pdf);
     computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_cdf, out.mean_pt_cdf);
