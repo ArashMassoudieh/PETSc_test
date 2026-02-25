@@ -532,7 +532,7 @@ static void computeFinalMeans(FineScaleOutputs& outputs)
 }
 
 // ============================================================================
-// Fine loop (RETRY/REJECT) — collects transport derivative BTCs + PT pdf/cdf stacks
+// Fine loop (RETRY/REJECT) — collects transport BTCs + PT pdf/cdf stacks
 // ============================================================================
 
 static bool run_fine_loop_collect(
@@ -820,7 +820,8 @@ static bool run_fine_loop_collect(
                 if (opts.solve_fine_scale_transport) {
                     for (int i = 0; i < (int)P.xLocations.size() && i < (int)BTCs_FineScaled.size(); ++i) {
                         BTCs_FineScaled.setSeriesName(i, fmt_x(P.xLocations[i]));
-                        outputs.BTCs[i].append(BTCs_FineScaled[i].derivative(), pfx + fmt_x(P.xLocations[i]));
+                        // ✅ FIX: stack RAW BTC (NOT derivative) so mean_ts() can’t go negative unless BTC does
+                        outputs.BTCs[i].append(BTCs_FineScaled[i], pfx + fmt_x(P.xLocations[i]));
                     }
                 }
 
@@ -1240,7 +1241,8 @@ static bool run_upscaled(
 
         for (int i = 0; i < (int)P.xLocations.size() && i < (int)BTCs_Upscaled.size(); ++i) {
             BTCs_Upscaled.setSeriesName(i, fmt_x(P.xLocations[i]));
-            Fine_Scale_BTCs_transport[i].append(BTCs_Upscaled[i].derivative(), "Upscaled" + fmt_x(P.xLocations[i]));
+            // ✅ FIX: stack RAW BTC (NOT derivative)
+            Fine_Scale_BTCs_transport[i].append(BTCs_Upscaled[i], "Upscaled" + fmt_x(P.xLocations[i]));
         }
 
         BTCs_Upscaled.write(up_btc_path);
