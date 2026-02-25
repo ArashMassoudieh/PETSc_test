@@ -194,8 +194,8 @@ int main(int argc, char** argv)
     // -----------------------------
     SimParams P;
     P.nx = 300;
-    P.ny = 50;
-    P.nu = 50;
+    P.ny = 100;
+    P.nu = 100;
     P.Lx = 3.0;
     P.Ly = 1.0;
 
