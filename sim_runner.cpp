@@ -236,6 +236,53 @@ static bool build_mean_qx_inverse_cdf_from_multi(
 }
 
 // ============================================================================
+// ✅ NEW mean helper: use TimeSeriesSet::mean_ts_grid (uniform grid)
+// ============================================================================
+
+static double estimate_dt_from_set(const TimeSeriesSet<double>& s,
+                                   int start_item = 0,
+                                   int max_series_to_scan = 5,
+                                   int max_diffs_per_series = 200)
+{
+    double dt_min = std::numeric_limits<double>::infinity();
+    const int ns = (int)s.size();
+    const int scan = std::min(ns, max_series_to_scan);
+
+    for (int j = 0; j < scan; ++j) {
+        const auto& ts = s[j];
+        const int n = (int)ts.size();
+        const int st = std::max(0, start_item);
+        if (n < st + 2) continue;
+
+        int diffs = 0;
+        for (int i = st + 1; i < n && diffs < max_diffs_per_series; ++i, ++diffs) {
+            const double t0 = (double)ts.getTime(i - 1);
+            const double t1 = (double)ts.getTime(i);
+            const double d  = t1 - t0;
+            if (std::isfinite(d) && d > 0.0) dt_min = std::min(dt_min, d);
+        }
+    }
+
+    if (!std::isfinite(dt_min) || dt_min <= 0.0) return 0.0;
+    return dt_min;
+}
+
+static TimeSeries<double> mean_ts_new_grid(const TimeSeriesSet<double>& s,
+                                          int start_item = 0,
+                                          MeanGridMode mode = MeanGridMode::UnionAvailable,
+                                          double time_eps = 1e-10,
+                                          double dt_hint = 0.0)
+{
+    double dt = dt_hint;
+    if (!(dt > 0.0 && std::isfinite(dt))) dt = estimate_dt_from_set(s, start_item);
+
+    // If we truly can't infer a dt, fall back to legacy aligned-time mean to avoid crash.
+    if (!(dt > 0.0 && std::isfinite(dt))) return s.mean_ts(start_item);
+
+    return s.mean_ts_grid(dt, start_item, mode, time_eps);
+}
+
+// ============================================================================
 // Robust realization reject helpers (delete folder + log)
 // ============================================================================
 
@@ -444,12 +491,12 @@ static void writeMeanCorrelations(
     outputs.K_x_correlations.write(joinPath(run_dir, "K_x_correlations.txt"));
     outputs.K_y_correlations.write(joinPath(run_dir, "K_y_correlations.txt"));
 
-    // IMPORTANT: union-t mean (NEW)
-    auto mean_corr_a    = mean_ts_union_t(outputs.advective_correlations);
-    auto mean_corr_x    = mean_ts_union_t(outputs.velocity_x_correlations);
-    auto mean_corr_y    = mean_ts_union_t(outputs.velocity_y_correlations);
-    auto mean_K_corr_x  = mean_ts_union_t(outputs.K_x_correlations);
-    auto mean_K_corr_y  = mean_ts_union_t(outputs.K_y_correlations);
+    // IMPORTANT: NEW mean_ts_grid (uniform grid)
+    auto mean_corr_a    = mean_ts_new_grid(outputs.advective_correlations, 0, MeanGridMode::UnionAvailable);
+    auto mean_corr_x    = mean_ts_new_grid(outputs.velocity_x_correlations, 0, MeanGridMode::UnionAvailable);
+    auto mean_corr_y    = mean_ts_new_grid(outputs.velocity_y_correlations, 0, MeanGridMode::UnionAvailable);
+    auto mean_K_corr_x  = mean_ts_new_grid(outputs.K_x_correlations,        0, MeanGridMode::UnionAvailable);
+    auto mean_K_corr_y  = mean_ts_new_grid(outputs.K_y_correlations,        0, MeanGridMode::UnionAvailable);
 
     mean_corr_a.writefile(joinPath(run_dir, "advective_correlations_mean.txt"));
     mean_corr_x.writefile(joinPath(run_dir, "diffusion_x_correlations_mean.txt"));
@@ -898,8 +945,9 @@ static bool run_fine_loop_collect(
         outputs.inverse_qx_cdfs.write(joinPath(run_dir, "qx_inverse_cdfs.txt"));
         outputs.qx_pdfs.write(joinPath(run_dir, "qx_pdfs.txt"));
 
-        // IMPORTANT: union-t mean (NEW)
-        mean_ts_union_t(outputs.qx_pdfs).writefile(joinPath(run_dir, "qx_mean_pdf.txt"));
+        // IMPORTANT: NEW mean_ts_grid (uniform grid)
+        mean_ts_new_grid(outputs.qx_pdfs, 0, MeanGridMode::UnionAvailable)
+            .writefile(joinPath(run_dir, "qx_mean_pdf.txt"));
 
         writeMeanCorrelations(run_dir, P, outputs);
         computeFinalMeans(outputs);
@@ -1086,8 +1134,13 @@ static bool build_mean_for_upscaled(
 
     // Case 2: computed from fine loop
     if (!opts.upscale_only) {
-        // IMPORTANT: union-t mean (NEW)
-        invcdf_mean = mean_ts_union_t(fine_outputs.inverse_qx_cdfs);
+        // inverse_qx_cdfs were forced to uniform du in fine loop
+        const double du = du_from_nu(P.nu);
+        invcdf_mean = mean_ts_new_grid(fine_outputs.inverse_qx_cdfs,
+                                       /*start_item*/0,
+                                       MeanGridMode::Intersection,
+                                       /*time_eps*/1e-12,
+                                       /*dt_hint*/du);
         invcdf_mean.writefile(run_cdf_copy_path);
         writeComputedMeanParams(run_dir, P, fine_outputs);
         return true;
@@ -1123,8 +1176,8 @@ static void computeMeanBTCs(
 {
     mean_out.clear();
     for (int i = 0; i < (int)xLocations.size(); ++i) {
-        // IMPORTANT: union-t mean (NEW)
-        mean_out.append(mean_ts_union_t(stacks[i]), fmt_x(xLocations[i]));
+        auto m = mean_ts_new_grid(stacks[i], 0, MeanGridMode::UnionAvailable);
+        mean_out.append(m, fmt_x(xLocations[i]));
     }
 }
 
@@ -1345,7 +1398,7 @@ bool run_simulation_blocks(
     out.up_btc_path = up_btc_path;
     out.up_btc_deriv_path = up_btc_deriv_path;
 
-    // Means (SEPARATED) — union-t mean used inside computeMeanBTCs now
+    // Means (SEPARATED) — NEW mean used inside computeMeanBTCs now
     computeMeanBTCs(P.xLocations, out.Fine_Scale_BTCs,   out.mean_transport_full);
     computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_pdf, out.mean_pt_pdf);
     computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_cdf, out.mean_pt_cdf);
