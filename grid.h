@@ -66,7 +66,7 @@ public:
     enum class DerivDir { X, Y };
     /// total number of cells
     std::size_t numCells() const { return static_cast<std::size_t>(nx_)*ny_; }
-    enum class velocity_correlation_model {exponential, gaussian, matern, oneoversum} VelocityCorrelationModel = velocity_correlation_model::exponential;
+    enum class velocity_correlation_model {exponential, gaussian, matern, oneoversum, exponential_vdep} VelocityCorrelationModel = velocity_correlation_model::exponential_vdep;
     // --------- Indexing helpers ---------
 
     /// Flattened index for cell (i,j) in row-major order: I = j*nx + i
@@ -700,3 +700,5 @@ static inline double cov_exp_sep(double dx, double dy, double lx, double ly);
 
 // metric consistent with the covariance for nearest-neighbor sorting
 static inline double metric_sep(double dx, double dy, double lx, double ly);
+
+static double h_exchange(double alpha);
