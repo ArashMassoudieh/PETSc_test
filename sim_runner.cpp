@@ -1180,7 +1180,7 @@ static bool run_upscaled(
     Grid2D g_u(nx, ny, Lx, Ly);
 
     if (P.CorrelationModel == SimParams::correlationmode::exponentialfit)
-        g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::exponential;
+        g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::exponential_vdep;
     else if (P.CorrelationModel == SimParams::correlationmode::gaussian)
         g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::gaussian;
     else if (P.CorrelationModel == SimParams::correlationmode::matern)
