@@ -3,6 +3,7 @@
 #include "sim_helpers.h"
 
 #include <mpi.h>
+
 #include <fstream>
 #include <iostream>
 #include <algorithm>
@@ -14,6 +15,9 @@
 #include <limits>
 #include <iomanip>
 #include <filesystem>
+#include <stdexcept>
+#include <cstdint>
+#include <vector>
 
 #include "grid.h"
 #include "Pathway.h"
@@ -236,6 +240,126 @@ static bool build_mean_qx_inverse_cdf_from_multi(
 }
 
 // ============================================================================
+// NEW: mean_ts switch (driven by RunOptions::mean_ts_mode)
+//   - First   : reference grid = first series
+//   - Longest : reference grid = longest series
+//   - Union   : reference grid = union of all times (unique), interpolate each series
+// ============================================================================
+
+static inline bool ts_has_support_at_t(const TimeSeries<double>& ts, double t)
+{
+    const int n = (int)ts.size();
+    if (n < 2) return false;
+
+    const double t0 = ts.getTime(0);
+    const double t1 = ts.getTime(n - 1);
+
+    const double tmin = std::min(t0, t1);
+    const double tmax = std::max(t0, t1);
+
+    return (t >= tmin && t <= tmax);
+}
+
+static TimeSeries<double> mean_ts_by_mode(const TimeSeriesSet<double>& set, RunOptions::MeanTSMode mode)
+{
+    TimeSeries<double> out;
+
+    const int ns = (int)set.size();
+    if (ns <= 0) return out;
+
+    auto pick_ref_index_first = [&]() -> int { return 0; };
+
+    auto pick_ref_index_longest = [&]() -> int {
+        int best = 0;
+        int best_n = -1;
+        for (int i = 0; i < ns; ++i) {
+            const int n = (int)set[i].size();
+            if (n > best_n) { best_n = n; best = i; }
+        }
+        return best;
+    };
+
+    if (mode == RunOptions::MeanTSMode::Union) {
+
+        std::vector<double> grid;
+        grid.reserve(4096);
+
+        for (int i = 0; i < ns; ++i) {
+            const int n = (int)set[i].size();
+            for (int k = 0; k < n; ++k) {
+                const double t = set[i].getTime(k);
+                if (std::isfinite(t)) grid.push_back(t);
+            }
+        }
+
+        if (grid.size() < 2) return out;
+
+        std::sort(grid.begin(), grid.end());
+
+        // unique with tolerance
+        const double eps = 1e-12;
+        std::vector<double> uniq;
+        uniq.reserve(grid.size());
+        for (size_t i = 0; i < grid.size(); ++i) {
+            if (uniq.empty() || std::abs(grid[i] - uniq.back()) > eps) uniq.push_back(grid[i]);
+        }
+
+        for (size_t it = 0; it < uniq.size(); ++it) {
+            const double t = uniq[it];
+
+            double sum = 0.0;
+            int cnt = 0;
+
+            for (int j = 0; j < ns; ++j) {
+                const auto& ts = set[j];
+                if (!ts_has_support_at_t(ts, t)) continue;
+
+                const double v = ts.interpol(t);
+                if (std::isfinite(v)) { sum += v; cnt++; }
+            }
+
+            if (cnt > 0) out.append(t, sum / (double)cnt);
+        }
+
+        return out;
+    }
+
+    // Reference-grid (First/Longest)
+    const int ref =
+        (mode == RunOptions::MeanTSMode::First) ? pick_ref_index_first()
+                                               : pick_ref_index_longest();
+
+    const auto& ref_ts = set[ref];
+    const int nref = (int)ref_ts.size();
+    if (nref < 2) return out;
+
+    for (int k = 0; k < nref; ++k) {
+        const double t = ref_ts.getTime(k);
+        if (!std::isfinite(t)) continue;
+
+        double sum = 0.0;
+        int cnt = 0;
+
+        for (int j = 0; j < ns; ++j) {
+            const auto& ts = set[j];
+            if (!ts_has_support_at_t(ts, t)) continue;
+
+            const double v = ts.interpol(t);
+            if (std::isfinite(v)) { sum += v; cnt++; }
+        }
+
+        if (cnt > 0) out.append(t, sum / (double)cnt);
+    }
+
+    return out;
+}
+
+static inline TimeSeries<double> mean_ts_by_opts(const TimeSeriesSet<double>& set, const RunOptions& opts)
+{
+    return mean_ts_by_mode(set, opts.mean_ts_mode);
+}
+
+// ============================================================================
 // Robust realization reject helpers (delete folder + log)
 // ============================================================================
 
@@ -436,7 +560,8 @@ int runDiffusionSimulation(const RunOptions &opts, int realization, const std::s
 static void writeMeanCorrelations(
     const std::string& run_dir,
     const SimParams& P,
-    FineScaleOutputs& outputs)
+    FineScaleOutputs& outputs,
+    const RunOptions& opts)
 {
     outputs.advective_correlations.write(joinPath(run_dir, "advective_correlations.txt"));
     outputs.velocity_x_correlations.write(joinPath(run_dir, "diffusion_x_correlations.txt"));
@@ -444,12 +569,12 @@ static void writeMeanCorrelations(
     outputs.K_x_correlations.write(joinPath(run_dir, "K_x_correlations.txt"));
     outputs.K_y_correlations.write(joinPath(run_dir, "K_y_correlations.txt"));
 
-    // LEGACY mean_ts (aligned-by-index; mean length = longest; missing series skipped)
-    auto mean_corr_a    = outputs.advective_correlations.mean_ts();
-    auto mean_corr_x    = outputs.velocity_x_correlations.mean_ts();
-    auto mean_corr_y    = outputs.velocity_y_correlations.mean_ts();
-    auto mean_K_corr_x  = outputs.K_x_correlations.mean_ts();
-    auto mean_K_corr_y  = outputs.K_y_correlations.mean_ts();
+    // mean_ts() switch (from main via opts.mean_ts_mode)
+    auto mean_corr_a    = mean_ts_by_opts(outputs.advective_correlations, opts);
+    auto mean_corr_x    = mean_ts_by_opts(outputs.velocity_x_correlations, opts);
+    auto mean_corr_y    = mean_ts_by_opts(outputs.velocity_y_correlations, opts);
+    auto mean_K_corr_x  = mean_ts_by_opts(outputs.K_x_correlations, opts);
+    auto mean_K_corr_y  = mean_ts_by_opts(outputs.K_y_correlations, opts);
 
     mean_corr_a.writefile(joinPath(run_dir, "advective_correlations_mean.txt"));
     mean_corr_x.writefile(joinPath(run_dir, "diffusion_x_correlations_mean.txt"));
@@ -529,6 +654,10 @@ static void computeFinalMeans(FineScaleOutputs& outputs)
     outputs.velocity_lx_mean = mean_of(outputs.velocity_lx_all);
     outputs.velocity_ly_mean = mean_of(outputs.velocity_ly_all);
     outputs.dt_mean          = mean_of(outputs.dt_all);
+
+    // NOTE:
+    // outputs.lambda_K_x_mean / lambda_K_y_mean are set in writeMeanCorrelations().
+    // In hardcoded mode they may remain NaN unless you explicitly set them.
 }
 
 // ============================================================================
@@ -544,7 +673,6 @@ static bool run_fine_loop_collect(
 {
     const int nx = P.nx, ny = P.ny, nu = P.nu;
     const double Lx = P.Lx, Ly = P.Ly;
-    const double du = du_from_nu(nu);
 
     const std::string stats_csv = joinPath(run_dir, "fine_params_all.csv");
     if (rank == 0) {
@@ -726,7 +854,7 @@ static bool run_fine_loop_collect(
                 qx_inverse_cdf = g.extractFieldCDF("qx", Grid2D::ArrayKind::Fx, 100, 1e-6);
                 qx_pdf         = g.extractFieldPDF("qx", Grid2D::ArrayKind::Fx, 50,  1e-6, true);
 
-                qx_inverse_cdf = qx_inverse_cdf.make_uniform(du);
+                qx_inverse_cdf = qx_inverse_cdf.make_uniform(du_from_nu(P.nu));
                 qx_inverse_cdf.writefile(joinPath(fine_dir, pfx + "qx_inverse_cdf.txt"));
                 qx_pdf.writefile(joinPath(fine_dir, pfx + "qx_pdf.txt"));
 
@@ -820,7 +948,7 @@ static bool run_fine_loop_collect(
                 if (opts.solve_fine_scale_transport) {
                     for (int i = 0; i < (int)P.xLocations.size() && i < (int)BTCs_FineScaled.size(); ++i) {
                         BTCs_FineScaled.setSeriesName(i, fmt_x(P.xLocations[i]));
-                        // ✅ FIX: stack RAW BTC (NOT derivative) so mean_ts() can’t go negative unless BTC does
+                        // stack RAW BTC (NOT derivative)
                         outputs.BTCs[i].append(BTCs_FineScaled[i], pfx + fmt_x(P.xLocations[i]));
                     }
                 }
@@ -899,10 +1027,10 @@ static bool run_fine_loop_collect(
         outputs.inverse_qx_cdfs.write(joinPath(run_dir, "qx_inverse_cdfs.txt"));
         outputs.qx_pdfs.write(joinPath(run_dir, "qx_pdfs.txt"));
 
-        // LEGACY mean_ts (aligned-by-index; mean length = longest; missing series skipped)
-        outputs.qx_pdfs.mean_ts().writefile(joinPath(run_dir, "qx_mean_pdf.txt"));
+        // mean_ts switch (from main via opts.mean_ts_mode)
+        mean_ts_by_opts(outputs.qx_pdfs, opts).writefile(joinPath(run_dir, "qx_mean_pdf.txt"));
 
-        writeMeanCorrelations(run_dir, P, outputs);
+        writeMeanCorrelations(run_dir, P, outputs, opts);
         computeFinalMeans(outputs);
 
         // mean PT arrival time over realizations
@@ -1071,6 +1199,10 @@ static bool build_mean_for_upscaled(
 
     const std::string run_cdf_copy_path = joinPath(run_dir, "mean_qx_inverse_cdf.txt");
 
+    // Ensure these are always defined (even in hardcoded mode)
+    fine_outputs.lambda_K_x_mean = std::numeric_limits<double>::quiet_NaN();
+    fine_outputs.lambda_K_y_mean = std::numeric_limits<double>::quiet_NaN();
+
     // Case 1: hardcoded mean
     if (opts.hardcoded_mean) {
         fine_outputs.lc_mean          = H.lc_mean;
@@ -1087,8 +1219,8 @@ static bool build_mean_for_upscaled(
 
     // Case 2: computed from fine loop
     if (!opts.upscale_only) {
-        // inverse_qx_cdfs were forced to uniform du in fine loop -> aligned-by-index mean is correct
-        invcdf_mean = fine_outputs.inverse_qx_cdfs.mean_ts();
+        // mean_ts switch (from main via opts.mean_ts_mode)
+        invcdf_mean = mean_ts_by_opts(fine_outputs.inverse_qx_cdfs, opts);
         invcdf_mean.writefile(run_cdf_copy_path);
         writeComputedMeanParams(run_dir, P, fine_outputs);
         return true;
@@ -1120,13 +1252,48 @@ static bool build_mean_for_upscaled(
 static void computeMeanBTCs(
     const std::vector<double>& xLocations,
     const std::vector<TimeSeriesSet<double>>& stacks,
-    TimeSeriesSet<double>& mean_out)
+    TimeSeriesSet<double>& mean_out,
+    const RunOptions& opts)
 {
     mean_out.clear();
     for (int i = 0; i < (int)xLocations.size(); ++i) {
-        // LEGACY mean_ts: mean as long as the longest; handles missing (shorter) series by skipping
-        auto m = stacks[i].mean_ts(0);
+        const auto m = mean_ts_by_opts(stacks[i], opts);
         mean_out.append(m, fmt_x(xLocations[i]));
+    }
+}
+
+// -----------------------------------------------------------------------------
+// IMPORTANT FIX:
+// TimeSeries<double> is NOT guaranteed to be a contiguous double buffer.
+// So we broadcast as (times[], values[]) and reconstruct.
+// -----------------------------------------------------------------------------
+static void broadcastTimeSeries(TimeSeries<double>& ts, int rank)
+{
+    int n = 0;
+    if (rank == 0) n = (int)ts.size();
+    MPI_Bcast(&n, 1, MPI_INT, 0, PETSC_COMM_WORLD);
+
+    std::vector<double> tbuf, vbuf;
+    if (rank == 0) {
+        tbuf.resize(n);
+        vbuf.resize(n);
+        for (int i = 0; i < n; ++i) {
+            tbuf[i] = ts.getTime(i);
+            vbuf[i] = ts.getValue(i);
+        }
+    } else {
+        tbuf.resize(n);
+        vbuf.resize(n);
+    }
+
+    if (n > 0) {
+        MPI_Bcast(tbuf.data(), n, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
+        MPI_Bcast(vbuf.data(), n, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
+    }
+
+    if (rank != 0) {
+        ts.clear();
+        for (int i = 0; i < n; ++i) ts.append(tbuf[i], vbuf[i]);
     }
 }
 
@@ -1144,11 +1311,7 @@ static void broadcastMeanParameters(
     MPI_Bcast(&outputs.lambda_K_x_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
     MPI_Bcast(&outputs.lambda_K_y_mean, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
 
-    int nU_b = 0;
-    if (rank == 0) nU_b = (int)invcdf_mean.size();
-    MPI_Bcast(&nU_b, 1, MPI_INT, 0, PETSC_COMM_WORLD);
-    if (rank != 0) invcdf_mean.resize(nU_b);
-    MPI_Bcast(invcdf_mean.data(), nU_b, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
+    broadcastTimeSeries(invcdf_mean, rank);
 }
 
 // ============================================================================
@@ -1229,7 +1392,9 @@ static bool run_upscaled(
     g_u.computeMixingDiffusionCoefficient();
     g_u.writeNamedVTI("D_y", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "D_y.vti"));
 
-    g_u.assignConstant("C", Grid2D::ArrayKind::Cell, 0);
+    // FIX: SolveTransport below uses "Cu" -> make sure it exists/initialized
+    g_u.assignConstant("Cu", Grid2D::ArrayKind::Cell, 0.0);
+
     g_u.setBTCLocations(P.xLocations);
 
     TimeSeriesSet<double> BTCs_Upscaled;
@@ -1241,7 +1406,7 @@ static bool run_upscaled(
 
         for (int i = 0; i < (int)P.xLocations.size() && i < (int)BTCs_Upscaled.size(); ++i) {
             BTCs_Upscaled.setSeriesName(i, fmt_x(P.xLocations[i]));
-            // ✅ FIX: stack RAW BTC (NOT derivative)
+            // stack RAW BTC (NOT derivative)
             Fine_Scale_BTCs_transport[i].append(BTCs_Upscaled[i], "Upscaled" + fmt_x(P.xLocations[i]));
         }
 
@@ -1348,10 +1513,10 @@ bool run_simulation_blocks(
     out.up_btc_path = up_btc_path;
     out.up_btc_deriv_path = up_btc_deriv_path;
 
-    // Means (SEPARATED) — LEGACY mean_ts used inside computeMeanBTCs
-    computeMeanBTCs(P.xLocations, out.Fine_Scale_BTCs,   out.mean_transport_full);
-    computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_pdf, out.mean_pt_pdf);
-    computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_cdf, out.mean_pt_cdf);
+    // Means (SEPARATED) — switchable via opts.mean_ts_mode
+    computeMeanBTCs(P.xLocations, out.Fine_Scale_BTCs,   out.mean_transport_full, opts);
+    computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_pdf, out.mean_pt_pdf,         opts);
+    computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_cdf, out.mean_pt_cdf,         opts);
 
     out.mean_BTCs = out.mean_transport_full;
 

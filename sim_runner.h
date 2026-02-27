@@ -37,6 +37,12 @@ struct RunOptions
     std::string hardcoded_qx_cdf_path;
 
     // -----------------------------
+    // NEW: mean_ts mode (loaded in main; no helpers added there)
+    // -----------------------------
+    enum class MeanTSMode { First, Longest, Union };
+    MeanTSMode mean_ts_mode = MeanTSMode::Longest;
+
+    // -----------------------------
     // Wiener particle tracker (1D/2D)
     // -----------------------------
     bool wiener_enable = false;          // default OFF
@@ -83,7 +89,7 @@ struct FineScaleOutputs
     double velocity_ly_mean = 0.0;
     double dt_mean = 0.0;
 
-    // TRANSPORT compare stacks (per-x), stores derivative curves
+    // TRANSPORT compare stacks (per-x), stores RAW BTC curves (NOT derivative)
     std::vector<TimeSeriesSet<double>> BTCs;
 
     // PT compare stacks (SEPARATE)

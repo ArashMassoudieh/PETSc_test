@@ -194,6 +194,14 @@ int main(int argc, char** argv)
     if (opts.hardcoded_mean) opts.upscale_only = true;
 
     // -----------------------------
+    // NEW: mean_ts switch (loaded from main; no extra helpers)
+    //   - --mean-ts    => robust mean on TimeSeriesSet (Longest ref / union-safe)
+    //   - --no-mean-ts => legacy-style mean (First-series grid)
+    // -----------------------------
+    opts.mean_ts_mode = use_timeseriesset_mean ? RunOptions::MeanTSMode::Longest
+                                              : RunOptions::MeanTSMode::First;
+
+    // -----------------------------
     // Params (kept here)
     // -----------------------------
     SimParams P;

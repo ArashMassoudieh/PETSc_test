@@ -716,7 +716,9 @@ TimeSeriesSet<double> PathwaySet::getBreakthroughCurve(
 
             if (resident) {
                 if (std::abs(vx_i) < 1e-15) continue;
-                tw.push_back({t_i, 1.0 / vx_i});
+                const double speed = std::abs(vx_i);
+                if (speed < 1e-15) continue;
+                tw.push_back({t_i, 1.0 / speed});
             } else {
                 tw.push_back({t_i, 1.0});
             }
