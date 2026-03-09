@@ -1393,7 +1393,7 @@ static bool run_upscaled(
     g_u.writeNamedVTI("D_y", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "D_y.vti"));
 
     // FIX: SolveTransport below uses "Cu" -> make sure it exists/initialized
-    g_u.assignConstant("Cu", Grid2D::ArrayKind::Cell, 0.0);
+    g_u.assignConstant("C", Grid2D::ArrayKind::Cell, 0.0);
 
     g_u.setBTCLocations(P.xLocations);
 
@@ -1402,7 +1402,7 @@ static bool run_upscaled(
     const std::string up_btc_deriv_path = joinPath(up_dir, up_pfx + "BTC_Upscaled_derivative.csv");
 
     if (opts.solve_upscale_transport) {
-        g_u.SolveTransport(P.t_end_pdf, dt_mean, "transport_", 500, up_dir, "Cu", &BTCs_Upscaled);
+        g_u.SolveTransport(P.t_end_pdf, dt_mean, "transport_", 500, up_dir, "C", &BTCs_Upscaled);
 
         for (int i = 0; i < (int)P.xLocations.size() && i < (int)BTCs_Upscaled.size(); ++i) {
             BTCs_Upscaled.setSeriesName(i, fmt_x(P.xLocations[i]));
