@@ -2116,8 +2116,8 @@ double Grid2D::kappa(double v, double lc, double lambda_x, double lambda_y) cons
         //   kappa(v) = v/lc + (D/lam_x^2)*h(D*lc/(v*lam_x^2))
         //                   + (D/lam_y^2)*h(D*lc/(v*lam_y^2))
         double v_safe = std::max(v, 1.0e-30);
-        double alpha_x = D * lc / (v_safe * lambda_x * lambda_x);
-        double alpha_y = D * lc / (v_safe * lambda_y * lambda_y);
+        double alpha_x = D * lc / (v_safe * pow(diffusionfactor_,2)*lambda_x * lambda_x);
+        double alpha_y = D * lc / (v_safe * pow(diffusionfactor_,2)*lambda_y * lambda_y);
         return term_adv
                + (D / (lambda_x * lambda_x)) * h_exchange(alpha_x)
                + (D / (lambda_y * lambda_y)) * h_exchange(alpha_y);

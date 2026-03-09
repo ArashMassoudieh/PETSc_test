@@ -49,8 +49,8 @@ int main(int argc, char** argv)
     // Scratch by default (no file loading). Enable via --hardcoded-mean.
     opts.hardcoded_mean = false;
 
-    opts.solve_fine_scale_transport = false;
-    opts.solve_upscale_transport    = false;
+    opts.solve_fine_scale_transport = true;
+    opts.solve_upscale_transport    = true;
 
     opts.perform_particle_tracking = true;
     opts.perform_upscaled_PT = true;
@@ -218,11 +218,11 @@ int main(int argc, char** argv)
     P.diffusion_factor = 1;
 
     // "D" in naming = diffusion coefficient (physics diffusion)
-    P.Diffusion_coefficient = 0.01;
+    P.Diffusion_coefficient = 0.00;
 
     P.stdev = 2.0;
     P.g_mean = 0.0;
-    P.CorrelationModel = SimParams::correlationmode::exponentialfit; //or gaussian
+    P.CorrelationModel = SimParams::correlationmode::gaussian; //or gaussian
     P.correlation_x_range = {0.001, P.correlation_ls_x};
     P.correlation_y_range = {0.001, P.correlation_ls_y};
 
