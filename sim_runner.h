@@ -89,8 +89,10 @@ struct FineScaleOutputs
     double velocity_ly_mean = 0.0;
     double dt_mean = 0.0;
 
-    // TRANSPORT compare stacks (per-x), stores RAW BTC curves (NOT derivative)
-    std::vector<TimeSeriesSet<double>> BTCs;
+    // TRANSPORT compare stacks (per-x), SEPARATED
+    // legacy transport outputs now map to PDF in main.cpp
+    std::vector<TimeSeriesSet<double>> BTCs_transport_pdf;
+    std::vector<TimeSeriesSet<double>> BTCs_transport_cdf;
 
     // PT compare stacks (SEPARATE)
     std::vector<TimeSeriesSet<double>> PT_pdfs;
@@ -157,13 +159,20 @@ struct RunOutputs
     std::string run_dir;
 
     // TRANSPORT compare stacks (per-x)
+    // Legacy transport compare now maps to PDF
     std::vector<TimeSeriesSet<double>> Fine_Scale_BTCs;
 
-    // Backward-compatible mean container (TRANSPORT mean)
+    // Explicit transport split
+    std::vector<TimeSeriesSet<double>> Fine_Scale_BTCs_pdf;
+    std::vector<TimeSeriesSet<double>> Fine_Scale_BTCs_cdf;
+
+    // Backward-compatible mean container (legacy transport mean -> PDF)
     TimeSeriesSet<double> mean_BTCs;
 
-    // Preferred explicit transport mean
-    TimeSeriesSet<double> mean_transport_full;
+    // Explicit transport means
+    TimeSeriesSet<double> mean_transport_full; // kept for compatibility; currently same as PDF mean
+    TimeSeriesSet<double> mean_transport_pdf;
+    TimeSeriesSet<double> mean_transport_cdf;
 
     // PT compare stacks (SEPARATE)
     std::vector<TimeSeriesSet<double>> Fine_Scale_PT_pdf;

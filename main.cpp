@@ -76,8 +76,8 @@ int main(int argc, char** argv)
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260202_003241_std2_D0.1_aniso");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_std2_D0.01_aniso");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=2, D=0, aniso1&0.1");
-    std::string resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso");
     //std::string resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso");
+    std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_std2_D0.01_aniso");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=1, D=0, aniso1&0.1");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260210_183158_std1_D0.01_aniso1&0.1_df0.15");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260211_083055_std1_D0.1_aniso1&0.1_df0.15");
@@ -97,7 +97,7 @@ int main(int argc, char** argv)
     // Calibration options
     // -----------------------------
     bool do_calib = false;
-    double calib_min = 0.1, calib_max = 0.25, calib_step = 0.01;
+    double calib_min = 0.5, calib_max = 3, calib_step = 0.5;
 
     // NOTE: may be overridden later (in hardcoded_mean mode we default to resume folder)
     std::string black_mean_csv = joinPath(resume_run_dir, "BTC_mean.csv");
@@ -218,7 +218,7 @@ int main(int argc, char** argv)
     P.diffusion_factor = 1;
 
     // "D" in naming = diffusion coefficient (physics diffusion)
-    P.Diffusion_coefficient = 0.00;
+    P.Diffusion_coefficient = 0;
 
     P.stdev = 2.0;
     P.g_mean = 0.0;
@@ -452,18 +452,40 @@ int main(int argc, char** argv)
 
             if (rank == 0) {
                 for (int i = 0; i < (int)P.xLocations.size(); ++i) {
-                    const std::string out_cmp = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare.csv");
-                    out.Fine_Scale_BTCs[i].write(out_cmp);
+                    const std::string out_cmp_legacy = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare.csv");
+                    const std::string out_cmp_pdf    = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare_pdf.csv");
+                    const std::string out_cmp_cdf    = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare_cdf.csv");
+
+                    // legacy transport compare -> PDF
+                    out.Fine_Scale_BTCs[i].write(out_cmp_legacy);
+
+                    // explicit transport compare
+                    out.Fine_Scale_BTCs_pdf[i].write(out_cmp_pdf);
+                    out.Fine_Scale_BTCs_cdf[i].write(out_cmp_cdf);
                 }
 
-                const std::string out_mean = joinPath(out.run_dir, "BTC_mean.csv");
-                out.mean_BTCs.write(out_mean);
+                // legacy transport mean -> PDF
+                {
+                    const std::string out_mean = joinPath(out.run_dir, "BTC_mean.csv");
+                    out.mean_BTCs.write(out_mean);
+                }
 
-                // separated means (NO mixing)
+                // explicit transport means
+                {
+                    const std::string out_mean_pdf = joinPath(out.run_dir, "BTC_mean_pdf.csv");
+                    out.mean_transport_pdf.write(out_mean_pdf);
+                }
+                {
+                    const std::string out_mean_cdf = joinPath(out.run_dir, "BTC_mean_cdf.csv");
+                    out.mean_transport_cdf.write(out_mean_cdf);
+                }
+
+                // keep existing separated transport alias output
                 {
                     const std::string out_tr = joinPath(out.run_dir, "BTC_mean_transport_full.csv");
                     out.mean_transport_full.write(out_tr);
                 }
+
                 {
                     const std::string out_pt_pdf = joinPath(out.run_dir, "PT_mean_pdf.csv");
                     out.mean_pt_pdf.write(out_pt_pdf);
@@ -536,18 +558,41 @@ int main(int argc, char** argv)
     // Write compare + mean CSVs (RANK 0 ONLY — avoid clobber/races)
     if (rank == 0) {
         for (int i = 0; i < (int)P.xLocations.size(); ++i) {
-            const std::string out_cmp = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare.csv");
-            out.Fine_Scale_BTCs[i].write(out_cmp);
-            std::cout << "Wrote: " << out_cmp << "\n";
+            const std::string out_cmp_legacy = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare.csv");
+            const std::string out_cmp_pdf    = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare_pdf.csv");
+            const std::string out_cmp_cdf    = joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "BTC_Compare_cdf.csv");
+
+            // legacy transport compare -> PDF
+            out.Fine_Scale_BTCs[i].write(out_cmp_legacy);
+            std::cout << "Wrote: " << out_cmp_legacy << "\n";
+
+            // explicit transport compare files
+            out.Fine_Scale_BTCs_pdf[i].write(out_cmp_pdf);
+            std::cout << "Wrote: " << out_cmp_pdf << "\n";
+
+            out.Fine_Scale_BTCs_cdf[i].write(out_cmp_cdf);
+            std::cout << "Wrote: " << out_cmp_cdf << "\n";
         }
         {
-            // Keep legacy scoring mean exactly as before
+            // legacy transport mean -> PDF
             const std::string out_mean = joinPath(out.run_dir, "BTC_mean.csv");
             out.mean_BTCs.write(out_mean);
             std::cout << "Wrote: " << out_mean << "\n";
         }
 
-        // separated means (NO mixing)
+        // explicit transport means
+        {
+            const std::string out_mean_pdf = joinPath(out.run_dir, "BTC_mean_pdf.csv");
+            out.mean_transport_pdf.write(out_mean_pdf);
+            std::cout << "Wrote: " << out_mean_pdf << "\n";
+        }
+        {
+            const std::string out_mean_cdf = joinPath(out.run_dir, "BTC_mean_cdf.csv");
+            out.mean_transport_cdf.write(out_mean_cdf);
+            std::cout << "Wrote: " << out_mean_cdf << "\n";
+        }
+
+        // keep separated transport alias output
         {
             const std::string out_tr = joinPath(out.run_dir, "BTC_mean_transport_full.csv");
             out.mean_transport_full.write(out_tr);

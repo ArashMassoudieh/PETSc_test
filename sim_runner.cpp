@@ -56,7 +56,8 @@ static bool run_upscaled(
     std::string& up_dir_out,
     std::string& up_btc_path_out,
     std::string& up_btc_deriv_path_out,
-    std::vector<TimeSeriesSet<double>>& Fine_Scale_BTCs_transport,
+    std::vector<TimeSeriesSet<double>>& Fine_Scale_BTCs_transport_pdf,
+    std::vector<TimeSeriesSet<double>>& Fine_Scale_BTCs_transport_cdf,
     std::vector<TimeSeriesSet<double>>& Fine_Scale_PT_pdf,
     std::vector<TimeSeriesSet<double>>& Fine_Scale_PT_cdf,
     int rank);
@@ -240,10 +241,11 @@ static bool build_mean_qx_inverse_cdf_from_multi(
 }
 
 // ============================================================================
-// NEW: mean_ts switch (driven by RunOptions::mean_ts_mode)
+// mean_ts switch (driven by RunOptions::mean_ts_mode)
 //   - First   : reference grid = first series
 //   - Longest : reference grid = longest series
-//   - Union   : reference grid = union of all times (unique), interpolate each series
+//   - Union   : reference grid = union of all times (unique), interpolate each
+//               series only inside its support, then average NaN-safely
 // ============================================================================
 
 static inline bool ts_has_support_at_t(const TimeSeries<double>& ts, double t)
@@ -661,7 +663,30 @@ static void computeFinalMeans(FineScaleOutputs& outputs)
 }
 
 // ============================================================================
-// Fine loop (RETRY/REJECT) — collects transport BTCs + PT pdf/cdf stacks
+// Fine loop (RETRY/REJECT)
+//
+// Collects:
+//   - transport CDF stacks (raw BTCs)
+//   - transport PDF stacks (derivatives of BTCs)
+//   - PT PDF/CDF stacks
+//
+// IMPORTANT transport convention used by the latest code:
+//
+//   Legacy transport outputs written later in main.cpp:
+//       x=...BTC_Compare.csv
+//       BTC_mean.csv
+//
+//   now store TRANSPORT PDF, not raw/CDF.
+//
+//   New explicit transport files also written later:
+//       x=...BTC_Compare_pdf.csv
+//       x=...BTC_Compare_cdf.csv
+//       BTC_mean_pdf.csv
+//       BTC_mean_cdf.csv
+//
+// Internally, this function therefore stores BOTH transport forms:
+//   - BTCs_transport_cdf : raw BTC / cumulative-style transport curves
+//   - BTCs_transport_pdf : derivative of those BTC curves
 // ============================================================================
 
 static bool run_fine_loop_collect(
@@ -681,7 +706,8 @@ static bool run_fine_loop_collect(
     }
 
     // Ensure stacks exist
-    outputs.BTCs.resize(P.xLocations.size());
+    outputs.BTCs_transport_pdf.resize(P.xLocations.size());
+    outputs.BTCs_transport_cdf.resize(P.xLocations.size());
     outputs.PT_pdfs.resize(P.xLocations.size());
     outputs.PT_cdfs.resize(P.xLocations.size());
 
@@ -861,6 +887,13 @@ static bool run_fine_loop_collect(
                 dt_optimal = 0.5 * g.dx() / g.fieldMinMax("qx", Grid2D::ArrayKind::Fx).second;
 
                 // ---- Transport (can also throw; reject if it does) ----
+                //
+                // BTCs_FineScaled is the RAW transport BTC returned by SolveTransport.
+                // In the current output convention:
+                //   - raw BTC  -> stored into transport CDF stack
+                //   - derivative -> stored into transport PDF stack
+                //
+                // Legacy transport files written later use the PDF stack.
                 g.assignConstant("C", Grid2D::ArrayKind::Cell, 0);
                 g.SetVal("diffusion", P.Diffusion_coefficient);
                 g.SetVal("porosity", 1.0);
@@ -872,6 +905,9 @@ static bool run_fine_loop_collect(
                     g.SolveTransport(P.t_end_pdf, std::min(dt_optimal, 0.5 / 10.0),
                                      "transport_", 500, fine_dir, "C", &BTCs_FineScaled, r);
 
+                    // Per-realization diagnostic files:
+                    //   BTC_FineScaled.csv            -> raw/CDF-style transport BTC
+                    //   BTC_FineScaled_derivative.csv -> PDF-style transport BTC
                     BTCs_FineScaled.write(joinPath(fine_dir, pfx + "BTC_FineScaled.csv"));
                     BTCs_FineScaled.derivative().write(joinPath(fine_dir, pfx + "BTC_FineScaled_derivative.csv"));
                 }
@@ -946,10 +982,18 @@ static bool run_fine_loop_collect(
                 outputs.lc_all.push_back(lc_emp);
 
                 if (opts.solve_fine_scale_transport) {
+                    TimeSeriesSet<double> BTCs_FineScaled_deriv = BTCs_FineScaled.derivative();
+
+                    // Store RAW transport BTC into explicit CDF stack
                     for (int i = 0; i < (int)P.xLocations.size() && i < (int)BTCs_FineScaled.size(); ++i) {
                         BTCs_FineScaled.setSeriesName(i, fmt_x(P.xLocations[i]));
-                        // stack RAW BTC (NOT derivative)
-                        outputs.BTCs[i].append(BTCs_FineScaled[i], pfx + fmt_x(P.xLocations[i]));
+                        outputs.BTCs_transport_cdf[i].append(BTCs_FineScaled[i], pfx + fmt_x(P.xLocations[i]));
+                    }
+
+                    // Store derivative transport BTC into explicit PDF stack
+                    for (int i = 0; i < (int)P.xLocations.size() && i < (int)BTCs_FineScaled_deriv.size(); ++i) {
+                        BTCs_FineScaled_deriv.setSeriesName(i, fmt_x(P.xLocations[i]));
+                        outputs.BTCs_transport_pdf[i].append(BTCs_FineScaled_deriv[i], pfx + fmt_x(P.xLocations[i]));
                     }
                 }
 
@@ -1316,6 +1360,15 @@ static void broadcastMeanParameters(
 
 // ============================================================================
 // Upscaled run (transport + PT separate)
+//
+// Transport convention used here:
+//
+//   Raw upscaled BTC   -> explicit transport CDF stack
+//   Derivative of BTC  -> explicit transport PDF stack
+//
+// Later in main.cpp:
+//   - legacy transport files use the PDF stack
+//   - explicit _pdf/_cdf files use the corresponding explicit stacks
 // ============================================================================
 
 static bool run_upscaled(
@@ -1332,7 +1385,8 @@ static bool run_upscaled(
     std::string& up_dir_out,
     std::string& up_btc_path_out,
     std::string& up_btc_deriv_path_out,
-    std::vector<TimeSeriesSet<double>>& Fine_Scale_BTCs_transport,
+    std::vector<TimeSeriesSet<double>>& Fine_Scale_BTCs_transport_pdf,
+    std::vector<TimeSeriesSet<double>>& Fine_Scale_BTCs_transport_cdf,
     std::vector<TimeSeriesSet<double>>& Fine_Scale_PT_pdf,
     std::vector<TimeSeriesSet<double>>& Fine_Scale_PT_cdf,
     int rank)
@@ -1404,12 +1458,23 @@ static bool run_upscaled(
     if (opts.solve_upscale_transport) {
         g_u.SolveTransport(P.t_end_pdf, dt_mean, "transport_", 500, up_dir, "C", &BTCs_Upscaled);
 
+        TimeSeriesSet<double> BTCs_Upscaled_deriv = BTCs_Upscaled.derivative();
+
+        // Append RAW upscaled transport BTC to explicit CDF stack
         for (int i = 0; i < (int)P.xLocations.size() && i < (int)BTCs_Upscaled.size(); ++i) {
             BTCs_Upscaled.setSeriesName(i, fmt_x(P.xLocations[i]));
-            // stack RAW BTC (NOT derivative)
-            Fine_Scale_BTCs_transport[i].append(BTCs_Upscaled[i], "Upscaled" + fmt_x(P.xLocations[i]));
+            Fine_Scale_BTCs_transport_cdf[i].append(BTCs_Upscaled[i], "Upscaled" + fmt_x(P.xLocations[i]));
         }
 
+        // Append derivative upscaled transport BTC to explicit PDF stack
+        for (int i = 0; i < (int)P.xLocations.size() && i < (int)BTCs_Upscaled_deriv.size(); ++i) {
+            BTCs_Upscaled_deriv.setSeriesName(i, fmt_x(P.xLocations[i]));
+            Fine_Scale_BTCs_transport_pdf[i].append(BTCs_Upscaled_deriv[i], "Upscaled" + fmt_x(P.xLocations[i]));
+        }
+
+        // Per-upscaled-run transport files:
+        //   BTC_Upscaled.csv            -> raw/CDF-style transport BTC
+        //   BTC_Upscaled_derivative.csv -> PDF-style transport BTC
         BTCs_Upscaled.write(up_btc_path);
         BTCs_Upscaled.derivative().write(up_btc_deriv_path);
     }
@@ -1451,6 +1516,25 @@ static bool run_upscaled(
 
 // ============================================================================
 // Main orchestrator
+//
+// Transport convention propagated to RunOutputs:
+//
+//   Explicit stacks:
+//     Fine_Scale_BTCs_pdf  -> PDF transport compare stack
+//     Fine_Scale_BTCs_cdf  -> CDF/raw transport compare stack
+//
+//   Legacy stack:
+//     Fine_Scale_BTCs      -> alias to PDF transport stack
+//
+//   Explicit means:
+//     mean_transport_pdf
+//     mean_transport_cdf
+//
+//   Legacy means:
+//     mean_BTCs            -> alias to PDF transport mean
+//     mean_transport_full  -> currently also alias to PDF transport mean
+//
+// This preserves old filenames while changing their content to PDF.
 // ============================================================================
 
 bool run_simulation_blocks(
@@ -1461,9 +1545,15 @@ bool run_simulation_blocks(
     RunOutputs& out,
     int rank)
 {
-    // Transport compare
+    // Transport compare (legacy names should map to PDF later in main)
     out.Fine_Scale_BTCs.clear();
     out.Fine_Scale_BTCs.resize(P.xLocations.size());
+
+    // Explicit transport split
+    out.Fine_Scale_BTCs_pdf.clear();
+    out.Fine_Scale_BTCs_cdf.clear();
+    out.Fine_Scale_BTCs_pdf.resize(P.xLocations.size());
+    out.Fine_Scale_BTCs_cdf.resize(P.xLocations.size());
 
     // PT compare (separate)
     out.Fine_Scale_PT_pdf.clear();
@@ -1472,7 +1562,8 @@ bool run_simulation_blocks(
     out.Fine_Scale_PT_cdf.resize(P.xLocations.size());
 
     FineScaleOutputs fine_outputs;
-    fine_outputs.BTCs.resize(P.xLocations.size());
+    fine_outputs.BTCs_transport_pdf.resize(P.xLocations.size());
+    fine_outputs.BTCs_transport_cdf.resize(P.xLocations.size());
     fine_outputs.PT_pdfs.resize(P.xLocations.size());
     fine_outputs.PT_cdfs.resize(P.xLocations.size());
 
@@ -1481,7 +1572,12 @@ bool run_simulation_blocks(
         if (!ok) return false;
     }
 
-    out.Fine_Scale_BTCs   = fine_outputs.BTCs;
+    out.Fine_Scale_BTCs_pdf = fine_outputs.BTCs_transport_pdf;
+    out.Fine_Scale_BTCs_cdf = fine_outputs.BTCs_transport_cdf;
+
+    // Legacy transport compare now points to PDF stack
+    out.Fine_Scale_BTCs = out.Fine_Scale_BTCs_pdf;
+
     out.Fine_Scale_PT_pdf = fine_outputs.PT_pdfs;
     out.Fine_Scale_PT_cdf = fine_outputs.PT_cdfs;
 
@@ -1502,25 +1598,37 @@ bool run_simulation_blocks(
         fine_outputs.dt_mean,
         invcdf_mean,
         up_dir, up_btc_path, up_btc_deriv_path,
-        out.Fine_Scale_BTCs,
+        out.Fine_Scale_BTCs_pdf,
+        out.Fine_Scale_BTCs_cdf,
         out.Fine_Scale_PT_pdf,
         out.Fine_Scale_PT_cdf,
         rank
     );
     if (!ok_up) return false;
 
+    // Legacy transport compare now points to PDF stack after upscaled append too
+    out.Fine_Scale_BTCs = out.Fine_Scale_BTCs_pdf;
+
     out.up_dir = up_dir;
     out.up_btc_path = up_btc_path;
     out.up_btc_deriv_path = up_btc_deriv_path;
 
     // Means (SEPARATED) — switchable via opts.mean_ts_mode
-    computeMeanBTCs(P.xLocations, out.Fine_Scale_BTCs,   out.mean_transport_full, opts);
-    computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_pdf, out.mean_pt_pdf,         opts);
-    computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_cdf, out.mean_pt_cdf,         opts);
+    computeMeanBTCs(P.xLocations, out.Fine_Scale_BTCs_pdf, out.mean_transport_pdf, opts);
+    computeMeanBTCs(P.xLocations, out.Fine_Scale_BTCs_cdf, out.mean_transport_cdf, opts);
+    computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_pdf,   out.mean_pt_pdf,        opts);
+    computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_cdf,   out.mean_pt_cdf,        opts);
 
-    out.mean_BTCs = out.mean_transport_full;
+    // Legacy transport mean now points to PDF mean
+    out.mean_transport_full = out.mean_transport_pdf;
+    out.mean_BTCs = out.mean_transport_pdf;
 
     // Write per-x PT compare files
+    //
+    // Transport compare files are intentionally NOT written here.
+    // They are written in main.cpp so that:
+    //   - legacy transport names can point to PDF
+    //   - explicit transport _pdf/_cdf files can both be written
     if (rank == 0) {
         for (int i = 0; i < (int)P.xLocations.size(); ++i) {
             out.Fine_Scale_PT_pdf[i].write(joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "PT_Compare_pdf.csv"));
