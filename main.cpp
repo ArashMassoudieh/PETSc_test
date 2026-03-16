@@ -56,6 +56,11 @@ int main(int argc, char** argv)
     opts.perform_upscaled_PT = false;
 
     // -----------------------------
+    // NEW: default upscaled mixing model
+    // -----------------------------
+    opts.upscaled_mixing_model = RunOptions::UpscaledMixingModel::ExponentialVDep;
+
+    // -----------------------------
     // NEW: Wiener defaults (OFF unless --wiener)
     // -----------------------------
     opts.wiener_enable  = false;
@@ -134,6 +139,23 @@ int main(int argc, char** argv)
         else if (a == "--fine-transport")    opts.solve_fine_scale_transport = true;
         else if (a == "--no-up-transport")   opts.solve_upscale_transport = false;
         else if (a == "--up-transport")      opts.solve_upscale_transport = true;
+
+        // --- upscaled mixing model ---
+        else if (a == "--mixing-exp") {
+            opts.upscaled_mixing_model = RunOptions::UpscaledMixingModel::Exponential;
+        }
+        else if (a == "--mixing-vdep") {
+            opts.upscaled_mixing_model = RunOptions::UpscaledMixingModel::ExponentialVDep;
+        }
+        else if (a == "--mixing-gaussian") {
+            opts.upscaled_mixing_model = RunOptions::UpscaledMixingModel::Gaussian;
+        }
+        else if (a == "--mixing-matern") {
+            opts.upscaled_mixing_model = RunOptions::UpscaledMixingModel::Matern;
+        }
+        else if (a == "--mixing-oneoversum") {
+            opts.upscaled_mixing_model = RunOptions::UpscaledMixingModel::OneOverSum;
+        }
 
         // --- plotter switches ---
         else if (a == "--plotter") plotter = true;

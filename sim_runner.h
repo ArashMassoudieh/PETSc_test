@@ -43,6 +43,18 @@ struct RunOptions
     MeanTSMode mean_ts_mode = MeanTSMode::Longest;
 
     // -----------------------------
+    // NEW: upscaled mixing model selection
+    // -----------------------------
+    enum class UpscaledMixingModel {
+        Exponential,
+        ExponentialVDep,
+        Gaussian,
+        Matern,
+        OneOverSum
+    };
+    UpscaledMixingModel upscaled_mixing_model = UpscaledMixingModel::ExponentialVDep;
+
+    // -----------------------------
     // Wiener particle tracker (1D/2D)
     // -----------------------------
     bool wiener_enable = false;          // default OFF

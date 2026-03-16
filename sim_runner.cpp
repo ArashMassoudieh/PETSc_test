@@ -1403,14 +1403,24 @@ static bool run_upscaled(
 
     Grid2D g_u(nx, ny, Lx, Ly);
 
-    if (P.CorrelationModel == SimParams::correlationmode::exponentialfit)
+    switch (opts.upscaled_mixing_model) {
+    case RunOptions::UpscaledMixingModel::Exponential:
         g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::exponential;
-    else if (P.CorrelationModel == SimParams::correlationmode::gaussian)
+        break;
+    case RunOptions::UpscaledMixingModel::ExponentialVDep:
+        g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::exponential_vdep;
+        break;
+    case RunOptions::UpscaledMixingModel::Gaussian:
         g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::gaussian;
-    else if (P.CorrelationModel == SimParams::correlationmode::matern)
+        break;
+    case RunOptions::UpscaledMixingModel::Matern:
         g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::matern;
-    else
+        break;
+    case RunOptions::UpscaledMixingModel::OneOverSum:
+    default:
         g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::oneoversum;
+        break;
+    }
 
     g_u.setDiffusionFactor(P.diffusion_factor);
 
