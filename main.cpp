@@ -236,7 +236,7 @@ int main(int argc, char** argv)
     P.correlation_ls_y = 0.1;
 
     // calibration target
-    P.diffusion_factor = 0.5;
+    P.diffusion_factor = 1;
 
     // "D" in naming = diffusion coefficient (physics diffusion)
     P.Diffusion_coefficient = 0.1;
