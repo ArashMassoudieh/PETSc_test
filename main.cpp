@@ -78,11 +78,10 @@ int main(int argc, char** argv)
     // Pick ONE resume folder here (only ONE assignment!)
     //   (You can still override via --run-dir=...)
     // ---------------------------------------------------------
-    //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260202_003241_std2_D0.1_aniso");
-    //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_std2_D0.01_aniso");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=2, D=0, aniso1&0.1");
+    //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_std2_D0.01_aniso");
     //std::string resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso");
-    std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_std2_D0.01_aniso");
+    std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260202_003241_std2_D0.1_aniso1&0.1");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=1, D=0, aniso1&0.1");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260210_183158_std1_D0.01_aniso1&0.1_df0.15");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260211_083055_std1_D0.1_aniso1&0.1_df0.15");
@@ -237,10 +236,10 @@ int main(int argc, char** argv)
     P.correlation_ls_y = 0.1;
 
     // calibration target
-    P.diffusion_factor = 1;
+    P.diffusion_factor = 0.5;
 
     // "D" in naming = diffusion coefficient (physics diffusion)
-    P.Diffusion_coefficient = 0;
+    P.Diffusion_coefficient = 0.1;
 
     P.stdev = 2.0;
     P.g_mean = 0.0;
