@@ -1,3 +1,4 @@
+# File overview: diag_std_headers.sh is part of the PETSc_test simulation/analysis workflow.
 cd ~/Projects/PETSc_test
 
 cat > diag_std_headers.sh <<'EOF'

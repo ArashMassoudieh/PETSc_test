@@ -1,3 +1,4 @@
+# File overview: gnuplotscripts/plot_BTC_upscaled_vs_upscaled.gp is part of the PETSc_test simulation/analysis workflow.
 # plot_BTC_upscaled_vs_upscaled.gp
 # Upscaled vs Upscaled comparison (fixed columns per folder)
 # Solid red  = 300x100  (2-col files => using 1:2)

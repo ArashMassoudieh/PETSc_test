@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# File overview: diag_petsc_link.sh is part of the PETSc_test simulation/analysis workflow.
 set -euo pipefail
 
 echo "=== PETSc link diagnostic ==="

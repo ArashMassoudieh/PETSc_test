@@ -1,3 +1,4 @@
+// File overview: petscsolver.cpp is part of the PETSc_test simulation/analysis workflow.
 #include "petscsolver.h"
 #include "petscmatrix.h"
 #include "petscvector.h"

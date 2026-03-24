@@ -1,3 +1,4 @@
+// File overview: petscmatrix.h is part of the PETSc_test simulation/analysis workflow.
 #pragma once
 /**
  * @file petsc_matrix.h

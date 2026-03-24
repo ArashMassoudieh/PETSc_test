@@ -1,3 +1,4 @@
+// File overview: PathwaySetWiener.cpp is part of the PETSc_test simulation/analysis workflow.
 // PathwaySetWiener.cpp
 #include "PathwaySetWiener.h"
 #include "grid.h"

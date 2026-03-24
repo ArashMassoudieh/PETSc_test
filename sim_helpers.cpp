@@ -1,3 +1,4 @@
+// File overview: sim_helpers.cpp is part of the PETSc_test simulation/analysis workflow.
 // sim_helpers.cpp
 #include "sim_helpers.h"
 #include "sim_runner.h" // for SimParams (used by run-tag helpers)

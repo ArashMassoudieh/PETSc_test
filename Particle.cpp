@@ -1,3 +1,4 @@
+// File overview: Particle.cpp is part of the PETSc_test simulation/analysis workflow.
 // Particle.cpp
 #include "Particle.h"
 

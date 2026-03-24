@@ -1,3 +1,4 @@
+# File overview: gnuplotscripts/plot_velocity_pdfs.gp is part of the PETSc_test simulation/analysis workflow.
 reset
 
 # Terminal settings

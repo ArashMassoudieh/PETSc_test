@@ -1,3 +1,4 @@
+// File overview: plotter.cpp is part of the PETSc_test simulation/analysis workflow.
 // plotter.cpp
 #include "plotter.h"
 

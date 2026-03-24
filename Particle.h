@@ -1,3 +1,4 @@
+// File overview: Particle.h is part of the PETSc_test simulation/analysis workflow.
 // Particle.h
 #ifndef PARTICLE_H
 #define PARTICLE_H

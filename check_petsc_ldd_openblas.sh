@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# File overview: check_petsc_ldd_openblas.sh is part of the PETSc_test simulation/analysis workflow.
 set -euo pipefail
 
 PETSC_DIR="${PETSC_DIR:-/home/arash/Projects/petsc}"

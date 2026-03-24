@@ -1,3 +1,4 @@
+// File overview: grid.cpp is part of the PETSc_test simulation/analysis workflow.
 #include "grid.h"
 #include <algorithm> // std::transform
 #include <gsl/gsl_rng.h>
