@@ -1,3 +1,4 @@
+# File overview: gnuplotscripts/plot_x_correlation.gp is part of the PETSc_test simulation/analysis workflow.
 #!/usr/bin/gnuplot
 
 # Set terminal to PNG with good resolution

@@ -1,3 +1,4 @@
+// File overview: main.cpp is part of the PETSc_test simulation/analysis workflow.
 // main.cpp
 
 #include "petsc_init.h"

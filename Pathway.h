@@ -1,3 +1,4 @@
+// File overview: Pathway.h is part of the PETSc_test simulation/analysis workflow.
 // Pathway.h
 #ifndef PATHWAY_H
 #define PATHWAY_H

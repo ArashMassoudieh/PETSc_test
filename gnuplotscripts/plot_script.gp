@@ -1,3 +1,4 @@
+# File overview: gnuplotscripts/plot_script.gp is part of the PETSc_test simulation/analysis workflow.
 #!/usr/bin/gnuplot
 
 # Set terminal and output

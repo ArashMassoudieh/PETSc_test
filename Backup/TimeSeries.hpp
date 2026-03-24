@@ -1,3 +1,4 @@
+// File overview: Backup/TimeSeries.hpp is part of the PETSc_test simulation/analysis workflow.
 /*
  * OpenHydroQual - Environmental Modeling Platform
  * Copyright (C) 2025 Arash Massoudieh
@@ -1959,7 +1960,7 @@ TimeSeries<T> TimeSeries<T>::getcummulative() const {
 }
 
 template<typename T>
-TimeSeries<T> TimeSeries<T>::GetCummulativeDistribution() const {
+TimeSeries<T> TimeSeries<T>::GetCummulativeDistribution(bool reverse) const {
     std::vector<T> values;
     values.reserve(this->size());
 
@@ -1967,6 +1968,7 @@ TimeSeries<T> TimeSeries<T>::GetCummulativeDistribution() const {
         values.push_back(dp.c);
 
     std::sort(values.begin(), values.end());
+    if (reverse) std::reverse(values.begin(), values.end());
 
     TimeSeries<T> result;
     result.reserve(values.size());
@@ -2484,7 +2486,6 @@ namespace TimeSeriesMetrics {
 
 
 // namespace TimeSeriesMetrics
-
 
 
 

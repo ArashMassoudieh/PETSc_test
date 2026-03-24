@@ -1,3 +1,4 @@
+# File overview: gnuplotscripts/plot_BTC_derivative_compare_Ds_upscaled_folders_allX_red.gp is part of the PETSc_test simulation/analysis workflow.
 #!/usr/bin/gnuplot
 
 # ===============================

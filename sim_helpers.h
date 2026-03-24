@@ -1,3 +1,4 @@
+// File overview: sim_helpers.h is part of the PETSc_test simulation/analysis workflow.
 // sim_helpers.h
 #pragma once
 

@@ -1,3 +1,4 @@
+# File overview: gnuplotscripts/plot_FirstPassage.gp is part of the PETSc_test simulation/analysis workflow.
 set terminal pngcairo enhanced size 800,500 font "Arial,14"
 set output "FirstPassageTimeDistribution.png"
 

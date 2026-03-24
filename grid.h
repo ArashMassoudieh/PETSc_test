@@ -1,3 +1,4 @@
+// File overview: grid.h is part of the PETSc_test simulation/analysis workflow.
 #pragma once
 #include <string>
 #include <vector>

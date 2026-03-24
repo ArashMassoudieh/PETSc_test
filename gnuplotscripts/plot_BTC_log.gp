@@ -1,3 +1,4 @@
+# File overview: gnuplotscripts/plot_BTC_log.gp is part of the PETSc_test simulation/analysis workflow.
 # plot_BTC_compare_all.gp
 # Generates three separate plots for x=0.50, x=1.50, x=2.50
 

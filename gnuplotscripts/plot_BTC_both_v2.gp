@@ -1,3 +1,4 @@
+# File overview: gnuplotscripts/plot_BTC_both_v2.gp is part of the PETSc_test simulation/analysis workflow.
 # plot_BTC_combined.gp
 # Generates plots with linear main plot and log inset
 
