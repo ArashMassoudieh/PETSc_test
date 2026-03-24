@@ -1,3 +1,4 @@
+// File overview: PathwayWiener.h is part of the PETSc_test simulation/analysis workflow.
 // PathwayWiener.h
 #pragma once
 

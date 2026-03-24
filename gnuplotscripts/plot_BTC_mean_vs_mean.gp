@@ -1,3 +1,4 @@
+# File overview: gnuplotscripts/plot_BTC_mean_vs_mean.gp is part of the PETSc_test simulation/analysis workflow.
 # plot_BTC_mean_vs_mean.gp
 # Mean vs Mean comparison
 # Solid  = 300x100

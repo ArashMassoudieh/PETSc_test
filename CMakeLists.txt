@@ -1,3 +1,4 @@
+# File overview: CMakeLists.txt is part of the PETSc_test simulation/analysis workflow.
 cmake_minimum_required(VERSION 3.16)
 project(petsc_min LANGUAGES C CXX)
 

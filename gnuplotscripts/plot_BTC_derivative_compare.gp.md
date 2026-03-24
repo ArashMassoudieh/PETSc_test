@@ -1,3 +1,4 @@
+<!-- File overview: gnuplotscripts/plot_BTC_derivative_compare.gp.md contains project-specific plotting documentation/instructions. -->
 #!/usr/bin/gnuplot
 
 # Set terminal to PNG with good resolution (same as other plots)

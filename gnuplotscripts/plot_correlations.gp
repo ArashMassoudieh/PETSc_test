@@ -1,3 +1,4 @@
+# File overview: gnuplotscripts/plot_correlations.gp is part of the PETSc_test simulation/analysis workflow.
 #!/usr/bin/gnuplot
 
 set datafile separator ","
