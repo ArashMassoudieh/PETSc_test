@@ -28,6 +28,15 @@ struct RunOptions
     bool perform_particle_tracking  = true; // fine-scale PT (per realization)
     bool perform_upscaled_PT        = true; // upscaled PT
 
+    // Velocity-rank (q_x rank copula) analysis along pathways.
+    // When enabled, rank-pair samples are generated for logarithmically-spaced
+    // projected separations Delta_x and written under each realization folder.
+    bool analyze_qx_ranks = true;
+    int  qx_rank_num_delta = 30;
+    int  qx_rank_num_samples = 10000;
+    double qx_rank_delta_x_min = 0.001;
+    double qx_rank_delta_x_max = 0.5;
+
     // When hardcoded_mean=true, you can supply a qx inverse-CDF file (u,v).
     // Priority used by sim_runner.cpp (hardcoded_mean case):
     //   1) load mean_qx_inverse_cdf.txt from this path (if exists / valid)
