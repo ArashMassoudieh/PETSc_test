@@ -833,7 +833,10 @@ static bool run_fine_loop_collect(
                 {
                     TimeSeries<double> AllQxValues = g.exportFieldToTimeSeries("qx", Grid2D::ArrayKind::Fx);
                     TimeSeries<double> QxNormalScores = AllQxValues.ConvertToNormalScore();
+                    TimeSeries<double> QxRanks = AllQxValues.ConvertToRanks();
+
                     g.assignFromTimeSeries(QxNormalScores, "qx_normal_score", Grid2D::ArrayKind::Fx);
+                    g.assignFromTimeSeries(QxRanks, "qx_ranks", Grid2D::ArrayKind::Fx);
 
                     const int num_deltas = 30;
                     const int num_samples_per_delta = 10000;
