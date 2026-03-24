@@ -1,3 +1,4 @@
+# File overview: PETCs_test.pro is part of the PETSc_test simulation/analysis workflow.
 TEMPLATE = app
 CONFIG += c++17 core gui
 CONFIG -= app_bundle

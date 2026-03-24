@@ -1,3 +1,4 @@
+// File overview: petscvector.h is part of the PETSc_test simulation/analysis workflow.
 #pragma once
 /**
  * @file petsc_vector.h

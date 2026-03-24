@@ -1,3 +1,4 @@
+// File overview: petsc_init.h is part of the PETSc_test simulation/analysis workflow.
 // petsc_init.h
 #pragma once
 #include <petscsys.h>

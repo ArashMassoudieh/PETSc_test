@@ -1,3 +1,4 @@
+// File overview: sim_runner.cpp is part of the PETSc_test simulation/analysis workflow.
 // sim_runner.cpp
 #include "sim_runner.h"
 #include "sim_helpers.h"

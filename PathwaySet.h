@@ -1,3 +1,4 @@
+// File overview: PathwaySet.h is part of the PETSc_test simulation/analysis workflow.
 // PathwaySet.h
 #ifndef PATHWAYSET_H
 #define PATHWAYSET_H

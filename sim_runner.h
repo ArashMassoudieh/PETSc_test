@@ -1,3 +1,4 @@
+// File overview: sim_runner.h is part of the PETSc_test simulation/analysis workflow.
 // sim_runner.h
 #pragma once
 

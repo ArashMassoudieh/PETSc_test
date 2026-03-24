@@ -1,3 +1,4 @@
+// File overview: petscvector.cpp is part of the PETSc_test simulation/analysis workflow.
 #include "petscvector.h"
 #include <vector>
 #include <sstream>

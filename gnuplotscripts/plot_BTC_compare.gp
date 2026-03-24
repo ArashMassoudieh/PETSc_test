@@ -1,3 +1,4 @@
+# File overview: gnuplotscripts/plot_BTC_compare.gp is part of the PETSc_test simulation/analysis workflow.
 set datafile separator ','
 set grid
 set xlabel 't'
