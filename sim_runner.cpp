@@ -1071,7 +1071,10 @@ static bool run_fine_loop_collect(
                 }
 
                 // ---- Advective correlation + PT locals ----
-                {
+                const bool need_pathway_tracking =
+                    opts.perform_particle_tracking || opts.analyze_qx_ranks;
+
+                if (need_pathway_tracking) {
                     PathwaySet pathways;
                     pathways.Initialize(10000, PathwaySet::Weighting::FluxWeighted, &g);
                     pathways.trackAllPathwaysWithDiffusion(&g, 0.01, g.getDiffusion());
@@ -1150,6 +1153,12 @@ static bool run_fine_loop_collect(
 
                     pathways.writeToFile(joinPath(fine_dir, pfx + "pathway_summary.txt"));
                     pathways.writeCombinedVTK(joinPath(fine_dir, pfx + "all_pathways.vtk"), 1000);
+                } else {
+                    // No pathway tracing requested by options.
+                    // Keep downstream statistics valid by reusing velocity
+                    // correlation and its fitted decay as fallback proxies.
+                    qx_corr_adv = vel_corr_x;
+                    lc_emp = lambda_x_emp;
                 }
 
                 // =========================

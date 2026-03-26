@@ -55,6 +55,7 @@ int main(int argc, char** argv)
 
     opts.perform_particle_tracking = false;
     opts.perform_upscaled_PT = false;
+    opts.analyze_qx_ranks = false;
 
     // -----------------------------
     // NEW: default upscaled mixing model
@@ -139,6 +140,8 @@ int main(int argc, char** argv)
         else if (a == "--fine-transport")    opts.solve_fine_scale_transport = true;
         else if (a == "--no-up-transport")   opts.solve_upscale_transport = false;
         else if (a == "--up-transport")      opts.solve_upscale_transport = true;
+        else if (a == "--no-qx-ranks")       opts.analyze_qx_ranks = false;
+        else if (a == "--qx-ranks")          opts.analyze_qx_ranks = true;
 
         // --- upscaled mixing model ---
         else if (a == "--mixing-exp") {
