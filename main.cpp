@@ -53,9 +53,10 @@ int main(int argc, char** argv)
     opts.solve_fine_scale_transport = true;
     opts.solve_upscale_transport    = true;
 
+    opts.analyze_qx_ranks = true; // copula ...
+
     opts.perform_particle_tracking = false;
     opts.perform_upscaled_PT = false;
-    opts.analyze_qx_ranks = false;
 
     // -----------------------------
     // NEW: default upscaled mixing model
