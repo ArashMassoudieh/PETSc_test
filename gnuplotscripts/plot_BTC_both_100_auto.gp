@@ -21,6 +21,7 @@
 reset
 set datafile separator ','
 set datafile missing ''
+set datafile columnheaders
 
 if (!exists("out_prefix")) out_prefix = "BTC_compare"
 if (!exists("x_main_max")) x_main_max = 10
@@ -67,13 +68,17 @@ do for [di=1:n_dirs] {
         stats fine_file nooutput
         ncol_f = STATS_columns
         npairs_f = int(ncol_f/2)
-        if (npairs_f < 1) {
+        stats up_file nooutput
+        ncol_u = STATS_columns
+        npairs_u = int(ncol_u/2)
+        npairs_fb = (npairs_f < npairs_u) ? npairs_f : npairs_u
+        if (npairs_fb < 1) {
             print sprintf("  Skipping fallback: no column pairs in %s", fine_file)
             eval sprintf("cd '%s'", root_dir)
             continue
         }
 
-        do for [p=1:npairs_f] {
+        do for [p=1:npairs_fb] {
             ft_col = 2*p - 1
             fc_col = 2*p
             ut_col = ft_col
@@ -92,6 +97,8 @@ do for [di=1:n_dirs] {
             set yrange [0:*]
             set xrange [0:x_main_max]
             unset logscale y
+            unset y2tics
+            unset link y2
             set origin 0,0
             set size 1,1
 
@@ -109,6 +116,8 @@ do for [di=1:n_dirs] {
             set format y "10^{%T}"
             set yrange [y_log_min:*]
             set xrange [0:x_log_max]
+            unset y2tics
+            unset link y2
 
             plot fine_file using ft_col:fc_col with lines lw 2 lc rgb "#000000" notitle, \
                  up_file   using ut_col:uc_col with lines lw 3 lc rgb "#FF0000" notitle
