@@ -48,7 +48,75 @@ do for [di=1:n_dirs] {
 
     files = system("ls x=*BTC_Compare.csv 2>/dev/null")
     if (strlen(files) == 0) {
-        print "  No x=*BTC_Compare.csv found; skipping."
+        print "  No x=*BTC_Compare.csv found; trying fine-vs-upscaled fallback."
+
+        fine_file = word(system("ls r*_BTC_FineScaled.csv 2>/dev/null"), 1)
+        up_file = "../upscaled_mean/upscaled_BTC_Upscaled.csv"
+
+        if (strlen(fine_file) == 0) {
+            print "  No r*_BTC_FineScaled.csv found; skipping."
+            eval sprintf("cd '%s'", root_dir)
+            continue
+        }
+        if (system(sprintf("test -f %s", up_file)) ne "") {
+            print sprintf("  Missing upscaled reference file: %s ; skipping.", up_file)
+            eval sprintf("cd '%s'", root_dir)
+            continue
+        }
+
+        stats fine_file nooutput
+        ncol_f = STATS_columns
+        npairs_f = int(ncol_f/2)
+        if (npairs_f < 1) {
+            print sprintf("  Skipping fallback: no column pairs in %s", fine_file)
+            eval sprintf("cd '%s'", root_dir)
+            continue
+        }
+
+        do for [p=1:npairs_f] {
+            ft_col = 2*p - 1
+            fc_col = 2*p
+            ut_col = ft_col
+            uc_col = fc_col
+
+            stem = fine_file[1:strlen(fine_file)-4]
+            out_png = sprintf("%s_%s_pair%02d_auto.png", out_prefix, stem, p)
+            set output out_png
+            set multiplot layout 1,1
+
+            set grid
+            set key top right
+            set xlabel 'Time' font 'Arial,32'
+            set ylabel 'c/c_0' font 'Arial,32'
+            set format y "%.1f"
+            set yrange [0:*]
+            set xrange [0:x_main_max]
+            unset logscale y
+            set origin 0,0
+            set size 1,1
+
+            plot fine_file using ft_col:fc_col with lines lw 2 lc rgb "#000000" title sprintf("Fine pair %d", p), \
+                 up_file   using ut_col:uc_col with lines lw 3 lc rgb "#FF0000" title "Upscaled"
+
+            set origin 0.40, 0.15
+            set size 0.55, 0.65
+            set key off
+            unset title
+            unset xlabel
+            unset ylabel
+            set tics font 'Arial,16'
+            set logscale y
+            set format y "10^{%T}"
+            set yrange [y_log_min:*]
+            set xrange [0:x_log_max]
+
+            plot fine_file using ft_col:fc_col with lines lw 2 lc rgb "#000000" notitle, \
+                 up_file   using ut_col:uc_col with lines lw 3 lc rgb "#FF0000" notitle
+
+            unset multiplot
+            print sprintf("  Wrote fallback %s (pair=%d)", out_png, p)
+        }
+
         eval sprintf("cd '%s'", root_dir)
         continue
     }
