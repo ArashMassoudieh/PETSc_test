@@ -45,12 +45,12 @@ int main(int argc, char** argv)
     // -----------------------------
     RunOptions opts;
 
-    opts.upscale_only   = true;
+    opts.upscale_only   = false;
 
     // Scratch by default (no file loading). Enable via --hardcoded-mean.
-    opts.hardcoded_mean = true;
+    opts.hardcoded_mean = false;
 
-    opts.solve_fine_scale_transport = false;
+    opts.solve_fine_scale_transport = true;
     opts.solve_upscale_transport    = true;
 
     opts.perform_particle_tracking = false;
@@ -227,9 +227,9 @@ int main(int argc, char** argv)
     // Params (kept here)
     // -----------------------------
     SimParams P;
-    P.nx = 300; // 300
-    P.ny = 100; // 100
-    P.nu = 100; // 100
+    P.nx = 30; // 300
+    P.ny = 10; // 100
+    P.nu = 10; // 100
     P.Lx = 3.0;
     P.Ly = 1.0;
 
@@ -250,7 +250,7 @@ int main(int argc, char** argv)
 
     P.t_end_pdf = 20.0;
 
-    P.nReal_default = 100; // 100
+    P.nReal_default = 20; // 100
     P.run_seed = 20260115UL;
 
     P.xLocations = {0.5, 1.5, 2.5};
