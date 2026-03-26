@@ -974,14 +974,17 @@ static bool run_fine_loop_collect(
                 // ---- velocity normal score + correlations (local) ----
                 {
                     TimeSeries<double> AllQxValues = g.exportFieldToTimeSeries("qx", Grid2D::ArrayKind::Fx);
-                    TimeSeries<double> QxNormalScores = AllQxValues.ConvertToNormalScore();
                     TimeSeries<double> QxRanks = AllQxValues.ConvertToRanks();
-
-                    g.assignFromTimeSeries(QxNormalScores, "qx_normal_score", Grid2D::ArrayKind::Fx);
+                    TimeSeries<double> QxNormalScores = AllQxValues.ConvertToNormalScore();
                     g.assignFromTimeSeries(QxRanks, "qx_ranks", Grid2D::ArrayKind::Fx);
+                    g.assignFromTimeSeries(QxNormalScores, "qx_normal_score", Grid2D::ArrayKind::Fx);
+                    g.writeNamedVTI("qx_ranks", Grid2D::ArrayKind::Fx, joinPath(fine_dir, pfx + "qx_ranks.vti"));
+                    g.writeNamedVTI("qx_normal_score", Grid2D::ArrayKind::Fx, joinPath(fine_dir, pfx + "qx_normal_score.vti"));
 
                     const int num_deltas = 30;
                     const int num_samples_per_delta = 10000;
+                    TimeSeries<double> vel_rank_corr_x;
+                    TimeSeries<double> vel_rank_corr_y;
 
                     for (int i = 0; i < num_deltas; ++i) {
                         double exponent = static_cast<double>(i) / (num_deltas - 1);
@@ -992,9 +995,14 @@ static bool run_fine_loop_collect(
                                 "qx_normal_score", Grid2D::ArrayKind::Fx,
                                 num_samples_per_delta, delta, 0, PerturbDir::XOnly);
                             vel_corr_x.append(delta, samples.correlation_tc());
+                            TimeSeries<double> rank_samples = g.sampleGaussianPerturbation(
+                                "qx_ranks", Grid2D::ArrayKind::Fx,
+                                num_samples_per_delta, delta, 0, PerturbDir::XOnly);
+                            vel_rank_corr_x.append(delta, rank_samples.correlation_tc());
                         } catch (...) {}
                     }
                     vel_corr_x.writefile(joinPath(fine_dir, pfx + "velocity_correlation_x.txt"));
+                    vel_rank_corr_x.writefile(joinPath(fine_dir, pfx + "velocity_rank_correlation_x.txt"));
 
                     for (int i = 0; i < num_deltas; ++i) {
                         double exponent = static_cast<double>(i) / (num_deltas - 1);
@@ -1005,9 +1013,14 @@ static bool run_fine_loop_collect(
                                 "qx_normal_score", Grid2D::ArrayKind::Fx,
                                 num_samples_per_delta, delta, 0, PerturbDir::YOnly);
                             vel_corr_y.append(delta, samples.correlation_tc());
+                            TimeSeries<double> rank_samples = g.sampleGaussianPerturbation(
+                                "qx_ranks", Grid2D::ArrayKind::Fx,
+                                num_samples_per_delta, delta, 0, PerturbDir::YOnly);
+                            vel_rank_corr_y.append(delta, rank_samples.correlation_tc());
                         } catch (...) {}
                     }
                     vel_corr_y.writefile(joinPath(fine_dir, pfx + "velocity_correlation_y.txt"));
+                    vel_rank_corr_y.writefile(joinPath(fine_dir, pfx + "velocity_rank_correlation_y.txt"));
 
                     lambda_x_emp =
                         (P.CorrelationModel == SimParams::correlationmode::exponentialfit) ? vel_corr_x.fitExponentialDecay() :

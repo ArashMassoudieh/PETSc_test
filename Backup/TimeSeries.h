@@ -211,7 +211,7 @@ public:
     TimeSeries<T> extract(T t1, T t2) const;               ///< Extract window
     TimeSeries<T> make_uniform(T increment, bool assignD = false) const; ///< Make uniform
     TimeSeries<T> getcummulative() const;                 ///< Cumulative integral
-    TimeSeries<T> GetCummulativeDistribution() const;     ///< Sorted value CDF
+    TimeSeries<T> GetCummulativeDistribution(bool reverse = false) const; ///< Sorted value CDF
     TimeSeries<T> distribution(int n_bins, int start_index) const; ///< Histogram density
 
     // Append operators
