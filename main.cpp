@@ -142,6 +142,9 @@ int main(int argc, char** argv)
         else if (a == "--up-transport")      opts.solve_upscale_transport = true;
         else if (a == "--no-qx-ranks")       opts.analyze_qx_ranks = false;
         else if (a == "--qx-ranks")          opts.analyze_qx_ranks = true;
+        else if (a == "--lc-auto")           opts.lc_source = RunOptions::LcSource::AutoPreferRankCopula;
+        else if (a == "--lc-raw")            opts.lc_source = RunOptions::LcSource::RawQx;
+        else if (a == "--lc-rank")           opts.lc_source = RunOptions::LcSource::RankCopula;
 
         // --- upscaled mixing model ---
         else if (a == "--mixing-exp") {

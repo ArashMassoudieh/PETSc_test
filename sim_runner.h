@@ -36,6 +36,12 @@ struct RunOptions
     int  qx_rank_num_samples = 10000;
     double qx_rank_delta_x_min = 0.001;
     double qx_rank_delta_x_max = 0.5;
+    enum class LcSource {
+        AutoPreferRankCopula,
+        RawQx,
+        RankCopula
+    };
+    LcSource lc_source = LcSource::AutoPreferRankCopula;
 
     // When hardcoded_mean=true, you can supply a qx inverse-CDF file (u,v).
     // Priority used by sim_runner.cpp (hardcoded_mean case):
