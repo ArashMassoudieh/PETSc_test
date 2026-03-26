@@ -27,14 +27,30 @@ if (!exists("out_prefix")) out_prefix = "BTC_compare"
 if (!exists("x_main_max")) x_main_max = 10
 if (!exists("x_log_max"))  x_log_max  = 20
 if (!exists("y_log_min"))  y_log_min  = 1e-6
+if (!exists("scan_fine_dirs")) scan_fine_dirs = 0
 
 set terminal pngcairo size 1200,800 enhanced font 'Arial,28'
 
 root_dir = GPVAL_PWD
 
-# Prefer fine_r* folders; if none exist, fall back to current folder.
-dir_list = system("find . -maxdepth 1 -type d -name 'fine_r*' | sort")
-if (strlen(dir_list) == 0) dir_list = "."
+# Prefer current folder compare files first (matches legacy plot_BTC_both_100.gp behavior).
+# Only if missing, fall back to fine_r* folders.
+root_compare_files = system("ls x=*BTC_Compare.csv 2>/dev/null")
+if (strlen(root_compare_files) > 0) {
+    dir_list = "."
+} else {
+    dir_list = system("find . -maxdepth 1 -type d -name 'fine_r*' | sort")
+    if (strlen(dir_list) == 0) dir_list = "."
+}
+
+# Optional: force scanning fine_r* even when root compare files exist.
+if (scan_fine_dirs) {
+    extra_dirs = system("find . -maxdepth 1 -type d -name 'fine_r*' | sort")
+    if (strlen(extra_dirs) > 0) {
+        if (strlen(dir_list) == 0) dir_list = extra_dirs
+        else dir_list = dir_list . \" \" . extra_dirs
+    }
+}
 
 n_dirs = words(dir_list)
 print sprintf("Found %d plotting target folder(s).", n_dirs)
