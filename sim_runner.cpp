@@ -1071,6 +1071,12 @@ static bool run_fine_loop_collect(
                 }
 
                 // ---- Advective correlation + PT locals ----
+                // NOTE:
+                // We intentionally track pathways here even when
+                // opts.perform_particle_tracking == false, because this same
+                // pathway ensemble is used to compute qx_corr_adv and lc_emp
+                // (advective correlation / upscaling stats). The PT flag only
+                // controls whether PT products are retained/exported.
                 {
                     PathwaySet pathways;
                     pathways.Initialize(10000, PathwaySet::Weighting::FluxWeighted, &g);
