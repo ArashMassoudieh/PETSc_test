@@ -886,12 +886,15 @@ static bool run_fine_loop_collect(
             TimeSeries<double> K_corr_x, K_corr_y;
             TimeSeries<double> vel_corr_x, vel_corr_y;
             TimeSeries<double> qx_corr_adv;
+            TimeSeries<double> qx_corr_adv_rank_copula;
 
             double lambda_K_x_emp = std::numeric_limits<double>::quiet_NaN();
             double lambda_K_y_emp = std::numeric_limits<double>::quiet_NaN();
             double lambda_x_emp   = std::numeric_limits<double>::quiet_NaN();
             double lambda_y_emp   = std::numeric_limits<double>::quiet_NaN();
             double lc_emp         = std::numeric_limits<double>::quiet_NaN();
+            double lc_emp_raw_qx  = std::numeric_limits<double>::quiet_NaN();
+            double lc_emp_rank_copula = std::numeric_limits<double>::quiet_NaN();
             double dt_optimal     = std::numeric_limits<double>::quiet_NaN();
 
             TimeSeries<double> qx_inverse_cdf;
@@ -1131,14 +1134,23 @@ static bool run_fine_loop_collect(
                                 const QxRankStats st =
                                     analyze_and_write_rank_pairs(particle_pairs, Delta_x, joinPath(fine_dir, fn.str()));
                                 rank_stats.push_back(st);
+                                qx_corr_adv_rank_copula.append(Delta_x, st.gaussian_copula_rho);
                             }
                         } catch (...) {}
                     }
 
                     qx_corr_adv.writefile(joinPath(fine_dir, pfx + "qx_correlation_vs_distance.txt"));
                     lc_emp = qx_corr_adv.fitExponentialDecay();
+                    lc_emp_raw_qx = lc_emp;
 
                     if (opts.analyze_qx_ranks) {
+                        qx_corr_adv_rank_copula.writefile(
+                            joinPath(fine_dir, pfx + "qx_rank_gaussian_copula_correlation_vs_distance.txt"));
+                        lc_emp_rank_copula = qx_corr_adv_rank_copula.fitExponentialDecay();
+                        if (std::isfinite(lc_emp_rank_copula)) {
+                            lc_emp = lc_emp_rank_copula;
+                        }
+
                         std::ofstream sf(joinPath(fine_dir, pfx + "qx_rank_copula_summary.csv"));
                         sf << "delta_x,n_pairs,corr_qx,corr_rank,gaussian_copula_rho\n";
                         sf << std::setprecision(15);
@@ -1149,6 +1161,13 @@ static bool run_fine_loop_collect(
                                << st.corr_rank << ","
                                << st.gaussian_copula_rho << "\n";
                         }
+
+                        std::ofstream lcf(joinPath(fine_dir, pfx + "velocity_correlation_lengths.csv"));
+                        lcf << "lc_raw_qx,lc_rank_copula,lc_selected\n";
+                        lcf << std::setprecision(15)
+                            << lc_emp_raw_qx << ","
+                            << lc_emp_rank_copula << ","
+                            << lc_emp << "\n";
                     }
 
                     pathways.writeToFile(joinPath(fine_dir, pfx + "pathway_summary.txt"));
