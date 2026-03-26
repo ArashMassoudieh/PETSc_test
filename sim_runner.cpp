@@ -1150,6 +1150,15 @@ static bool run_fine_loop_collect(
                         if (std::isfinite(lc_emp_rank_copula)) {
                             lc_emp = lc_emp_rank_copula;
                         }
+                        if (opts.lc_source == RunOptions::LcSource::RawQx) {
+                            lc_emp = lc_emp_raw_qx;
+                        } else if (opts.lc_source == RunOptions::LcSource::RankCopula) {
+                            if (std::isfinite(lc_emp_rank_copula)) lc_emp = lc_emp_rank_copula;
+                            else lc_emp = lc_emp_raw_qx;
+                        } else {
+                            if (std::isfinite(lc_emp_rank_copula)) lc_emp = lc_emp_rank_copula;
+                            else lc_emp = lc_emp_raw_qx;
+                        }
 
                         std::ofstream sf(joinPath(fine_dir, pfx + "qx_rank_copula_summary.csv"));
                         sf << "delta_x,n_pairs,corr_qx,corr_rank,gaussian_copula_rho\n";
@@ -1168,6 +1177,12 @@ static bool run_fine_loop_collect(
                             << lc_emp_raw_qx << ","
                             << lc_emp_rank_copula << ","
                             << lc_emp << "\n";
+
+                        std::ofstream lcsf(joinPath(fine_dir, pfx + "lc_selection_mode.txt"));
+                        lcsf << "lc_source=";
+                        if (opts.lc_source == RunOptions::LcSource::RawQx) lcsf << "raw_qx\n";
+                        else if (opts.lc_source == RunOptions::LcSource::RankCopula) lcsf << "rank_copula\n";
+                        else lcsf << "auto_prefer_rank_copula\n";
                     }
 
                     pathways.writeToFile(joinPath(fine_dir, pfx + "pathway_summary.txt"));
