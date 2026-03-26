@@ -98,7 +98,6 @@ do for [di=1:n_dirs] {
             set xrange [0:x_main_max]
             unset logscale y
             unset y2tics
-            unset link y2
             set origin 0,0
             set size 1,1
 
@@ -117,7 +116,6 @@ do for [di=1:n_dirs] {
             set yrange [y_log_min:*]
             set xrange [0:x_log_max]
             unset y2tics
-            unset link y2
 
             plot fine_file using ft_col:fc_col with lines lw 2 lc rgb "#000000" notitle, \
                  up_file   using ut_col:uc_col with lines lw 3 lc rgb "#FF0000" notitle
