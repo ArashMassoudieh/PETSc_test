@@ -48,7 +48,7 @@ if (scan_fine_dirs) {
     extra_dirs = system("find . -maxdepth 1 -type d -name 'fine_r*' | sort")
     if (strlen(extra_dirs) > 0) {
         if (strlen(dir_list) == 0) dir_list = extra_dirs
-        else dir_list = dir_list . \" \" . extra_dirs
+        else dir_list = dir_list . " " . extra_dirs
     }
 }
 
