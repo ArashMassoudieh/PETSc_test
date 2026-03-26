@@ -1968,7 +1968,8 @@ TimeSeries<T> TimeSeries<T>::GetCummulativeDistribution(bool reverse) const {
         values.push_back(dp.c);
 
     std::sort(values.begin(), values.end());
-    if (reverse) std::reverse(values.begin(), values.end());
+    if (reverse)
+        std::reverse(values.begin(), values.end());
 
     TimeSeries<T> result;
     result.reserve(values.size());
