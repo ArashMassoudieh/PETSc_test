@@ -1,5 +1,4 @@
-// File overview: sim_runner.cpp is part of the PETSc_test simulation/analysis workflow.
-// sim_runner.cpp
+//sim_runner.cpp
 #include "sim_runner.h"
 #include "sim_helpers.h"
 
@@ -61,6 +60,14 @@ static bool run_upscaled(
     std::vector<TimeSeriesSet<double>>& Fine_Scale_BTCs_transport_cdf,
     std::vector<TimeSeriesSet<double>>& Fine_Scale_PT_pdf,
     std::vector<TimeSeriesSet<double>>& Fine_Scale_PT_cdf,
+    int rank);
+
+// NEW: rebuild/recovery helpers
+static bool rebuild_from_existing_btc_files(
+    const SimParams& P,
+    const RunOptions& opts,
+    const std::string& run_dir,
+    RunOutputs& out,
     int rank);
 
 // ============================================================================
@@ -238,6 +245,52 @@ static bool build_mean_qx_inverse_cdf_from_multi(
     for (size_t i = 0; i < u_out.size(); ++i) {
         o << u_out[i] << "," << v_out[i] << "\n";
     }
+    return true;
+}
+
+// NEW: file-loading helpers for --btc-from-files mode
+static bool read_tsset_file_if_exists(const std::string& path, TimeSeriesSet<double>& out)
+{
+    if (!fileExists(path)) return false;
+    return out.read(path);
+}
+
+static std::vector<std::string> list_fine_dirs_sorted(const std::string& run_dir)
+{
+    namespace fs = std::filesystem;
+    std::vector<std::string> out;
+    std::error_code ec;
+
+    if (!fs::exists(fs::path(run_dir), ec)) return out;
+
+    for (const auto& ent : fs::directory_iterator(fs::path(run_dir), ec)) {
+        if (ec) break;
+        if (!ent.is_directory()) continue;
+
+        const std::string name = ent.path().filename().string();
+        if (name.rfind("fine_r", 0) == 0) {
+            out.push_back(ent.path().string());
+        }
+    }
+
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+static std::string basename_only(const std::string& path)
+{
+    return std::filesystem::path(path).filename().string();
+}
+
+static bool fine_dir_to_rlab(const std::string& fine_dir, std::string& rlab)
+{
+    const std::string base = basename_only(fine_dir); // fine_r12
+    if (base.rfind("fine_r", 0) != 0) return false;
+
+    const std::string suffix = base.substr(std::string("fine_r").size());
+    if (suffix.empty()) return false;
+
+    rlab = "r" + suffix;
     return true;
 }
 
@@ -1756,6 +1809,162 @@ static bool run_upscaled(
 }
 
 // ============================================================================
+// Rebuild from existing BTC/PT files (no re-solve)
+// ============================================================================
+
+static bool rebuild_from_existing_btc_files(
+    const SimParams& P,
+    const RunOptions& opts,
+    const std::string& run_dir,
+    RunOutputs& out,
+    int rank)
+{
+    if (rank == 0) {
+        std::cout << "Rebuild mode: reading BTC/PT from existing files in:\n"
+                  << "  " << run_dir << "\n";
+    }
+
+    // -----------------------------
+    // Fine-scale folders
+    // -----------------------------
+    const std::vector<std::string> fine_dirs = list_fine_dirs_sorted(run_dir);
+
+    for (const auto& fine_dir_raw : fine_dirs) {
+        std::string rlab;
+        if (!fine_dir_to_rlab(fine_dir_raw, rlab)) continue;
+
+        std::string fine_dir = fine_dir_raw;
+        if (!fine_dir.empty() && fine_dir.back() != '/' && fine_dir.back() != '\\') fine_dir += "/";
+
+        const std::string pfx = rlab + "_";
+
+        TimeSeriesSet<double> btc_raw;
+        TimeSeriesSet<double> btc_deriv;
+
+        const std::string btc_raw_path   = joinPath(fine_dir, pfx + "BTC_FineScaled.csv");
+        const std::string btc_deriv_path = joinPath(fine_dir, pfx + "BTC_FineScaled_derivative.csv");
+
+        const bool has_btc_raw   = read_tsset_file_if_exists(btc_raw_path, btc_raw);
+        const bool has_btc_deriv = read_tsset_file_if_exists(btc_deriv_path, btc_deriv);
+
+        if (has_btc_raw || has_btc_deriv) {
+            if (!has_btc_raw && has_btc_deriv) {
+                if (rank == 0) {
+                    std::cerr << "WARNING: raw fine BTC missing; skipping CDF append for " << fine_dir << "\n";
+                }
+            }
+            if (has_btc_raw && !has_btc_deriv) {
+                btc_deriv = btc_raw.derivative();
+            }
+
+            if (has_btc_raw) {
+                for (int i = 0; i < (int)P.xLocations.size() && i < (int)btc_raw.size(); ++i) {
+                    btc_raw.setSeriesName(i, fmt_x(P.xLocations[i]));
+                    out.Fine_Scale_BTCs_cdf[i].append(btc_raw[i], pfx + fmt_x(P.xLocations[i]));
+                }
+            }
+
+            for (int i = 0; i < (int)P.xLocations.size() && i < (int)btc_deriv.size(); ++i) {
+                btc_deriv.setSeriesName(i, fmt_x(P.xLocations[i]));
+                out.Fine_Scale_BTCs_pdf[i].append(btc_deriv[i], pfx + fmt_x(P.xLocations[i]));
+            }
+        }
+
+        // optional PT
+        TimeSeriesSet<double> pt_pdf, pt_cdf;
+        const std::string pt_pdf_path = joinPath(fine_dir, pfx + "btc_pdf.csv");
+        const std::string pt_cdf_path = joinPath(fine_dir, pfx + "btc_cdf.csv");
+
+        if (read_tsset_file_if_exists(pt_pdf_path, pt_pdf)) {
+            for (int i = 0; i < (int)P.xLocations.size() && i < (int)pt_pdf.size(); ++i) {
+                pt_pdf.setSeriesName(i, fmt_x(P.xLocations[i]));
+                out.Fine_Scale_PT_pdf[i].append(pt_pdf[i], pfx + fmt_x(P.xLocations[i]));
+            }
+        }
+
+        if (read_tsset_file_if_exists(pt_cdf_path, pt_cdf)) {
+            for (int i = 0; i < (int)P.xLocations.size() && i < (int)pt_cdf.size(); ++i) {
+                pt_cdf.setSeriesName(i, fmt_x(P.xLocations[i]));
+                out.Fine_Scale_PT_cdf[i].append(pt_cdf[i], pfx + fmt_x(P.xLocations[i]));
+            }
+        }
+    }
+
+    // -----------------------------
+    // Upscaled files
+    // -----------------------------
+    const std::string up_dir = joinPath(run_dir, "upscaled_mean");
+    const std::string up_btc_path       = joinPath(up_dir, "upscaled_BTC_Upscaled.csv");
+    const std::string up_btc_deriv_path = joinPath(up_dir, "upscaled_BTC_Upscaled_derivative.csv");
+
+    TimeSeriesSet<double> up_btc_raw;
+    TimeSeriesSet<double> up_btc_deriv;
+
+    const bool has_up_btc_raw   = read_tsset_file_if_exists(up_btc_path, up_btc_raw);
+    const bool has_up_btc_deriv = read_tsset_file_if_exists(up_btc_deriv_path, up_btc_deriv);
+
+    if (has_up_btc_raw || has_up_btc_deriv) {
+        if (!has_up_btc_raw && has_up_btc_deriv) {
+            if (rank == 0) {
+                std::cerr << "WARNING: raw upscaled BTC missing; skipping upscaled CDF append.\n";
+            }
+        }
+        if (has_up_btc_raw && !has_up_btc_deriv) {
+            up_btc_deriv = up_btc_raw.derivative();
+        }
+
+        if (has_up_btc_raw) {
+            for (int i = 0; i < (int)P.xLocations.size() && i < (int)up_btc_raw.size(); ++i) {
+                up_btc_raw.setSeriesName(i, fmt_x(P.xLocations[i]));
+                out.Fine_Scale_BTCs_cdf[i].append(up_btc_raw[i], "Upscaled" + fmt_x(P.xLocations[i]));
+            }
+        }
+
+        for (int i = 0; i < (int)P.xLocations.size() && i < (int)up_btc_deriv.size(); ++i) {
+            up_btc_deriv.setSeriesName(i, fmt_x(P.xLocations[i]));
+            out.Fine_Scale_BTCs_pdf[i].append(up_btc_deriv[i], "Upscaled" + fmt_x(P.xLocations[i]));
+        }
+    }
+
+    // optional upscaled PT
+    {
+        TimeSeriesSet<double> up_pt_pdf, up_pt_cdf;
+        const std::string up_pt_pdf_path = joinPath(up_dir, "upscaled_PT_btc_pdf.csv");
+        const std::string up_pt_cdf_path = joinPath(up_dir, "upscaled_PT_btc_cdf.csv");
+
+        if (read_tsset_file_if_exists(up_pt_pdf_path, up_pt_pdf)) {
+            for (int i = 0; i < (int)P.xLocations.size() && i < (int)up_pt_pdf.size(); ++i) {
+                up_pt_pdf.setSeriesName(i, fmt_x(P.xLocations[i]));
+                out.Fine_Scale_PT_pdf[i].append(up_pt_pdf[i], "Upscaled_PT" + fmt_x(P.xLocations[i]));
+            }
+        }
+
+        if (read_tsset_file_if_exists(up_pt_cdf_path, up_pt_cdf)) {
+            for (int i = 0; i < (int)P.xLocations.size() && i < (int)up_pt_cdf.size(); ++i) {
+                up_pt_cdf.setSeriesName(i, fmt_x(P.xLocations[i]));
+                out.Fine_Scale_PT_cdf[i].append(up_pt_cdf[i], "Upscaled_PT" + fmt_x(P.xLocations[i]));
+            }
+        }
+    }
+
+    out.Fine_Scale_BTCs = out.Fine_Scale_BTCs_pdf;
+
+    computeMeanBTCs(P.xLocations, out.Fine_Scale_BTCs_pdf, out.mean_transport_pdf, opts);
+    computeMeanBTCs(P.xLocations, out.Fine_Scale_BTCs_cdf, out.mean_transport_cdf, opts);
+    computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_pdf,   out.mean_pt_pdf,        opts);
+    computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_cdf,   out.mean_pt_cdf,        opts);
+
+    out.mean_transport_full = out.mean_transport_pdf;
+    out.mean_BTCs = out.mean_transport_pdf;
+
+    out.up_dir = up_dir;
+    out.up_btc_path = up_btc_path;
+    out.up_btc_deriv_path = up_btc_deriv_path;
+
+    return true;
+}
+
+// ============================================================================
 // Main orchestrator
 //
 // Transport convention propagated to RunOutputs:
@@ -1801,6 +2010,20 @@ bool run_simulation_blocks(
     out.Fine_Scale_PT_cdf.clear();
     out.Fine_Scale_PT_pdf.resize(P.xLocations.size());
     out.Fine_Scale_PT_cdf.resize(P.xLocations.size());
+
+    // NEW: rebuild/recovery mode from already-written files
+    if (opts.read_btc_from_files) {
+        const bool ok_rebuild = rebuild_from_existing_btc_files(P, opts, resume_run_dir, out, rank);
+        if (!ok_rebuild) return false;
+
+        if (rank == 0) {
+            for (int i = 0; i < (int)P.xLocations.size(); ++i) {
+                out.Fine_Scale_PT_pdf[i].write(joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "PT_Compare_pdf.csv"));
+                out.Fine_Scale_PT_cdf[i].write(joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "PT_Compare_cdf.csv"));
+            }
+        }
+        return true;
+    }
 
     FineScaleOutputs fine_outputs;
     fine_outputs.BTCs_transport_pdf.resize(P.xLocations.size());

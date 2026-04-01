@@ -50,8 +50,13 @@ int main(int argc, char** argv)
     // Scratch by default (no file loading). Enable via --hardcoded-mean.
     opts.hardcoded_mean = false;
 
-    opts.solve_fine_scale_transport = true;
-    opts.solve_upscale_transport    = true;
+    // NEW: recovery/rebuild mode
+    // Read fine/upscaled BTC/PT from files already written in an existing run dir
+    // and rebuild BTC_mean... outputs without re-solving.
+    opts.read_btc_from_files = true;
+
+    opts.solve_fine_scale_transport = false;
+    opts.solve_upscale_transport    = false;
 
     opts.analyze_qx_ranks = true; // copula ...
 
@@ -74,8 +79,12 @@ int main(int argc, char** argv)
     opts.wiener_release = "left-flux";  // left-uniform | left-flux | center
 
     // Resume folder: existing source folder (mean, qx, ...)
-    bool user_set_qx_cdf  = false;
-    bool user_set_run_dir = false;
+    bool user_set_qx_cdf        = false;
+    bool user_set_run_dir       = false;
+    bool user_set_btc_input_dir = false;
+
+    // NEW: BTC input folder for --btc-from-files mode
+    std::string btc_input_dir;
 
     // ---------------------------------------------------------
     // Pick ONE resume folder here (only ONE assignment!)
@@ -84,10 +93,11 @@ int main(int argc, char** argv)
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=2, D=0, aniso1&0.1");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_std2_D0.01_aniso");
     //std::string resume_run_dir = joinPath(output_dir, "100Realizations_std2_D0.01_aniso");
-    std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260202_003241_std2_D0.1_aniso1&0.1");
+    //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260202_003241_std2_D0.1_aniso1&0.1");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/std=1, D=0, aniso1&0.1");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260210_183158_std1_D0.01_aniso1&0.1_df0.15");
     //std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260211_083055_std1_D0.1_aniso1&0.1_df0.15");
+    std::string resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_std2_D0.1_aniso_df1_vdep");
 
     // DEFAULT (your current canonical):
     //resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260207_111642_std1_D0.1_aniso0.1&1_df0.15");
@@ -125,6 +135,14 @@ int main(int argc, char** argv)
         // --- run selection ---
         if (a == "--upscale-only") opts.upscale_only = true;
         else if (a == "--hardcoded-mean") opts.hardcoded_mean = true;
+        else if (a == "--btc-from-files") {
+            opts.read_btc_from_files = true;
+        }
+        else if (a.rfind("--btc-input-dir=", 0) == 0) {
+            btc_input_dir = a.substr(std::string("--btc-input-dir=").size());
+            user_set_btc_input_dir = true;
+            opts.read_btc_from_files = true;
+        }
         else if (a.rfind("--run-dir=", 0) == 0) {
             resume_run_dir = a.substr(std::string("--run-dir=").size());
             user_set_run_dir = true;
@@ -220,7 +238,43 @@ int main(int argc, char** argv)
     }
 
     // Your rule: hardcoded mean implies upscale-only
-    if (opts.hardcoded_mean) opts.upscale_only = true;
+    if (opts.hardcoded_mean && !opts.read_btc_from_files) opts.upscale_only = true;
+
+    // NEW: BTC-from-files mode is a rebuild/recovery path, not a solve path
+    if (opts.read_btc_from_files) {
+        opts.upscale_only = false;
+        opts.hardcoded_mean = false;
+        opts.solve_fine_scale_transport = false;
+        opts.solve_upscale_transport = false;
+        opts.perform_particle_tracking = false;
+        opts.perform_upscaled_PT = false;
+        opts.analyze_qx_ranks = false;
+
+        if (!user_set_btc_input_dir) {
+            btc_input_dir = resume_run_dir;
+        }
+
+        if (btc_input_dir.empty()) {
+            if (rank == 0) {
+                std::cerr << "ERROR: --btc-from-files requires an input run folder.\n"
+                          << "Use --btc-input-dir=/path/to/existing_run or --run-dir=/path/to/existing_run\n";
+            }
+            MPI_Abort(PETSC_COMM_WORLD, 301);
+        }
+
+        if (!dirExists(btc_input_dir)) {
+            if (rank == 0) {
+                std::cerr << "ERROR: BTC input directory does not exist:\n"
+                          << "  " << btc_input_dir << "\n";
+            }
+            MPI_Abort(PETSC_COMM_WORLD, 302);
+        }
+
+        if (rank == 0) {
+            std::cout << "BTC-from-files mode enabled.\n";
+            std::cout << "Input/output run folder: " << btc_input_dir << "\n";
+        }
+    }
 
     // -----------------------------
     // NEW: mean_ts switch (loaded from main; no extra helpers)
@@ -278,8 +332,9 @@ int main(int argc, char** argv)
     // RESUME / FILE INPUTS
     //   - Only required when opts.hardcoded_mean == true
     //   - In scratch mode (hardcoded_mean == false): do NOT load anything
+    //   - In BTC-from-files mode: also do NOT require qx-cdf / mean_params here
     // -------------------------------------------------
-    if (opts.hardcoded_mean) {
+    if (opts.hardcoded_mean && !opts.read_btc_from_files) {
 
         if (resume_run_dir.empty()) {
             if (rank == 0) {
@@ -317,7 +372,7 @@ int main(int argc, char** argv)
         }
 
     } else {
-        // SCRATCH MODE: do not require any resume folder or qx-cdf file.
+        // SCRATCH MODE / BTC-FROM-FILES MODE: do not require any qx-cdf file here.
     }
 
     // -----------------------------
@@ -340,7 +395,7 @@ int main(int argc, char** argv)
     // -----------------------------
     HardcodedMean H;
 
-    if (opts.hardcoded_mean) {
+    if (opts.hardcoded_mean && !opts.read_btc_from_files) {
 
         H.lc_mean  = std::numeric_limits<double>::quiet_NaN();
         H.lx_mean  = std::numeric_limits<double>::quiet_NaN();
@@ -385,11 +440,29 @@ int main(int argc, char** argv)
                 std::cout << "Using qx inverse-CDF: " << opts.hardcoded_qx_cdf_path << "\n";
             }
         }
+
+    } else {
+        // Not needed for scratch or BTC-from-files mode.
+        H.lc_mean  = std::numeric_limits<double>::quiet_NaN();
+        H.lx_mean  = std::numeric_limits<double>::quiet_NaN();
+        H.ly_mean  = std::numeric_limits<double>::quiet_NaN();
+        H.dt_mean  = std::numeric_limits<double>::quiet_NaN();
+        H.nu_x     = std::numeric_limits<double>::quiet_NaN();
+        H.nu_y     = std::numeric_limits<double>::quiet_NaN();
+        H.qx_const = 1.0;
     }
 
     // -----------------------------
     // CALIBRATION / SCORING MODE
     // -----------------------------
+    if (opts.read_btc_from_files && do_calib) {
+        if (rank == 0) {
+            std::cerr << "ERROR: --btc-from-files is currently intended for single-run recovery/rebuild mode, "
+                      << "not calibration/scoring mode.\n";
+        }
+        MPI_Abort(PETSC_COMM_WORLD, 303);
+    }
+
     if (do_calib) {
 
         if (score_root_dir.empty()) score_root_dir = calib_root_dir;
@@ -576,9 +649,19 @@ int main(int argc, char** argv)
     const std::string run_tag = make_run_tag_std_D_aniso_df(P);
 
     RunOutputs out;
-    out.run_dir = prepare_run_dir_mpi(output_dir, resume_run_dir, opts, rank, run_tag);
 
-    const bool ok = run_simulation_blocks(P, opts, H, resume_run_dir, out, rank);
+    if (opts.read_btc_from_files) {
+        // Rebuild means directly inside the existing run folder.
+        out.run_dir = btc_input_dir;
+        if (!out.run_dir.empty() && out.run_dir.back() != '/' && out.run_dir.back() != '\\')
+            out.run_dir += "/";
+    } else {
+        out.run_dir = prepare_run_dir_mpi(output_dir, resume_run_dir, opts, rank, run_tag);
+    }
+
+    const std::string input_source_dir = opts.read_btc_from_files ? btc_input_dir : resume_run_dir;
+
+    const bool ok = run_simulation_blocks(P, opts, H, input_source_dir, out, rank);
     if (!ok) {
         if (rank == 0) std::cerr << "ERROR: simulation runner failed.\n";
         MPI_Abort(PETSC_COMM_WORLD, 123);
@@ -654,9 +737,15 @@ int main(int argc, char** argv)
             if (!okp) std::cerr << "WARNING: final aggregation/plotting reported failure.\n";
         }
 
-        std::cout << "\nMixing PDF simulation complete!\n";
-        std::cout << "Resume folder (input source): " << resume_run_dir << "\n";
-        std::cout << "All outputs saved to (new run dir): " << out.run_dir << "\n";
+        if (opts.read_btc_from_files) {
+            std::cout << "\nBTC-from-files rebuild complete!\n";
+            std::cout << "Source folder: " << btc_input_dir << "\n";
+            std::cout << "Rebuilt outputs written in-place to: " << out.run_dir << "\n";
+        } else {
+            std::cout << "\nMixing PDF simulation complete!\n";
+            std::cout << "Resume folder (input source): " << resume_run_dir << "\n";
+            std::cout << "All outputs saved to (new run dir): " << out.run_dir << "\n";
+        }
 
         if (opts.wiener_enable) {
             std::cout << "Wiener enabled: mode=" << opts.wiener_mode

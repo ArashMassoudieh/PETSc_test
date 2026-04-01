@@ -1,5 +1,4 @@
-// File overview: sim_runner.h is part of the PETSc_test simulation/analysis workflow.
-// sim_runner.h
+//sim_runner.h
 #pragma once
 
 #include <string>
@@ -19,6 +18,11 @@ struct RunOptions
     // run modes
     bool upscale_only   = false;   // skip fine loop; do only upscaled (requires input dir unless hardcoded_mean)
     bool hardcoded_mean = false;   // use hardcoded lc/lx/ly/dt; and optionally load qx inverse-CDF from file
+
+    // NEW: recovery/rebuild mode
+    // Read fine/upscaled BTC/PT from files already written in an existing run dir
+    // and rebuild BTC_mean... outputs without re-solving.
+    bool read_btc_from_files = false;
 
     // transport toggles
     bool solve_fine_scale_transport = true;

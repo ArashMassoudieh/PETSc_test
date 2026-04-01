@@ -1,22 +1,9 @@
-# File overview: automatic BTC compare plotting for PETSc_test outputs.
 # plot_BTC_both_100_auto.gp
-#
-# Purpose:
-#   Auto-find fine_r* folders and generate BTC comparison plots for any
-#   x=*BTC_Compare.csv files found inside each folder.
-#
-# For each compare file:
-#   - fine realizations = all column pairs except final pair
-#   - upscaled curve    = final column pair
-#   - mean curve        = BTC_mean.csv if present (local folder, else parent)
-#   - linear main panel + log-y inset
-#
-# Usage:
-#   cd <run_folder_containing_fine_r0001,...>
-#   gnuplot /path/to/gnuplotscripts/plot_BTC_both_100_auto.gp
-#
-# Optional overrides:
-#   out_prefix, x_main_max, x_log_max, y_log_min
+# Gnuplot 6-safe and older-safe style:
+# - no do for / plot for
+# - inside bracketed blocks, use only block-style if { ... }
+# - no ternary operator
+# - no mixed old-style if/else inside brackets
 
 reset
 set datafile separator ','
@@ -27,74 +14,86 @@ if (!exists("out_prefix")) out_prefix = "BTC_compare"
 if (!exists("x_main_max")) x_main_max = 10
 if (!exists("x_log_max"))  x_log_max  = 20
 if (!exists("y_log_min"))  y_log_min  = 1e-6
-if (!exists("scan_fine_dirs")) scan_fine_dirs = 0
 
 set terminal pngcairo size 1200,800 enhanced font 'Arial,28'
 
 root_dir = GPVAL_PWD
 
-# Prefer current folder compare files first (matches legacy plot_BTC_both_100.gp behavior).
-# Only if missing, fall back to fine_r* folders.
 root_compare_files = system("ls x=*BTC_Compare.csv 2>/dev/null")
-if (strlen(root_compare_files) > 0) {
-    dir_list = "."
-} else {
+
+dir_list = ""
+if (strlen(root_compare_files) > 0) dir_list = "."
+if (strlen(root_compare_files) == 0) {
     dir_list = system("find . -maxdepth 1 -type d -name 'fine_r*' | sort")
     if (strlen(dir_list) == 0) dir_list = "."
-}
-
-# Optional: force scanning fine_r* even when root compare files exist.
-if (scan_fine_dirs) {
-    extra_dirs = system("find . -maxdepth 1 -type d -name 'fine_r*' | sort")
-    if (strlen(extra_dirs) > 0) {
-        if (strlen(dir_list) == 0) dir_list = extra_dirs
-        else dir_list = dir_list . " " . extra_dirs
-    }
 }
 
 n_dirs = words(dir_list)
 print sprintf("Found %d plotting target folder(s).", n_dirs)
 
-# -------- helper-like plotting block via repeated code --------
-do for [di=1:n_dirs] {
+di = 1
+while (di <= n_dirs) {
     rel_dir = word(dir_list, di)
-
-    # Enter folder
     eval sprintf("cd '%s'", rel_dir)
     print sprintf("Processing folder: %s", GPVAL_PWD)
 
     files = system("ls x=*BTC_Compare.csv 2>/dev/null")
+
+    # ------------------------------------------------------------
+    # Fallback mode: no compare CSVs in this folder
+    # ------------------------------------------------------------
     if (strlen(files) == 0) {
         print "  No x=*BTC_Compare.csv found; trying fine-vs-upscaled fallback."
 
         fine_file = word(system("ls r*_BTC_FineScaled.csv 2>/dev/null"), 1)
-        up_file = "../upscaled_mean/upscaled_BTC_Upscaled.csv"
+        up_file   = "../upscaled_mean/upscaled_BTC_Upscaled.csv"
 
-        if (strlen(fine_file) == 0) {
+        have_fine = 0
+        if (strlen(fine_file) > 0) {
+            have_fine = 1
+        }
+
+        if (have_fine == 0) {
             print "  No r*_BTC_FineScaled.csv found; skipping."
             eval sprintf("cd '%s'", root_dir)
+            di = di + 1
             continue
         }
-        if (system(sprintf("test -f %s", up_file)) ne "") {
+
+        have_up = 0
+        if (system(sprintf("test -f '%s'", up_file)) eq "") {
+            have_up = 1
+        }
+
+        if (have_up == 0) {
             print sprintf("  Missing upscaled reference file: %s ; skipping.", up_file)
             eval sprintf("cd '%s'", root_dir)
+            di = di + 1
             continue
         }
 
         stats fine_file nooutput
         ncol_f = STATS_columns
         npairs_f = int(ncol_f/2)
+
         stats up_file nooutput
         ncol_u = STATS_columns
         npairs_u = int(ncol_u/2)
-        npairs_fb = (npairs_f < npairs_u) ? npairs_f : npairs_u
+
+        npairs_fb = npairs_f
+        if (npairs_u < npairs_f) {
+            npairs_fb = npairs_u
+        }
+
         if (npairs_fb < 1) {
             print sprintf("  Skipping fallback: no column pairs in %s", fine_file)
             eval sprintf("cd '%s'", root_dir)
+            di = di + 1
             continue
         }
 
-        do for [p=1:npairs_fb] {
+        p = 1
+        while (p <= npairs_fb) {
             ft_col = 2*p - 1
             fc_col = 2*p
             ut_col = ft_col
@@ -102,9 +101,11 @@ do for [di=1:n_dirs] {
 
             stem = fine_file[1:strlen(fine_file)-4]
             out_png = sprintf("%s_%s_pair%02d_auto.png", out_prefix, stem, p)
+
             set output out_png
             set multiplot layout 1,1
 
+            # Main
             set grid
             set key top right
             set xlabel 'Time' font 'Arial,32'
@@ -120,6 +121,7 @@ do for [di=1:n_dirs] {
             plot fine_file using ft_col:fc_col with lines lw 2 lc rgb "#000000" title sprintf("Fine pair %d", p), \
                  up_file   using ut_col:uc_col with lines lw 3 lc rgb "#FF0000" title "Upscaled"
 
+            # Inset
             set origin 0.40, 0.15
             set size 0.55, 0.65
             set key off
@@ -138,28 +140,41 @@ do for [di=1:n_dirs] {
 
             unset multiplot
             print sprintf("  Wrote fallback %s (pair=%d)", out_png, p)
+
+            p = p + 1
         }
 
         eval sprintf("cd '%s'", root_dir)
+        di = di + 1
         continue
     }
 
-    # Local mean first, then parent folder fallback
+    # ------------------------------------------------------------
+    # Compare-file mode
+    # ------------------------------------------------------------
     mean_file = "BTC_mean.csv"
-    if (system("test -f BTC_mean.csv") ne "") {
-        if (system("test -f ../BTC_mean.csv") eq "") {
+    mean_exists = 0
+    if (system("test -f 'BTC_mean.csv'") eq "") {
+        mean_exists = 1
+    }
+    if (mean_exists == 0) {
+        if (system("test -f '../BTC_mean.csv'") eq "") {
             mean_file = "../BTC_mean.csv"
+            mean_exists = 1
         }
     }
 
     n_files = words(files)
-    do for [i=1:n_files] {
+    i = 1
+    while (i <= n_files) {
         f = word(files, i)
 
         stats f nooutput
         ncol = STATS_columns
+
         if (ncol < 4) {
             print sprintf("  Skipping %s: expected >=4 columns, got %d", f, ncol)
+            i = i + 1
             continue
         }
 
@@ -170,10 +185,11 @@ do for [di=1:n_dirs] {
 
         stem = f[1:strlen(f)-4]
         out_png = sprintf("%s_%s_auto.png", out_prefix, stem)
+
         set output out_png
         set multiplot layout 1,1
 
-        # Main (linear)
+        # Main
         set grid
         set key top right
         set xlabel 'Time' font 'Arial,32'
@@ -182,25 +198,47 @@ do for [di=1:n_dirs] {
         set yrange [0:*]
         set xrange [0:x_main_max]
         unset logscale y
+        unset y2tics
         set origin 0,0
         set size 1,1
 
-        has_mean = (system(sprintf("test -f %s", mean_file)) eq "") ? 1 : 0
-
-        if (fine_pairs >= 1) {
-            if (has_mean) {
-                plot for [k=1:fine_pairs] f using (column(2*k-1)):(column(2*k)) with lines lw 1 lc rgb "#CCCCCC" notitle, \
-                     mean_file using 1:2 with lines lw 3 lc rgb "#000000" title 'Mean', \
-                     f using up_t_col:up_c_col with lines lw 3 lc rgb "#FF0000" title 'Upscaled'
-            } else {
-                plot for [k=1:fine_pairs] f using (column(2*k-1)):(column(2*k)) with lines lw 1 lc rgb "#CCCCCC" notitle, \
-                     f using up_t_col:up_c_col with lines lw 3 lc rgb "#FF0000" title 'Upscaled'
+        plotcmd = "plot "
+        k = 1
+        while (k <= fine_pairs) {
+            if (k > 1) {
+                plotcmd = plotcmd . ", "
             }
-        } else {
-            plot f using up_t_col:up_c_col with lines lw 3 lc rgb "#FF0000" title 'Upscaled'
+            plotcmd = plotcmd . sprintf("'%s' using %d:%d with lines lw 1 lc rgb '#CCCCCC' notitle", f, 2*k-1, 2*k)
+            k = k + 1
         }
 
-        # Inset (log-y)
+        if (mean_exists == 1) {
+            if (fine_pairs > 0) {
+                plotcmd = plotcmd . ", "
+            }
+            plotcmd = plotcmd . sprintf("'%s' using 1:2 with lines lw 3 lc rgb '#000000' title 'Mean'", mean_file)
+            plotcmd = plotcmd . sprintf(", '%s' using %d:%d with lines lw 3 lc rgb '#FF0000' title 'Upscaled'", f, up_t_col, up_c_col)
+        }
+
+        if (mean_exists == 0) {
+            if (fine_pairs > 0) {
+                plotcmd = plotcmd . ", "
+            }
+            plotcmd = plotcmd . sprintf("'%s' using %d:%d with lines lw 3 lc rgb '#FF0000' title 'Upscaled'", f, up_t_col, up_c_col)
+        }
+
+        if (fine_pairs == 0) {
+            if (mean_exists == 1) {
+                plotcmd = sprintf("plot '%s' using 1:2 with lines lw 3 lc rgb '#000000' title 'Mean', '%s' using %d:%d with lines lw 3 lc rgb '#FF0000' title 'Upscaled'", mean_file, f, up_t_col, up_c_col)
+            }
+            if (mean_exists == 0) {
+                plotcmd = sprintf("plot '%s' using %d:%d with lines lw 3 lc rgb '#FF0000' title 'Upscaled'", f, up_t_col, up_c_col)
+            }
+        }
+
+        eval plotcmd
+
+        # Inset
         set origin 0.40, 0.15
         set size 0.55, 0.65
         set key off
@@ -212,26 +250,52 @@ do for [di=1:n_dirs] {
         set format y "10^{%T}"
         set yrange [y_log_min:*]
         set xrange [0:x_log_max]
+        unset y2tics
 
-        if (fine_pairs >= 1) {
-            if (has_mean) {
-                plot for [k=1:fine_pairs] f using (column(2*k-1)):(column(2*k)) with lines lw 1 lc rgb "#CCCCCC" notitle, \
-                     mean_file using 1:2 with lines lw 3 lc rgb "#000000" notitle, \
-                     f using up_t_col:up_c_col with lines lw 3 lc rgb "#FF0000" notitle
-            } else {
-                plot for [k=1:fine_pairs] f using (column(2*k-1)):(column(2*k)) with lines lw 1 lc rgb "#CCCCCC" notitle, \
-                     f using up_t_col:up_c_col with lines lw 3 lc rgb "#FF0000" notitle
+        plotcmd = "plot "
+        k = 1
+        while (k <= fine_pairs) {
+            if (k > 1) {
+                plotcmd = plotcmd . ", "
             }
-        } else {
-            plot f using up_t_col:up_c_col with lines lw 3 lc rgb "#FF0000" notitle
+            plotcmd = plotcmd . sprintf("'%s' using %d:%d with lines lw 1 lc rgb '#CCCCCC' notitle", f, 2*k-1, 2*k)
+            k = k + 1
         }
+
+        if (mean_exists == 1) {
+            if (fine_pairs > 0) {
+                plotcmd = plotcmd . ", "
+            }
+            plotcmd = plotcmd . sprintf("'%s' using 1:2 with lines lw 3 lc rgb '#000000' notitle", mean_file)
+            plotcmd = plotcmd . sprintf(", '%s' using %d:%d with lines lw 3 lc rgb '#FF0000' notitle", f, up_t_col, up_c_col)
+        }
+
+        if (mean_exists == 0) {
+            if (fine_pairs > 0) {
+                plotcmd = plotcmd . ", "
+            }
+            plotcmd = plotcmd . sprintf("'%s' using %d:%d with lines lw 3 lc rgb '#FF0000' notitle", f, up_t_col, up_c_col)
+        }
+
+        if (fine_pairs == 0) {
+            if (mean_exists == 1) {
+                plotcmd = sprintf("plot '%s' using 1:2 with lines lw 3 lc rgb '#000000' notitle, '%s' using %d:%d with lines lw 3 lc rgb '#FF0000' notitle", mean_file, f, up_t_col, up_c_col)
+            }
+            if (mean_exists == 0) {
+                plotcmd = sprintf("plot '%s' using %d:%d with lines lw 3 lc rgb '#FF0000' notitle", f, up_t_col, up_c_col)
+            }
+        }
+
+        eval plotcmd
 
         unset multiplot
         print sprintf("  Wrote %s (fine_pairs=%d, upscaled cols=%d:%d)", out_png, fine_pairs, up_t_col, up_c_col)
+
+        i = i + 1
     }
 
-    # Return to root for next folder
     eval sprintf("cd '%s'", root_dir)
+    di = di + 1
 }
 
 print "Done."
