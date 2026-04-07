@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <vector>
 #include <random>
+#include <gsl/gsl_cdf.h>
 
 #include "grid.h"
 #include "Pathway.h"
@@ -632,11 +633,6 @@ static double norminv_approx(double p)
            (((((b[0]*r + b[1])*r + b[2])*r + b[3])*r + b[4])*r + 1.0);
 }
 
-static double normal_cdf(double z)
-{
-    return 0.5 * std::erfc(-z / std::sqrt(2.0));
-}
-
 static double gaussian_copula_cdf_approx(double u, double v, double rho)
 {
     constexpr double kPi = 3.14159265358979323846;
@@ -660,7 +656,7 @@ static double gaussian_copula_cdf_approx(double u, double v, double rho)
         const double x = lo + h * i;
         const double w = (i == 0 || i == N) ? 1.0 : ((i % 2 == 0) ? 2.0 : 4.0);
         const double arg = (b - rho * x) / s;
-        sum += w * phi(x) * normal_cdf(arg);
+        sum += w * phi(x) * gsl_cdf_ugaussian_P(arg);
     }
     return std::max(0.0, std::min(1.0, sum * h / 3.0));
 }
@@ -785,8 +781,8 @@ static double estimate_gaussian_copula_gof_pvalue(const std::vector<double>& u,
         for (int i = 0; i < n; ++i) {
             const double z1 = N01(rng);
             const double z2 = rho * z1 + s * N01(rng);
-            ub[i] = std::min(1.0 - 1e-12, std::max(1e-12, normal_cdf(z1)));
-            vb[i] = std::min(1.0 - 1e-12, std::max(1e-12, normal_cdf(z2)));
+            ub[i] = std::min(1.0 - 1e-12, std::max(1e-12, gsl_cdf_ugaussian_P(z1)));
+            vb[i] = std::min(1.0 - 1e-12, std::max(1e-12, gsl_cdf_ugaussian_P(z2)));
         }
         const double tau_b = kendall_tau_naive(ub, vb);
         const double rho_b = std::sin(0.5 * kPi * tau_b);
