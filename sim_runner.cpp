@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <cstdint>
 #include <vector>
+#include <random>
 
 #include "grid.h"
 #include "Pathway.h"
@@ -542,6 +543,12 @@ struct QxRankStats
     double corr_qx = std::numeric_limits<double>::quiet_NaN();
     double corr_rank = std::numeric_limits<double>::quiet_NaN();
     double gaussian_copula_rho = std::numeric_limits<double>::quiet_NaN();
+    double kendall_tau = std::numeric_limits<double>::quiet_NaN();
+    double rho_from_tau = std::numeric_limits<double>::quiet_NaN();
+    double mardia_skewness = std::numeric_limits<double>::quiet_NaN();
+    double mardia_kurtosis = std::numeric_limits<double>::quiet_NaN();
+    double gaussian_copula_gof_stat = std::numeric_limits<double>::quiet_NaN();
+    double gaussian_copula_gof_pvalue = std::numeric_limits<double>::quiet_NaN();
 };
 
 static double pearson_corr(const std::vector<double>& a, const std::vector<double>& b)
@@ -625,6 +632,170 @@ static double norminv_approx(double p)
            (((((b[0]*r + b[1])*r + b[2])*r + b[3])*r + b[4])*r + 1.0);
 }
 
+static double normal_cdf(double z)
+{
+    return 0.5 * std::erfc(-z / std::sqrt(2.0));
+}
+
+static double gaussian_copula_cdf_approx(double u, double v, double rho)
+{
+    constexpr double kPi = 3.14159265358979323846;
+    if (!(u > 0.0 && u < 1.0 && v > 0.0 && v < 1.0)) return std::numeric_limits<double>::quiet_NaN();
+    const double a = norminv_approx(u);
+    const double b = norminv_approx(v);
+    if (!std::isfinite(a) || !std::isfinite(b)) return std::numeric_limits<double>::quiet_NaN();
+    if (!std::isfinite(rho)) return std::numeric_limits<double>::quiet_NaN();
+    rho = std::max(-0.999, std::min(0.999, rho));
+
+    const double s = std::sqrt(1.0 - rho * rho);
+    const double lo = -8.0;
+    if (a <= lo) return 0.0;
+    const double hi = std::min(8.0, a);
+    const int N = 80;
+    const double h = (hi - lo) / double(N);
+    auto phi = [kPi](double z) { return std::exp(-0.5 * z * z) / std::sqrt(2.0 * kPi); };
+
+    double sum = 0.0;
+    for (int i = 0; i <= N; ++i) {
+        const double x = lo + h * i;
+        const double w = (i == 0 || i == N) ? 1.0 : ((i % 2 == 0) ? 2.0 : 4.0);
+        const double arg = (b - rho * x) / s;
+        sum += w * phi(x) * normal_cdf(arg);
+    }
+    return std::max(0.0, std::min(1.0, sum * h / 3.0));
+}
+
+static double kendall_tau_naive(const std::vector<double>& x, const std::vector<double>& y)
+{
+    if (x.size() != y.size() || x.size() < 2) return std::numeric_limits<double>::quiet_NaN();
+    long long concordant = 0;
+    long long discordant = 0;
+    const int n = (int)x.size();
+    for (int i = 0; i < n; ++i) {
+        for (int j = i + 1; j < n; ++j) {
+            const double dx = x[j] - x[i];
+            const double dy = y[j] - y[i];
+            const double s = dx * dy;
+            if (s > 0.0) ++concordant;
+            else if (s < 0.0) ++discordant;
+        }
+    }
+    const long long den = (long long)n * (n - 1) / 2;
+    if (den <= 0) return std::numeric_limits<double>::quiet_NaN();
+    return double(concordant - discordant) / double(den);
+}
+
+static void mardia_bivariate_moments(const std::vector<double>& x,
+                                     const std::vector<double>& y,
+                                     double& skew_out,
+                                     double& kurt_out)
+{
+    skew_out = std::numeric_limits<double>::quiet_NaN();
+    kurt_out = std::numeric_limits<double>::quiet_NaN();
+    if (x.size() != y.size() || x.size() < 3) return;
+    const int n = (int)x.size();
+    double mx = 0.0, my = 0.0;
+    for (int i = 0; i < n; ++i) { mx += x[i]; my += y[i]; }
+    mx /= n; my /= n;
+
+    double sxx = 0.0, syy = 0.0, sxy = 0.0;
+    for (int i = 0; i < n; ++i) {
+        const double dx = x[i] - mx;
+        const double dy = y[i] - my;
+        sxx += dx * dx;
+        syy += dy * dy;
+        sxy += dx * dy;
+    }
+    sxx /= (n - 1); syy /= (n - 1); sxy /= (n - 1);
+    const double det = sxx * syy - sxy * sxy;
+    if (!(det > 0.0)) return;
+
+    const double inv00 =  syy / det;
+    const double inv01 = -sxy / det;
+    const double inv11 =  sxx / det;
+
+    std::vector<double> d2(n, 0.0);
+    for (int i = 0; i < n; ++i) {
+        const double dx = x[i] - mx;
+        const double dy = y[i] - my;
+        d2[i] = dx * (inv00 * dx + inv01 * dy) + dy * (inv01 * dx + inv11 * dy);
+    }
+
+    double b2p = 0.0;
+    for (double v : d2) b2p += v * v;
+    b2p /= n;
+    kurt_out = b2p;
+
+    double b1p = 0.0;
+    for (int i = 0; i < n; ++i) {
+        const double dxi = x[i] - mx;
+        const double dyi = y[i] - my;
+        for (int j = 0; j < n; ++j) {
+            const double dxj = x[j] - mx;
+            const double dyj = y[j] - my;
+            const double dij = dxi * (inv00 * dxj + inv01 * dyj) + dyi * (inv01 * dxj + inv11 * dyj);
+            b1p += dij * dij * dij;
+        }
+    }
+    b1p /= (double(n) * n);
+    skew_out = b1p;
+}
+
+static double gaussian_copula_cvm_statistic(const std::vector<double>& u,
+                                            const std::vector<double>& v,
+                                            double rho)
+{
+    if (u.size() != v.size() || u.empty()) return std::numeric_limits<double>::quiet_NaN();
+    const int n = (int)u.size();
+    double s = 0.0;
+    for (int i = 0; i < n; ++i) {
+        int count = 0;
+        for (int j = 0; j < n; ++j) {
+            if (u[j] <= u[i] && v[j] <= v[i]) ++count;
+        }
+        const double cn = double(count) / double(n);
+        const double cg = gaussian_copula_cdf_approx(u[i], v[i], rho);
+        if (std::isfinite(cg)) {
+            const double d = cn - cg;
+            s += d * d;
+        }
+    }
+    return s;
+}
+
+static double estimate_gaussian_copula_gof_pvalue(const std::vector<double>& u,
+                                                  const std::vector<double>& v,
+                                                  double rho_hat,
+                                                  int B,
+                                                  unsigned long seed,
+                                                  double& stat_obs)
+{
+    constexpr double kPi = 3.14159265358979323846;
+    stat_obs = gaussian_copula_cvm_statistic(u, v, rho_hat);
+    if (!std::isfinite(stat_obs) || B <= 0) return std::numeric_limits<double>::quiet_NaN();
+
+    std::mt19937_64 rng(seed);
+    std::normal_distribution<double> N01(0.0, 1.0);
+    int ge = 0;
+    const int n = (int)u.size();
+    const double rho = std::max(-0.999, std::min(0.999, rho_hat));
+    const double s = std::sqrt(1.0 - rho * rho);
+    std::vector<double> ub(n), vb(n);
+    for (int b = 0; b < B; ++b) {
+        for (int i = 0; i < n; ++i) {
+            const double z1 = N01(rng);
+            const double z2 = rho * z1 + s * N01(rng);
+            ub[i] = std::min(1.0 - 1e-12, std::max(1e-12, normal_cdf(z1)));
+            vb[i] = std::min(1.0 - 1e-12, std::max(1e-12, normal_cdf(z2)));
+        }
+        const double tau_b = kendall_tau_naive(ub, vb);
+        const double rho_b = std::sin(0.5 * kPi * tau_b);
+        const double s_b = gaussian_copula_cvm_statistic(ub, vb, rho_b);
+        if (std::isfinite(s_b) && s_b >= stat_obs) ++ge;
+    }
+    return double(ge + 1) / double(B + 1);
+}
+
 static QxRankStats analyze_and_write_rank_pairs(
     const PathwaySet& pair_set,
     double delta_x,
@@ -669,6 +840,12 @@ static QxRankStats analyze_and_write_rank_pairs(
     out.corr_qx = pearson_corr(q1, q2);
     out.corr_rank = pearson_corr(u1, u2);          // Spearman-like via normalized ranks
     out.gaussian_copula_rho = pearson_corr(z1, z2); // rho of Gaussianized ranks
+    out.kendall_tau = kendall_tau_naive(q1, q2);
+    out.rho_from_tau = std::sin(0.5 * 3.14159265358979323846 * out.kendall_tau);
+    mardia_bivariate_moments(q1, q2, out.mardia_skewness, out.mardia_kurtosis);
+    out.gaussian_copula_gof_pvalue =
+        estimate_gaussian_copula_gof_pvalue(u1, u2, out.rho_from_tau, 200, 777UL + (unsigned long)(1000.0 * delta_x),
+                                            out.gaussian_copula_gof_stat);
     return out;
 }
 
@@ -1214,14 +1391,20 @@ static bool run_fine_loop_collect(
                         }
 
                         std::ofstream sf(joinPath(fine_dir, pfx + "qx_rank_copula_summary.csv"));
-                        sf << "delta_x,n_pairs,corr_qx,corr_rank,gaussian_copula_rho\n";
+                        sf << "delta_x,n_pairs,corr_qx,corr_rank,gaussian_copula_rho,kendall_tau,rho_from_tau,mardia_skewness,mardia_kurtosis,gaussian_copula_gof_stat,gaussian_copula_gof_pvalue\n";
                         sf << std::setprecision(15);
                         for (const auto& st : rank_stats) {
                             sf << st.delta_x << ","
                                << st.n_pairs << ","
                                << st.corr_qx << ","
                                << st.corr_rank << ","
-                               << st.gaussian_copula_rho << "\n";
+                               << st.gaussian_copula_rho << ","
+                               << st.kendall_tau << ","
+                               << st.rho_from_tau << ","
+                               << st.mardia_skewness << ","
+                               << st.mardia_kurtosis << ","
+                               << st.gaussian_copula_gof_stat << ","
+                               << st.gaussian_copula_gof_pvalue << "\n";
                         }
 
                         std::ofstream lcf(joinPath(fine_dir, pfx + "velocity_correlation_lengths.csv"));
