@@ -306,6 +306,37 @@ void PathwaySet::clear()
     pathways_.clear();
 }
 
+void PathwaySet::mergeFrom(const PathwaySet& other, bool reindex_ids)
+{
+    if (other.pathways_.empty()) return;
+
+    const size_t old_size = pathways_.size();
+    pathways_.reserve(old_size + other.pathways_.size());
+
+    if (!reindex_ids) {
+        pathways_.insert(pathways_.end(), other.pathways_.begin(), other.pathways_.end());
+        return;
+    }
+
+    for (size_t i = 0; i < other.pathways_.size(); ++i) {
+        Pathway p = other.pathways_[i];
+        p.setId(static_cast<int>(old_size + i));
+        pathways_.push_back(std::move(p));
+    }
+}
+
+PathwaySet PathwaySet::mergeAll(const std::vector<PathwaySet>& sets, bool reindex_ids)
+{
+    size_t total = 0;
+    for (const auto& s : sets) total += s.pathways_.size();
+
+    PathwaySet merged(static_cast<int>(total));
+    for (const auto& s : sets) {
+        merged.mergeFrom(s, reindex_ids);
+    }
+    return merged;
+}
+
 size_t PathwaySet::countActive() const
 {
     size_t count = 0;
