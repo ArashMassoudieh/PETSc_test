@@ -53,10 +53,10 @@ int main(int argc, char** argv)
     // NEW: recovery/rebuild mode
     // Read fine/upscaled BTC/PT from files already written in an existing run dir
     // and rebuild BTC_mean... outputs without re-solving.
-    opts.read_btc_from_files = true;
+    opts.read_btc_from_files = false;
 
-    opts.solve_fine_scale_transport = false;
-    opts.solve_upscale_transport    = false;
+    opts.solve_fine_scale_transport = true;
+    opts.solve_upscale_transport    = true;
 
     opts.analyze_qx_ranks = true; // copula ...
 
@@ -311,7 +311,7 @@ int main(int argc, char** argv)
 
     P.t_end_pdf = 20.0;
 
-    P.nReal_default = 100; // 100
+    P.nReal_default = 10; // 100
     P.run_seed = 20260115UL;
 
     P.xLocations = {0.5, 1.5, 2.5};
