@@ -651,14 +651,14 @@ static QxRankStats analyze_and_write_rank_pairs(
     std::vector<double> z2; z2.reserve(n);
     std::ofstream f(scatter_csv_path);
     if (f) {
-        f << "u1,u2,qx1,qx2\n";
+        f << "u1,u2,qx1,qx2,qx1_normal_score,qx2_normal_score\n";
         f << std::setprecision(15);
     }
 
     for (int i = 0; i < n; ++i) {
-        if (f) f << u1[i] << "," << u2[i] << "," << q1[i] << "," << q2[i] << "\n";
         const double nz1 = norminv_approx(u1[i]);
         const double nz2 = norminv_approx(u2[i]);
+        if (f) f << u1[i] << "," << u2[i] << "," << q1[i] << "," << q2[i] << "," << nz1 << "," << nz2 << "\n";
         if (std::isfinite(nz1) && std::isfinite(nz2)) {
             z1.push_back(nz1);
             z2.push_back(nz2);

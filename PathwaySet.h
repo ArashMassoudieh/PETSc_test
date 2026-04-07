@@ -98,6 +98,13 @@ public:
                                                BTCType type = BTCType::CDF,
                                                int n_bins = 200) const;
 
+    // Merge pathways from another realization into this set.
+    // If reindex_ids=true, appended pathways are copied with new consecutive IDs.
+    void mergeFrom(const PathwaySet& other, bool reindex_ids = false);
+
+    // Merge multiple realization sets into a single PathwaySet.
+    static PathwaySet mergeAll(const std::vector<PathwaySet>& sets, bool reindex_ids = false);
+
 private:
     std::vector<Pathway> pathways_;
 };
