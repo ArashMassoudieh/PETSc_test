@@ -36,6 +36,9 @@ struct RunOptions
     // When enabled, rank-pair samples are generated for logarithmically-spaced
     // projected separations Delta_x and written under each realization folder.
     bool analyze_qx_ranks = true;
+    bool analyze_qx_copula_diagnostics = false; // expensive GOF + moment diagnostics
+    int  qx_copula_bootstrap = 50;
+    int  qx_copula_max_points = 1200;
     int  qx_rank_num_delta = 30;
     int  qx_rank_num_samples = 10000;
     double qx_rank_delta_x_min = 0.001;

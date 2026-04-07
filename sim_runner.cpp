@@ -792,10 +792,27 @@ static double estimate_gaussian_copula_gof_pvalue(const std::vector<double>& u,
     return double(ge + 1) / double(B + 1);
 }
 
+static std::vector<double> downsample_evenly(const std::vector<double>& a, int max_points)
+{
+    const int n = (int)a.size();
+    if (n <= 0 || max_points <= 0 || n <= max_points) return a;
+    std::vector<double> out;
+    out.reserve((size_t)max_points);
+    const double step = double(n - 1) / double(max_points - 1);
+    for (int i = 0; i < max_points; ++i) {
+        const int idx = std::min(n - 1, (int)std::llround(i * step));
+        out.push_back(a[idx]);
+    }
+    return out;
+}
+
 static QxRankStats analyze_and_write_rank_pairs(
     const PathwaySet& pair_set,
     double delta_x,
-    const std::string& scatter_csv_path)
+    const std::string& scatter_csv_path,
+    bool compute_copula_diagnostics,
+    int copula_bootstrap_B,
+    int copula_max_points)
 {
     QxRankStats out;
     out.delta_x = delta_x;
@@ -836,12 +853,20 @@ static QxRankStats analyze_and_write_rank_pairs(
     out.corr_qx = pearson_corr(q1, q2);
     out.corr_rank = pearson_corr(u1, u2);          // Spearman-like via normalized ranks
     out.gaussian_copula_rho = pearson_corr(z1, z2); // rho of Gaussianized ranks
-    out.kendall_tau = kendall_tau_naive(q1, q2);
-    out.rho_from_tau = std::sin(0.5 * 3.14159265358979323846 * out.kendall_tau);
-    mardia_bivariate_moments(q1, q2, out.mardia_skewness, out.mardia_kurtosis);
-    out.gaussian_copula_gof_pvalue =
-        estimate_gaussian_copula_gof_pvalue(u1, u2, out.rho_from_tau, 200, 777UL + (unsigned long)(1000.0 * delta_x),
-                                            out.gaussian_copula_gof_stat);
+    if (compute_copula_diagnostics) {
+        const std::vector<double> q1s = downsample_evenly(q1, copula_max_points);
+        const std::vector<double> q2s = downsample_evenly(q2, copula_max_points);
+        const std::vector<double> u1s = downsample_evenly(u1, copula_max_points);
+        const std::vector<double> u2s = downsample_evenly(u2, copula_max_points);
+        out.kendall_tau = kendall_tau_naive(q1s, q2s);
+        out.rho_from_tau = std::sin(0.5 * 3.14159265358979323846 * out.kendall_tau);
+        mardia_bivariate_moments(q1s, q2s, out.mardia_skewness, out.mardia_kurtosis);
+        out.gaussian_copula_gof_pvalue =
+            estimate_gaussian_copula_gof_pvalue(u1s, u2s, out.rho_from_tau,
+                                                std::max(10, copula_bootstrap_B),
+                                                777UL + (unsigned long)(1000.0 * delta_x),
+                                                out.gaussian_copula_gof_stat);
+    }
     return out;
 }
 
@@ -1358,7 +1383,10 @@ static bool run_fine_loop_collect(
                                 std::ostringstream fn;
                                 fn << pfx << "qx_rank_pairs_dx_" << std::fixed << std::setprecision(6) << Delta_x << ".csv";
                                 const QxRankStats st =
-                                    analyze_and_write_rank_pairs(particle_pairs, Delta_x, joinPath(fine_dir, fn.str()));
+                                    analyze_and_write_rank_pairs(particle_pairs, Delta_x, joinPath(fine_dir, fn.str()),
+                                                                 opts.analyze_qx_copula_diagnostics,
+                                                                 opts.qx_copula_bootstrap,
+                                                                 opts.qx_copula_max_points);
                                 rank_stats.push_back(st);
                                 qx_corr_adv_rank_copula.append(Delta_x, st.gaussian_copula_rho);
                             }

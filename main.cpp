@@ -11,6 +11,7 @@
 #include <cmath>        // std::round, std::abs, pow
 #include <limits>
 #include <fstream>
+#include <algorithm>
 
 #include "sim_helpers.h"
 #include "plotter.h"     // TBaseMode, AlignMode, run_final_aggregation_and_plots
@@ -59,6 +60,9 @@ int main(int argc, char** argv)
     opts.solve_upscale_transport    = true;
 
     opts.analyze_qx_ranks = true; // copula ...
+    opts.analyze_qx_copula_diagnostics = false; // expensive; opt-in
+    opts.qx_copula_bootstrap = 50;
+    opts.qx_copula_max_points = 1200;
 
     opts.perform_particle_tracking = false;
     opts.perform_upscaled_PT = false;
@@ -161,6 +165,14 @@ int main(int argc, char** argv)
         else if (a == "--up-transport")      opts.solve_upscale_transport = true;
         else if (a == "--no-qx-ranks")       opts.analyze_qx_ranks = false;
         else if (a == "--qx-ranks")          opts.analyze_qx_ranks = true;
+        else if (a == "--copula-analysis")   opts.analyze_qx_copula_diagnostics = true;
+        else if (a == "--no-copula-analysis")opts.analyze_qx_copula_diagnostics = false;
+        else if (a.rfind("--copula-bootstrap=", 0) == 0) {
+            opts.qx_copula_bootstrap = std::max(10, std::stoi(a.substr(std::string("--copula-bootstrap=").size())));
+        }
+        else if (a.rfind("--copula-max-points=", 0) == 0) {
+            opts.qx_copula_max_points = std::max(200, std::stoi(a.substr(std::string("--copula-max-points=").size())));
+        }
         else if (a == "--lc-auto")           opts.lc_source = RunOptions::LcSource::AutoPreferRankCopula;
         else if (a == "--lc-raw")            opts.lc_source = RunOptions::LcSource::RawQx;
         else if (a == "--lc-rank")           opts.lc_source = RunOptions::LcSource::RankCopula;
