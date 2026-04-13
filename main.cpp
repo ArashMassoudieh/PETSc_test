@@ -60,7 +60,7 @@ int main(int argc, char** argv)
     opts.solve_upscale_transport    = true;
 
     opts.analyze_qx_ranks = true; // copula ...
-    opts.analyze_qx_copula_diagnostics = false; // expensive; opt-in
+    opts.analyze_qx_copula_diagnostics = true; // expensive; opt-in
     opts.qx_copula_bootstrap = 50;
     opts.qx_copula_max_points = 1200;
 
