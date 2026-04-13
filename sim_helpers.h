@@ -149,6 +149,29 @@ double mean_time_from_pdf(const TimeSeries<double>& pdf_ts);
 bool read_pt_mean_csv(const std::string& path, std::vector<double>& x, std::vector<double>& mu);
 
 // --------------------
+// copula diagnostics helpers
+// --------------------
+double pearson_corr(const std::vector<double>& a, const std::vector<double>& b);
+std::vector<double> fractional_ranks_01(const std::vector<double>& x);
+double norminv_approx(double p);
+double gaussian_copula_cdf_approx(double u, double v, double rho);
+double kendall_tau_naive(const std::vector<double>& x, const std::vector<double>& y);
+void mardia_bivariate_moments(const std::vector<double>& x,
+                              const std::vector<double>& y,
+                              double& skew_out,
+                              double& kurt_out);
+double gaussian_copula_cvm_statistic(const std::vector<double>& u,
+                                     const std::vector<double>& v,
+                                     double rho);
+double estimate_gaussian_copula_gof_pvalue(const std::vector<double>& u,
+                                           const std::vector<double>& v,
+                                           double rho,
+                                           int B,
+                                           unsigned long seed,
+                                           double& stat_obs_out);
+std::vector<double> downsample_evenly(const std::vector<double>& a, int max_points);
+
+// --------------------
 // CSV utilities
 // --------------------
 bool read_time_series_table_csv(
