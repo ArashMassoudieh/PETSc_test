@@ -464,37 +464,45 @@ void mardia_bivariate_moments(const std::vector<double>& x,
 
     double sxx = 0.0, syy = 0.0, sxy = 0.0;
     for (int i = 0; i < n; ++i) {
-        const double dx = x[i] - mx, dy = y[i] - my;
-        sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
+        const double dx = x[i] - mx;
+        const double dy = y[i] - my;
+        sxx += dx * dx;
+        syy += dy * dy;
+        sxy += dx * dy;
     }
     sxx /= (n - 1); syy /= (n - 1); sxy /= (n - 1);
     const double det = sxx * syy - sxy * sxy;
     if (!(det > 0.0)) return;
-    const double ixx =  syy / det;
-    const double iyy =  sxx / det;
-    const double ixy = -sxy / det;
 
-    double b1 = 0.0;
+    const double inv00 =  syy / det;
+    const double inv01 = -sxy / det;
+    const double inv11 =  sxx / det;
+
+    std::vector<double> d2(n, 0.0);
     for (int i = 0; i < n; ++i) {
+        const double dx = x[i] - mx;
+        const double dy = y[i] - my;
+        d2[i] = dx * (inv00 * dx + inv01 * dy) + dy * (inv01 * dx + inv11 * dy);
+    }
+
+    double b2p = 0.0;
+    for (double v : d2) b2p += v * v;
+    b2p /= n;
+    kurt_out = b2p;
+
+    double b1p = 0.0;
+    for (int i = 0; i < n; ++i) {
+        const double dxi = x[i] - mx;
+        const double dyi = y[i] - my;
         for (int j = 0; j < n; ++j) {
-            const double dix = x[i] - mx, diy = y[i] - my;
-            const double djx = x[j] - mx, djy = y[j] - my;
-            const double dij = dix*(ixx*djx + ixy*djy) + diy*(ixy*djx + iyy*djy);
-            b1 += dij * dij * dij;
+            const double dxj = x[j] - mx;
+            const double dyj = y[j] - my;
+            const double dij = dxi * (inv00 * dxj + inv01 * dyj) + dyi * (inv01 * dxj + inv11 * dyj);
+            b1p += dij * dij * dij;
         }
     }
-    b1 /= (double(n) * n);
-
-    double b2 = 0.0;
-    for (int i = 0; i < n; ++i) {
-        const double dx = x[i] - mx, dy = y[i] - my;
-        const double dii = dx*(ixx*dx + ixy*dy) + dy*(ixy*dx + iyy*dy);
-        b2 += dii * dii;
-    }
-    b2 /= n;
-
-    skew_out = b1;
-    kurt_out = b2;
+    b1p /= (double(n) * n);
+    skew_out = b1p;
 }
 
 double gaussian_copula_cvm_statistic(const std::vector<double>& u,
