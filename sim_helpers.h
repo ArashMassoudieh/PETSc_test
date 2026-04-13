@@ -117,12 +117,64 @@ TimeSeries<double> mean_ts_union_t(
     double t_merge_tol = 1e-12
 );
 
+// Shared selector-based mean helper used by sim_runner.
+// mode: 0=First, 1=Longest, 2=Union
+bool ts_has_support_at_t(const TimeSeries<double>& ts, double t);
+TimeSeries<double> mean_ts_by_mode(const TimeSeriesSet<double>& set, int mode);
+
 // --------------------
 // delimiter-robust parsing
 // --------------------
 char detect_delim(const std::string& header);
 std::vector<std::string> split_line_delim(const std::string& line, char delim);
 bool try_parse_double(const std::string& s, double& v);
+
+// --------------------
+// shared runner helpers
+// --------------------
+std::string trim_copy(std::string s);
+std::string to_lower_copy(std::string s);
+std::string dirname_of(std::string path);
+
+void build_flat_invcdf(TimeSeries<double>& invcdf_mean, double qx_const);
+bool try_load_hardcoded_invcdf(TimeSeries<double>& invcdf_mean, const std::string& path);
+bool build_mean_qx_inverse_cdf_from_multi(
+    const std::string& in_multi_path,
+    const std::string& out_mean_path
+);
+
+bool read_tsset_file_if_exists(const std::string& path, TimeSeriesSet<double>& out);
+std::vector<std::string> list_fine_dirs_sorted(const std::string& run_dir);
+std::string basename_only(const std::string& path);
+bool fine_dir_to_rlab(const std::string& fine_dir, std::string& rlab);
+
+double trapz_integral(const TimeSeries<double>& ts);
+double trapz_integral_t_times_y(const TimeSeries<double>& ts);
+double mean_time_from_pdf(const TimeSeries<double>& pdf_ts);
+bool read_pt_mean_csv(const std::string& path, std::vector<double>& x, std::vector<double>& mu);
+
+// --------------------
+// copula diagnostics helpers
+// --------------------
+double pearson_corr(const std::vector<double>& a, const std::vector<double>& b);
+std::vector<double> fractional_ranks_01(const std::vector<double>& x);
+double norminv_approx(double p);
+double gaussian_copula_cdf_approx(double u, double v, double rho);
+double kendall_tau_naive(const std::vector<double>& x, const std::vector<double>& y);
+void mardia_bivariate_moments(const std::vector<double>& x,
+                              const std::vector<double>& y,
+                              double& skew_out,
+                              double& kurt_out);
+double gaussian_copula_cvm_statistic(const std::vector<double>& u,
+                                     const std::vector<double>& v,
+                                     double rho);
+double estimate_gaussian_copula_gof_pvalue(const std::vector<double>& u,
+                                           const std::vector<double>& v,
+                                           double rho,
+                                           int B,
+                                           unsigned long seed,
+                                           double& stat_obs_out);
+std::vector<double> downsample_evenly(const std::vector<double>& a, int max_points);
 
 // --------------------
 // CSV utilities

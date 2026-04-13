@@ -24,6 +24,9 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <random>
+
+#include <gsl/gsl_cdf.h>
 
 // ============================================================
 // FS / path helpers
@@ -88,6 +91,487 @@ std::string makeRealLabel(int r1)
 std::string makeFineFolder(int r1)
 {
     return std::string("fine_") + makeRealLabel(r1);
+}
+
+std::string trim_copy(std::string s)
+{
+    auto not_space = [](unsigned char ch){ return !std::isspace(ch); };
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
+    s.erase(std::find_if(s.rbegin(), s.rend(), not_space).base(), s.end());
+    return s;
+}
+
+std::string to_lower_copy(std::string s)
+{
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c){ return (unsigned char)std::tolower(c); });
+    return s;
+}
+
+std::string dirname_of(std::string path)
+{
+    const auto pos = path.find_last_of("/\\");
+    if (pos == std::string::npos) return std::string();
+    return path.substr(0, pos);
+}
+
+void build_flat_invcdf(TimeSeries<double>& invcdf_mean, double qx_const)
+{
+    invcdf_mean.clear();
+    invcdf_mean.append(0.0, qx_const);
+    invcdf_mean.append(1.0, qx_const);
+}
+
+bool try_load_hardcoded_invcdf(TimeSeries<double>& invcdf_mean, const std::string& path)
+{
+    if (path.empty()) return false;
+    if (!fileExists(path)) return false;
+
+    TimeSeries<double> tmp;
+    if (!read_inverse_cdf_any_format(path, tmp)) return false;
+    if (tmp.size() < 2) return false;
+
+    invcdf_mean = tmp;
+    return true;
+}
+
+bool build_mean_qx_inverse_cdf_from_multi(
+    const std::string& in_multi_path,
+    const std::string& out_mean_path
+){
+    std::ifstream f(in_multi_path);
+    if (!f) return false;
+
+    std::string header;
+    if (!std::getline(f, header)) return false;
+
+    const char delim = detect_delim(header);
+
+    std::vector<double> u_out;
+    std::vector<double> v_out;
+    u_out.reserve(4096);
+    v_out.reserve(4096);
+
+    std::string line;
+    while (std::getline(f, line)) {
+        line = trim_copy(line);
+        if (line.empty()) continue;
+
+        const auto tok = split_line_delim(line, delim);
+        if (tok.size() < 2) continue;
+
+        const size_t npairs = tok.size() / 2;
+        if (npairs < 1) continue;
+
+        double t_ref = 0.0;
+        double sum_q = 0.0;
+        int    cnt_q = 0;
+
+        for (size_t k = 0; k < npairs; ++k) {
+            double t = 0.0, q = 0.0;
+            if (!try_parse_double(tok[2*k + 0], t)) continue;
+            if (!try_parse_double(tok[2*k + 1], q)) continue;
+
+            if (k == 0) t_ref = t;
+            if (std::abs(t - t_ref) > 1e-10) continue;
+
+            if (is_finite_number(q)) {
+                sum_q += q;
+                cnt_q++;
+            }
+        }
+
+        if (cnt_q <= 0) continue;
+
+        u_out.push_back(t_ref);
+        v_out.push_back(sum_q / (double)cnt_q);
+    }
+
+    if (u_out.size() < 2) return false;
+
+    std::ofstream o(out_mean_path);
+    if (!o) return false;
+
+    o << "u,v\n";
+    o << std::setprecision(15);
+    for (size_t i = 0; i < u_out.size(); ++i) {
+        o << u_out[i] << "," << v_out[i] << "\n";
+    }
+    return true;
+}
+
+bool read_tsset_file_if_exists(const std::string& path, TimeSeriesSet<double>& out)
+{
+    if (!fileExists(path)) return false;
+    return out.read(path);
+}
+
+std::vector<std::string> list_fine_dirs_sorted(const std::string& run_dir)
+{
+    namespace fs = std::filesystem;
+    std::vector<std::string> out;
+    std::error_code ec;
+
+    if (!fs::exists(fs::path(run_dir), ec)) return out;
+
+    for (const auto& ent : fs::directory_iterator(fs::path(run_dir), ec)) {
+        if (ec) break;
+        if (!ent.is_directory()) continue;
+
+        const std::string name = ent.path().filename().string();
+        if (name.rfind("fine_r", 0) == 0) {
+            out.push_back(ent.path().string());
+        }
+    }
+
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::string basename_only(const std::string& path)
+{
+    return std::filesystem::path(path).filename().string();
+}
+
+bool fine_dir_to_rlab(const std::string& fine_dir, std::string& rlab)
+{
+    const std::string base = basename_only(fine_dir); // fine_r12
+    if (base.rfind("fine_r", 0) != 0) return false;
+
+    const std::string suffix = base.substr(std::string("fine_r").size());
+    if (suffix.empty()) return false;
+
+    rlab = "r" + suffix;
+    return true;
+}
+
+double trapz_integral(const TimeSeries<double>& ts)
+{
+    const int n = (int)ts.size();
+    if (n < 2) return 0.0;
+
+    double area = 0.0;
+    for (int i = 1; i < n; ++i) {
+        const double t0 = ts.getTime(i - 1);
+        const double t1 = ts.getTime(i);
+        const double y0 = ts.getValue(i - 1);
+        const double y1 = ts.getValue(i);
+        const double dt = (t1 - t0);
+        if (!std::isfinite(dt) || dt <= 0.0) continue;
+        if (!std::isfinite(y0) || !std::isfinite(y1)) continue;
+        area += 0.5 * (y0 + y1) * dt;
+    }
+    return area;
+}
+
+double trapz_integral_t_times_y(const TimeSeries<double>& ts)
+{
+    const int n = (int)ts.size();
+    if (n < 2) return 0.0;
+
+    double area = 0.0;
+    for (int i = 1; i < n; ++i) {
+        const double t0 = ts.getTime(i - 1);
+        const double t1 = ts.getTime(i);
+        const double y0 = ts.getValue(i - 1);
+        const double y1 = ts.getValue(i);
+        const double dt = (t1 - t0);
+        if (!std::isfinite(dt) || dt <= 0.0) continue;
+        if (!std::isfinite(y0) || !std::isfinite(y1)) continue;
+        area += 0.5 * (t0 * y0 + t1 * y1) * dt;
+    }
+    return area;
+}
+
+double mean_time_from_pdf(const TimeSeries<double>& pdf_ts)
+{
+    const double den = trapz_integral(pdf_ts);
+    if (!(den > 0.0) || !std::isfinite(den)) return std::numeric_limits<double>::quiet_NaN();
+    const double num = trapz_integral_t_times_y(pdf_ts);
+    return num / den;
+}
+
+bool read_pt_mean_csv(const std::string& path, std::vector<double>& x, std::vector<double>& mu)
+{
+    x.clear(); mu.clear();
+
+    std::ifstream f(path);
+    if (!f) return false;
+
+    std::string header;
+    if (!std::getline(f, header)) return false;
+    const char delim = detect_delim(header);
+
+    std::string line;
+    while (std::getline(f, line)) {
+        line = trim_copy(line);
+        if (line.empty()) continue;
+
+        const auto tok = split_line_delim(line, delim);
+        if (tok.size() < 2) continue;
+
+        double xv = 0.0, muv = 0.0;
+        if (!try_parse_double(tok[0], xv)) continue;
+        if (!try_parse_double(tok[1], muv)) continue;
+
+        x.push_back(xv);
+        mu.push_back(muv);
+    }
+
+    return !x.empty();
+}
+
+double pearson_corr(const std::vector<double>& a, const std::vector<double>& b)
+{
+    if (a.size() != b.size() || a.size() < 2) return std::numeric_limits<double>::quiet_NaN();
+    const int n = (int)a.size();
+    double ma = 0.0, mb = 0.0;
+    for (int i = 0; i < n; ++i) { ma += a[i]; mb += b[i]; }
+    ma /= (double)n; mb /= (double)n;
+
+    double num = 0.0, va = 0.0, vb = 0.0;
+    for (int i = 0; i < n; ++i) {
+        const double da = a[i] - ma;
+        const double db = b[i] - mb;
+        num += da * db;
+        va += da * da;
+        vb += db * db;
+    }
+    if (!(va > 0.0) || !(vb > 0.0)) return std::numeric_limits<double>::quiet_NaN();
+    return num / std::sqrt(va * vb);
+}
+
+std::vector<double> fractional_ranks_01(const std::vector<double>& x)
+{
+    const int n = (int)x.size();
+    std::vector<double> r(n, std::numeric_limits<double>::quiet_NaN());
+    if (n <= 0) return r;
+
+    std::vector<std::pair<double,int>> xv;
+    xv.reserve(n);
+    for (int i = 0; i < n; ++i) xv.push_back({x[i], i});
+    std::sort(xv.begin(), xv.end(), [](const auto& a, const auto& b){ return a.first < b.first; });
+
+    int i = 0;
+    while (i < n) {
+        int j = i + 1;
+        while (j < n && std::abs(xv[j].first - xv[i].first) <= 1e-14) ++j;
+        const double rank_avg = 0.5 * (double(i + 1) + double(j)); // 1-based average rank for ties
+        for (int k = i; k < j; ++k) {
+            // plotting position in (0,1): avoids exact 0 and 1 for normal-score map
+            r[xv[k].second] = rank_avg / (double(n) + 1.0);
+        }
+        i = j;
+    }
+    return r;
+}
+
+double norminv_approx(double p)
+{
+    const double plow = 0.02425;
+    const double phigh = 1.0 - plow;
+    if (!(p > 0.0 && p < 1.0)) return std::numeric_limits<double>::quiet_NaN();
+
+    static const double a[] = {-3.969683028665376e+01, 2.209460984245205e+02,
+                                -2.759285104469687e+02, 1.383577518672690e+02,
+                                -3.066479806614716e+01, 2.506628277459239e+00};
+    static const double b[] = {-5.447609879822406e+01, 1.615858368580409e+02,
+                                -1.556989798598866e+02, 6.680131188771972e+01,
+                                -1.328068155288572e+01};
+    static const double c[] = {-7.784894002430293e-03, -3.223964580411365e-01,
+                                -2.400758277161838e+00, -2.549732539343734e+00,
+                                4.374664141464968e+00, 2.938163982698783e+00};
+    static const double d[] = {7.784695709041462e-03, 3.224671290700398e-01,
+                                2.445134137142996e+00, 3.754408661907416e+00};
+
+    if (p < plow) {
+        const double q = std::sqrt(-2.0 * std::log(p));
+        return (((((c[0]*q + c[1])*q + c[2])*q + c[3])*q + c[4])*q + c[5]) /
+               ((((d[0]*q + d[1])*q + d[2])*q + d[3])*q + 1.0);
+    }
+    if (p > phigh) {
+        const double q = std::sqrt(-2.0 * std::log(1.0 - p));
+        return -(((((c[0]*q + c[1])*q + c[2])*q + c[3])*q + c[4])*q + c[5]) /
+                 ((((d[0]*q + d[1])*q + d[2])*q + d[3])*q + 1.0);
+    }
+
+    const double q = p - 0.5;
+    const double r = q * q;
+    return (((((a[0]*r + a[1])*r + a[2])*r + a[3])*r + a[4])*r + a[5]) * q /
+           (((((b[0]*r + b[1])*r + b[2])*r + b[3])*r + b[4])*r + 1.0);
+}
+
+double gaussian_copula_cdf_approx(double u, double v, double rho)
+{
+    constexpr double kPi = 3.14159265358979323846;
+    if (!(u > 0.0 && u < 1.0 && v > 0.0 && v < 1.0)) return std::numeric_limits<double>::quiet_NaN();
+    const double a = norminv_approx(u);
+    const double b = norminv_approx(v);
+    if (!std::isfinite(a) || !std::isfinite(b)) return std::numeric_limits<double>::quiet_NaN();
+    if (!std::isfinite(rho)) return std::numeric_limits<double>::quiet_NaN();
+    rho = std::max(-0.999, std::min(0.999, rho));
+
+    const double s = std::sqrt(1.0 - rho * rho);
+    const double lo = -8.0;
+    if (a <= lo) return 0.0;
+    const double hi = std::min(8.0, a);
+    const int N = 80;
+    const double h = (hi - lo) / double(N);
+    auto phi = [kPi](double z) { return std::exp(-0.5 * z * z) / std::sqrt(2.0 * kPi); };
+
+    double sum = 0.0;
+    for (int i = 0; i <= N; ++i) {
+        const double x = lo + h * i;
+        const double w = (i == 0 || i == N) ? 1.0 : ((i % 2 == 0) ? 2.0 : 4.0);
+        const double arg = (b - rho * x) / s;
+        sum += w * phi(x) * gsl_cdf_ugaussian_P(arg);
+    }
+    return std::max(0.0, std::min(1.0, sum * h / 3.0));
+}
+
+double kendall_tau_naive(const std::vector<double>& x, const std::vector<double>& y)
+{
+    if (x.size() != y.size() || x.size() < 2) return std::numeric_limits<double>::quiet_NaN();
+    long long concordant = 0;
+    long long discordant = 0;
+    const int n = (int)x.size();
+    for (int i = 0; i < n; ++i) {
+        for (int j = i + 1; j < n; ++j) {
+            const double dx = x[j] - x[i];
+            const double dy = y[j] - y[i];
+            const double s = dx * dy;
+            if (s > 0.0) ++concordant;
+            else if (s < 0.0) ++discordant;
+        }
+    }
+    const long long den = (long long)n * (n - 1) / 2;
+    if (den <= 0) return std::numeric_limits<double>::quiet_NaN();
+    return double(concordant - discordant) / double(den);
+}
+
+void mardia_bivariate_moments(const std::vector<double>& x,
+                              const std::vector<double>& y,
+                              double& skew_out,
+                              double& kurt_out)
+{
+    skew_out = std::numeric_limits<double>::quiet_NaN();
+    kurt_out = std::numeric_limits<double>::quiet_NaN();
+    if (x.size() != y.size() || x.size() < 3) return;
+    const int n = (int)x.size();
+    double mx = 0.0, my = 0.0;
+    for (int i = 0; i < n; ++i) { mx += x[i]; my += y[i]; }
+    mx /= n; my /= n;
+
+    double sxx = 0.0, syy = 0.0, sxy = 0.0;
+    for (int i = 0; i < n; ++i) {
+        const double dx = x[i] - mx;
+        const double dy = y[i] - my;
+        sxx += dx * dx;
+        syy += dy * dy;
+        sxy += dx * dy;
+    }
+    sxx /= (n - 1); syy /= (n - 1); sxy /= (n - 1);
+    const double det = sxx * syy - sxy * sxy;
+    if (!(det > 0.0)) return;
+
+    const double inv00 =  syy / det;
+    const double inv01 = -sxy / det;
+    const double inv11 =  sxx / det;
+
+    std::vector<double> d2(n, 0.0);
+    for (int i = 0; i < n; ++i) {
+        const double dx = x[i] - mx;
+        const double dy = y[i] - my;
+        d2[i] = dx * (inv00 * dx + inv01 * dy) + dy * (inv01 * dx + inv11 * dy);
+    }
+
+    double b2p = 0.0;
+    for (double v : d2) b2p += v * v;
+    b2p /= n;
+    kurt_out = b2p;
+
+    double b1p = 0.0;
+    for (int i = 0; i < n; ++i) {
+        const double dxi = x[i] - mx;
+        const double dyi = y[i] - my;
+        for (int j = 0; j < n; ++j) {
+            const double dxj = x[j] - mx;
+            const double dyj = y[j] - my;
+            const double dij = dxi * (inv00 * dxj + inv01 * dyj) + dyi * (inv01 * dxj + inv11 * dyj);
+            b1p += dij * dij * dij;
+        }
+    }
+    b1p /= (double(n) * n);
+    skew_out = b1p;
+}
+
+double gaussian_copula_cvm_statistic(const std::vector<double>& u,
+                                     const std::vector<double>& v,
+                                     double rho)
+{
+    if (u.size() != v.size() || u.empty()) return std::numeric_limits<double>::quiet_NaN();
+    const int n = (int)u.size();
+    double s = 0.0;
+    for (int i = 0; i < n; ++i) {
+        int count = 0;
+        for (int j = 0; j < n; ++j) {
+            if (u[j] <= u[i] && v[j] <= v[i]) ++count;
+        }
+        const double cn = double(count) / double(n);
+        const double cg = gaussian_copula_cdf_approx(u[i], v[i], rho);
+        if (std::isfinite(cg)) {
+            const double d = cn - cg;
+            s += d * d;
+        }
+    }
+    return s;
+}
+
+double estimate_gaussian_copula_gof_pvalue(const std::vector<double>& u,
+                                           const std::vector<double>& v,
+                                           double rho,
+                                           int B,
+                                           unsigned long seed,
+                                           double& stat_obs_out)
+{
+    constexpr double kPi = 3.14159265358979323846;
+    stat_obs_out = gaussian_copula_cvm_statistic(u, v, rho);
+    if (!std::isfinite(stat_obs_out) || B <= 0) return std::numeric_limits<double>::quiet_NaN();
+
+    std::mt19937_64 rng(seed);
+    std::normal_distribution<double> N01(0.0, 1.0);
+    int ge = 0;
+    const int n = (int)u.size();
+    const double rho_clamped = std::max(-0.999, std::min(0.999, rho));
+    const double s = std::sqrt(1.0 - rho_clamped * rho_clamped);
+    std::vector<double> ub(n), vb(n);
+    for (int b = 0; b < B; ++b) {
+        for (int i = 0; i < n; ++i) {
+            const double z1 = N01(rng);
+            const double z2 = rho_clamped * z1 + s * N01(rng);
+            ub[i] = std::min(1.0 - 1e-12, std::max(1e-12, gsl_cdf_ugaussian_P(z1)));
+            vb[i] = std::min(1.0 - 1e-12, std::max(1e-12, gsl_cdf_ugaussian_P(z2)));
+        }
+        const double tau_b = kendall_tau_naive(ub, vb);
+        const double rho_b = std::sin(0.5 * kPi * tau_b);
+        const double s_b = gaussian_copula_cvm_statistic(ub, vb, rho_b);
+        if (std::isfinite(s_b) && s_b >= stat_obs_out) ++ge;
+    }
+    return double(ge + 1) / double(B + 1);
+}
+
+std::vector<double> downsample_evenly(const std::vector<double>& a, int max_points)
+{
+    if (max_points <= 0 || (int)a.size() <= max_points) return a;
+    std::vector<double> out;
+    out.reserve(max_points);
+    const int n = (int)a.size();
+    for (int k = 0; k < max_points; ++k) {
+        int idx = (int)std::llround((double)k * (n - 1) / (max_points - 1));
+        idx = std::max(0, std::min(n - 1, idx));
+        out.push_back(a[idx]);
+    }
+    return out;
 }
 
 // --------------------------------------------------
@@ -336,6 +820,97 @@ std::vector<double> finalize_mean_vec(const std::vector<double>& sum,
     return out;
 }
 
+bool ts_has_support_at_t(const TimeSeries<double>& ts, double t)
+{
+    const int n = (int)ts.size();
+    if (n < 2) return false;
+
+    const double t0 = ts.getTime(0);
+    const double t1 = ts.getTime(n - 1);
+
+    const double tmin = std::min(t0, t1);
+    const double tmax = std::max(t0, t1);
+
+    return (t >= tmin && t <= tmax);
+}
+
+TimeSeries<double> mean_ts_by_mode(const TimeSeriesSet<double>& set, int mode)
+{
+    TimeSeries<double> out;
+
+    const int ns = (int)set.size();
+    if (ns <= 0) return out;
+
+    auto pick_ref_index_first = [&]() -> int { return 0; };
+
+    auto pick_ref_index_longest = [&]() -> int {
+        int best = 0;
+        int best_n = -1;
+        for (int i = 0; i < ns; ++i) {
+            const int n = (int)set[i].size();
+            if (n > best_n) { best_n = n; best = i; }
+        }
+        return best;
+    };
+
+    if (mode == 2) {
+        std::vector<double> grid;
+        grid.reserve(4096);
+        for (int i = 0; i < ns; ++i) {
+            const int n = (int)set[i].size();
+            for (int k = 0; k < n; ++k) {
+                const double t = set[i].getTime(k);
+                if (std::isfinite(t)) grid.push_back(t);
+            }
+        }
+        if (grid.size() < 2) return out;
+
+        std::sort(grid.begin(), grid.end());
+
+        const double eps = 1e-12;
+        std::vector<double> uniq;
+        uniq.reserve(grid.size());
+        for (double t : grid) {
+            if (uniq.empty() || std::abs(t - uniq.back()) > eps) uniq.push_back(t);
+        }
+
+        for (double t : uniq) {
+            double sum = 0.0;
+            int cnt = 0;
+            for (int i = 0; i < ns; ++i) {
+                const auto& ts = set[i];
+                if (!ts_has_support_at_t(ts, t)) continue;
+                const double v = ts.interpol(t);
+                if (std::isfinite(v)) { sum += v; cnt++; }
+            }
+            if (cnt > 0) out.append(t, sum / (double)cnt);
+        }
+        return out;
+    }
+
+    const int ref_idx = (mode == 0) ? pick_ref_index_first()
+                                     : pick_ref_index_longest();
+
+    const TimeSeries<double>& ref = set[ref_idx];
+    const int nr = (int)ref.size();
+    for (int k = 0; k < nr; ++k) {
+        const double t = ref.getTime(k);
+        double sum = 0.0;
+        int cnt = 0;
+
+        for (int i = 0; i < ns; ++i) {
+            const auto& ts = set[i];
+            if (!ts_has_support_at_t(ts, t)) continue;
+            const double v = ts.interpol(t);
+            if (std::isfinite(v)) { sum += v; cnt++; }
+        }
+
+        if (cnt > 0) out.append(t, sum / (double)cnt);
+    }
+
+    return out;
+}
+
 bool parse_range3(const std::string& s, double& a, double& b, double& c)
 {
     // expects "min:max:step"
@@ -357,14 +932,6 @@ bool parse_range3(const std::string& s, double& a, double& b, double& c)
 // ============================================================
 // delimiter-robust parsing
 // ============================================================
-static inline std::string trim_copy(std::string s)
-{
-    auto notsp = [](unsigned char c){ return !std::isspace(c); };
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(), notsp));
-    s.erase(std::find_if(s.rbegin(), s.rend(), notsp).base(), s.end());
-    return s;
-}
-
 char detect_delim(const std::string& header)
 {
     size_t c1 = std::count(header.begin(), header.end(), ',');
