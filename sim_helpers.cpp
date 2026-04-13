@@ -90,6 +90,234 @@ std::string makeFineFolder(int r1)
     return std::string("fine_") + makeRealLabel(r1);
 }
 
+std::string trim_copy(std::string s)
+{
+    auto not_space = [](unsigned char ch){ return !std::isspace(ch); };
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
+    s.erase(std::find_if(s.rbegin(), s.rend(), not_space).base(), s.end());
+    return s;
+}
+
+std::string to_lower_copy(std::string s)
+{
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c){ return (unsigned char)std::tolower(c); });
+    return s;
+}
+
+std::string dirname_of(std::string path)
+{
+    const auto pos = path.find_last_of("/\\");
+    if (pos == std::string::npos) return std::string();
+    return path.substr(0, pos);
+}
+
+void build_flat_invcdf(TimeSeries<double>& invcdf_mean, double qx_const)
+{
+    invcdf_mean.clear();
+    invcdf_mean.append(0.0, qx_const);
+    invcdf_mean.append(1.0, qx_const);
+}
+
+bool try_load_hardcoded_invcdf(TimeSeries<double>& invcdf_mean, const std::string& path)
+{
+    if (path.empty()) return false;
+    if (!fileExists(path)) return false;
+
+    TimeSeries<double> tmp;
+    if (!read_inverse_cdf_any_format(path, tmp)) return false;
+    if (tmp.size() < 2) return false;
+
+    invcdf_mean = tmp;
+    return true;
+}
+
+bool build_mean_qx_inverse_cdf_from_multi(
+    const std::string& in_multi_path,
+    const std::string& out_mean_path
+){
+    std::ifstream f(in_multi_path);
+    if (!f) return false;
+
+    std::string header;
+    if (!std::getline(f, header)) return false;
+
+    const char delim = detect_delim(header);
+
+    std::vector<double> u_out;
+    std::vector<double> v_out;
+    u_out.reserve(4096);
+    v_out.reserve(4096);
+
+    std::string line;
+    while (std::getline(f, line)) {
+        line = trim_copy(line);
+        if (line.empty()) continue;
+
+        const auto tok = split_line_delim(line, delim);
+        if (tok.size() < 2) continue;
+
+        const size_t npairs = tok.size() / 2;
+        if (npairs < 1) continue;
+
+        double t_ref = 0.0;
+        double sum_q = 0.0;
+        int    cnt_q = 0;
+
+        for (size_t k = 0; k < npairs; ++k) {
+            double t = 0.0, q = 0.0;
+            if (!try_parse_double(tok[2*k + 0], t)) continue;
+            if (!try_parse_double(tok[2*k + 1], q)) continue;
+
+            if (k == 0) t_ref = t;
+            if (std::abs(t - t_ref) > 1e-10) continue;
+
+            if (is_finite_number(q)) {
+                sum_q += q;
+                cnt_q++;
+            }
+        }
+
+        if (cnt_q <= 0) continue;
+
+        u_out.push_back(t_ref);
+        v_out.push_back(sum_q / (double)cnt_q);
+    }
+
+    if (u_out.size() < 2) return false;
+
+    std::ofstream o(out_mean_path);
+    if (!o) return false;
+
+    o << "u,v\n";
+    o << std::setprecision(15);
+    for (size_t i = 0; i < u_out.size(); ++i) {
+        o << u_out[i] << "," << v_out[i] << "\n";
+    }
+    return true;
+}
+
+bool read_tsset_file_if_exists(const std::string& path, TimeSeriesSet<double>& out)
+{
+    if (!fileExists(path)) return false;
+    return out.read(path);
+}
+
+std::vector<std::string> list_fine_dirs_sorted(const std::string& run_dir)
+{
+    namespace fs = std::filesystem;
+    std::vector<std::string> out;
+    std::error_code ec;
+
+    if (!fs::exists(fs::path(run_dir), ec)) return out;
+
+    for (const auto& ent : fs::directory_iterator(fs::path(run_dir), ec)) {
+        if (ec) break;
+        if (!ent.is_directory()) continue;
+
+        const std::string name = ent.path().filename().string();
+        if (name.rfind("fine_r", 0) == 0) {
+            out.push_back(ent.path().string());
+        }
+    }
+
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::string basename_only(const std::string& path)
+{
+    return std::filesystem::path(path).filename().string();
+}
+
+bool fine_dir_to_rlab(const std::string& fine_dir, std::string& rlab)
+{
+    const std::string base = basename_only(fine_dir); // fine_r12
+    if (base.rfind("fine_r", 0) != 0) return false;
+
+    const std::string suffix = base.substr(std::string("fine_r").size());
+    if (suffix.empty()) return false;
+
+    rlab = "r" + suffix;
+    return true;
+}
+
+double trapz_integral(const TimeSeries<double>& ts)
+{
+    const int n = (int)ts.size();
+    if (n < 2) return 0.0;
+
+    double area = 0.0;
+    for (int i = 1; i < n; ++i) {
+        const double t0 = ts.getTime(i - 1);
+        const double t1 = ts.getTime(i);
+        const double y0 = ts.getValue(i - 1);
+        const double y1 = ts.getValue(i);
+        const double dt = (t1 - t0);
+        if (!std::isfinite(dt) || dt <= 0.0) continue;
+        if (!std::isfinite(y0) || !std::isfinite(y1)) continue;
+        area += 0.5 * (y0 + y1) * dt;
+    }
+    return area;
+}
+
+double trapz_integral_t_times_y(const TimeSeries<double>& ts)
+{
+    const int n = (int)ts.size();
+    if (n < 2) return 0.0;
+
+    double area = 0.0;
+    for (int i = 1; i < n; ++i) {
+        const double t0 = ts.getTime(i - 1);
+        const double t1 = ts.getTime(i);
+        const double y0 = ts.getValue(i - 1);
+        const double y1 = ts.getValue(i);
+        const double dt = (t1 - t0);
+        if (!std::isfinite(dt) || dt <= 0.0) continue;
+        if (!std::isfinite(y0) || !std::isfinite(y1)) continue;
+        area += 0.5 * (t0 * y0 + t1 * y1) * dt;
+    }
+    return area;
+}
+
+double mean_time_from_pdf(const TimeSeries<double>& pdf_ts)
+{
+    const double den = trapz_integral(pdf_ts);
+    if (!(den > 0.0) || !std::isfinite(den)) return std::numeric_limits<double>::quiet_NaN();
+    const double num = trapz_integral_t_times_y(pdf_ts);
+    return num / den;
+}
+
+bool read_pt_mean_csv(const std::string& path, std::vector<double>& x, std::vector<double>& mu)
+{
+    x.clear(); mu.clear();
+
+    std::ifstream f(path);
+    if (!f) return false;
+
+    std::string header;
+    if (!std::getline(f, header)) return false;
+    const char delim = detect_delim(header);
+
+    std::string line;
+    while (std::getline(f, line)) {
+        line = trim_copy(line);
+        if (line.empty()) continue;
+
+        const auto tok = split_line_delim(line, delim);
+        if (tok.size() < 2) continue;
+
+        double xv = 0.0, muv = 0.0;
+        if (!try_parse_double(tok[0], xv)) continue;
+        if (!try_parse_double(tok[1], muv)) continue;
+
+        x.push_back(xv);
+        mu.push_back(muv);
+    }
+
+    return !x.empty();
+}
+
 // --------------------------------------------------
 // Resume folder parsing helpers (robust)
 // --------------------------------------------------
@@ -357,14 +585,6 @@ bool parse_range3(const std::string& s, double& a, double& b, double& c)
 // ============================================================
 // delimiter-robust parsing
 // ============================================================
-static inline std::string trim_copy(std::string s)
-{
-    auto notsp = [](unsigned char c){ return !std::isspace(c); };
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(), notsp));
-    s.erase(std::find_if(s.rbegin(), s.rend(), notsp).base(), s.end());
-    return s;
-}
-
 char detect_delim(const std::string& header)
 {
     size_t c1 = std::count(header.begin(), header.end(), ',');

@@ -125,6 +125,30 @@ std::vector<std::string> split_line_delim(const std::string& line, char delim);
 bool try_parse_double(const std::string& s, double& v);
 
 // --------------------
+// shared runner helpers
+// --------------------
+std::string trim_copy(std::string s);
+std::string to_lower_copy(std::string s);
+std::string dirname_of(std::string path);
+
+void build_flat_invcdf(TimeSeries<double>& invcdf_mean, double qx_const);
+bool try_load_hardcoded_invcdf(TimeSeries<double>& invcdf_mean, const std::string& path);
+bool build_mean_qx_inverse_cdf_from_multi(
+    const std::string& in_multi_path,
+    const std::string& out_mean_path
+);
+
+bool read_tsset_file_if_exists(const std::string& path, TimeSeriesSet<double>& out);
+std::vector<std::string> list_fine_dirs_sorted(const std::string& run_dir);
+std::string basename_only(const std::string& path);
+bool fine_dir_to_rlab(const std::string& fine_dir, std::string& rlab);
+
+double trapz_integral(const TimeSeries<double>& ts);
+double trapz_integral_t_times_y(const TimeSeries<double>& ts);
+double mean_time_from_pdf(const TimeSeries<double>& pdf_ts);
+bool read_pt_mean_csv(const std::string& path, std::vector<double>& x, std::vector<double>& mu);
+
+// --------------------
 // CSV utilities
 // --------------------
 bool read_time_series_table_csv(
