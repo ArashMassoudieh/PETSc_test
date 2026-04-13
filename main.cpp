@@ -300,9 +300,9 @@ int main(int argc, char** argv)
     // Params (kept here)
     // -----------------------------
     SimParams P;
-    P.nx = 300; // 300
-    P.ny = 100; // 100
-    P.nu = 100; // 100
+    P.nx = 30; // 300
+    P.ny = 10; // 100
+    P.nu = 10; // 100
     P.Lx = 3.0;
     P.Ly = 1.0;
 
