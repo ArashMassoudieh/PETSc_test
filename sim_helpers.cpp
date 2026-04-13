@@ -820,6 +820,97 @@ std::vector<double> finalize_mean_vec(const std::vector<double>& sum,
     return out;
 }
 
+bool ts_has_support_at_t(const TimeSeries<double>& ts, double t)
+{
+    const int n = (int)ts.size();
+    if (n < 2) return false;
+
+    const double t0 = ts.getTime(0);
+    const double t1 = ts.getTime(n - 1);
+
+    const double tmin = std::min(t0, t1);
+    const double tmax = std::max(t0, t1);
+
+    return (t >= tmin && t <= tmax);
+}
+
+TimeSeries<double> mean_ts_by_mode(const TimeSeriesSet<double>& set, int mode)
+{
+    TimeSeries<double> out;
+
+    const int ns = (int)set.size();
+    if (ns <= 0) return out;
+
+    auto pick_ref_index_first = [&]() -> int { return 0; };
+
+    auto pick_ref_index_longest = [&]() -> int {
+        int best = 0;
+        int best_n = -1;
+        for (int i = 0; i < ns; ++i) {
+            const int n = (int)set[i].size();
+            if (n > best_n) { best_n = n; best = i; }
+        }
+        return best;
+    };
+
+    if (mode == 2) {
+        std::vector<double> grid;
+        grid.reserve(4096);
+        for (int i = 0; i < ns; ++i) {
+            const int n = (int)set[i].size();
+            for (int k = 0; k < n; ++k) {
+                const double t = set[i].getTime(k);
+                if (std::isfinite(t)) grid.push_back(t);
+            }
+        }
+        if (grid.size() < 2) return out;
+
+        std::sort(grid.begin(), grid.end());
+
+        const double eps = 1e-12;
+        std::vector<double> uniq;
+        uniq.reserve(grid.size());
+        for (double t : grid) {
+            if (uniq.empty() || std::abs(t - uniq.back()) > eps) uniq.push_back(t);
+        }
+
+        for (double t : uniq) {
+            double sum = 0.0;
+            int cnt = 0;
+            for (int i = 0; i < ns; ++i) {
+                const auto& ts = set[i];
+                if (!ts_has_support_at_t(ts, t)) continue;
+                const double v = ts.interpol(t);
+                if (std::isfinite(v)) { sum += v; cnt++; }
+            }
+            if (cnt > 0) out.append(t, sum / (double)cnt);
+        }
+        return out;
+    }
+
+    const int ref_idx = (mode == 0) ? pick_ref_index_first()
+                                     : pick_ref_index_longest();
+
+    const TimeSeries<double>& ref = set[ref_idx];
+    const int nr = (int)ref.size();
+    for (int k = 0; k < nr; ++k) {
+        const double t = ref.getTime(k);
+        double sum = 0.0;
+        int cnt = 0;
+
+        for (int i = 0; i < ns; ++i) {
+            const auto& ts = set[i];
+            if (!ts_has_support_at_t(ts, t)) continue;
+            const double v = ts.interpol(t);
+            if (std::isfinite(v)) { sum += v; cnt++; }
+        }
+
+        if (cnt > 0) out.append(t, sum / (double)cnt);
+    }
+
+    return out;
+}
+
 bool parse_range3(const std::string& s, double& a, double& b, double& c)
 {
     // expects "min:max:step"

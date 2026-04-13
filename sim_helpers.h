@@ -117,6 +117,11 @@ TimeSeries<double> mean_ts_union_t(
     double t_merge_tol = 1e-12
 );
 
+// Shared selector-based mean helper used by sim_runner.
+// mode: 0=First, 1=Longest, 2=Union
+bool ts_has_support_at_t(const TimeSeries<double>& ts, double t);
+TimeSeries<double> mean_ts_by_mode(const TimeSeriesSet<double>& set, int mode);
+
 // --------------------
 // delimiter-robust parsing
 // --------------------
