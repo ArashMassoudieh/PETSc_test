@@ -23,6 +23,7 @@
 #include "grid.h"
 #include "Pathway.h"
 #include "PathwaySet.h"
+#include "Matrix.h"
 
 static inline double du_from_nu(int nu)
 {
@@ -245,6 +246,19 @@ static double empirical_copula_cdf_naive(
     return double(cnt) / double(n);
 }
 
+
+static CopulaBinnedMatrix build_empirical_binned_copula(
+    const std::vector<double>& u1,
+    const std::vector<double>& u2,
+    int nBins)
+{
+    CopulaBinnedMatrix M(nBins);
+    if (nBins <= 0) return M;
+    M.accumulateUnitPairs(u1, u2);
+    M.normalizeToUnitMass();
+    return M;
+}
+
 static double empirical_copula_cvm_vs_independence(
     const std::vector<double>& u1,
     const std::vector<double>& u2)
@@ -332,7 +346,8 @@ static QxRankStats analyze_and_write_rank_pairs(
     int copula_bootstrap_B,
     int copula_max_points,
     RunOptions::CopulaDependenceModel dependence_model,
-    int empirical_copula_bins)
+    int empirical_copula_bins,
+    CopulaBinnedMatrix* empirical_binned_out)
 {
     QxRankStats out;
     out.delta_x = delta_x;
@@ -350,6 +365,10 @@ static QxRankStats analyze_and_write_rank_pairs(
     }
     const std::vector<double> u1 = fractional_ranks_01(q1);
     const std::vector<double> u2 = fractional_ranks_01(q2);
+
+    if (empirical_binned_out && empirical_copula_bins > 0) {
+        *empirical_binned_out = build_empirical_binned_copula(u1, u2, empirical_copula_bins);
+    }
 
     std::vector<double> z1; z1.reserve(n);
     std::vector<double> z2; z2.reserve(n);
@@ -409,8 +428,7 @@ static QxRankStats analyze_and_write_rank_pairs(
                 ? out.corr_rank
                 : out.gaussian_copula_rho;
     }
-    (void)empirical_copula_bins; // reserved for future binned-matrix output
-    return out;
+        return out;
 }
 
 // ============================================================================
@@ -651,6 +669,13 @@ static bool run_fine_loop_collect(
 
     const int nReal = P.nReal_default;
 
+    // Ensemble-average empirical copula accumulators by Delta_x.
+    // Each realization contributes a unit-mass binned copula, so averaging
+    // these matrices gives equal realization weight.
+    std::vector<double> empirical_dx_values;
+    std::vector<CMatrix> empirical_copula_sum_by_dx;
+    std::vector<int> empirical_copula_count_by_dx;
+
     // cap to avoid infinite loop if PETSc is fundamentally failing
     const int MAX_RETRY_PER_REAL = 50;
 
@@ -683,6 +708,9 @@ static bool run_fine_loop_collect(
             TimeSeries<double> vel_corr_x, vel_corr_y;
             TimeSeries<double> qx_corr_adv;
             TimeSeries<double> qx_corr_adv_rank_copula;
+            TimeSeries<double> qx_corr_adv_rank_selected;
+            TimeSeries<double> qx_corr_adv_rank_gaussian;
+            TimeSeries<double> qx_corr_adv_rank_empirical;
 
             double lambda_K_x_emp = std::numeric_limits<double>::quiet_NaN();
             double lambda_K_y_emp = std::numeric_limits<double>::quiet_NaN();
@@ -916,10 +944,6 @@ static bool run_fine_loop_collect(
                     std::vector<QxRankStats> rank_stats;
                     rank_stats.reserve((size_t)num_Delta_x);
 
-                    TimeSeries<double> qx_corr_adv_rank_selected;
-                    TimeSeries<double> qx_corr_adv_rank_gaussian;
-                    TimeSeries<double> qx_corr_adv_rank_empirical;
-
                     for (int i = 0; i < num_Delta_x; ++i) {
                         double exponent = static_cast<double>(i) / (num_Delta_x - 1);
                         double Delta_x = Delta_x_min * std::pow(Delta_x_max / Delta_x_min, exponent);
@@ -931,17 +955,36 @@ static bool run_fine_loop_collect(
                             if (opts.analyze_qx_ranks) {
                                 std::ostringstream fn;
                                 fn << pfx << "qx_rank_pairs_dx_" << std::fixed << std::setprecision(6) << Delta_x << ".csv";
+                                CopulaBinnedMatrix empirical_binned_local;
                                 const QxRankStats st =
                                     analyze_and_write_rank_pairs(particle_pairs, Delta_x, joinPath(fine_dir, fn.str()),
                                                                  opts.analyze_qx_copula_diagnostics,
                                                                  opts.qx_copula_bootstrap,
                                                                  opts.qx_copula_max_points,
                                                                  opts.qx_dependence_model,
-                                                                 opts.empirical_copula_bins);
+                                                                 opts.empirical_copula_bins,
+                                                                 &empirical_binned_local);
                                 rank_stats.push_back(st);
                                 qx_corr_adv_rank_selected.append(Delta_x, st.selected_rank_dependence);
                                 qx_corr_adv_rank_gaussian.append(Delta_x, st.gaussian_copula_rho);
                                 qx_corr_adv_rank_empirical.append(Delta_x, st.corr_rank);
+
+                                if (opts.empirical_copula_bins > 0 && empirical_binned_local.binCount() > 0) {
+                                    if ((int)empirical_copula_sum_by_dx.size() <= i) {
+                                        empirical_copula_sum_by_dx.resize((size_t)num_Delta_x);
+                                        empirical_copula_count_by_dx.resize((size_t)num_Delta_x, 0);
+                                        empirical_dx_values.resize((size_t)num_Delta_x, std::numeric_limits<double>::quiet_NaN());
+                                    }
+                                    if (empirical_copula_sum_by_dx[i].getnumrows() == 0 ||
+                                        empirical_copula_sum_by_dx[i].getnumcols() == 0) {
+                                        empirical_copula_sum_by_dx[i] = CMatrix(opts.empirical_copula_bins,
+                                                                                opts.empirical_copula_bins);
+                                        empirical_copula_sum_by_dx[i].setval(0.0);
+                                    }
+                                    empirical_copula_sum_by_dx[i] += empirical_binned_local;
+                                    empirical_copula_count_by_dx[i] += 1;
+                                    empirical_dx_values[i] = Delta_x;
+                                }
                             }
                         } catch (...) {}
                     }
@@ -1032,6 +1075,15 @@ static bool run_fine_loop_collect(
                 outputs.velocity_x_correlations.append(vel_corr_x, "Realization" + aquiutils::numbertostring(r));
                 outputs.velocity_y_correlations.append(vel_corr_y, "Realization" + aquiutils::numbertostring(r));
                 outputs.advective_correlations.append(qx_corr_adv, "Realization" + aquiutils::numbertostring(r));
+
+                if (opts.analyze_qx_ranks) {
+                    outputs.qx_rank_selected_correlations.append(
+                        qx_corr_adv_rank_selected, "Realization" + aquiutils::numbertostring(r));
+                    outputs.qx_rank_gaussian_correlations.append(
+                        qx_corr_adv_rank_gaussian, "Realization" + aquiutils::numbertostring(r));
+                    outputs.qx_rank_empirical_correlations.append(
+                        qx_corr_adv_rank_empirical, "Realization" + aquiutils::numbertostring(r));
+                }
 
                 outputs.velocity_lx_all.push_back(lambda_x_emp);
                 outputs.velocity_ly_all.push_back(lambda_y_emp);
@@ -1135,6 +1187,60 @@ static bool run_fine_loop_collect(
 
         writeMeanCorrelations(run_dir, P, outputs, opts);
         computeFinalMeans(outputs);
+
+        if (opts.analyze_qx_ranks && outputs.qx_rank_selected_correlations.size() > 0) {
+            const TimeSeries<double> mean_rank_selected = mean_ts_by_opts(outputs.qx_rank_selected_correlations, opts);
+            const TimeSeries<double> mean_rank_gaussian = mean_ts_by_opts(outputs.qx_rank_gaussian_correlations, opts);
+            const TimeSeries<double> mean_rank_empirical = mean_ts_by_opts(outputs.qx_rank_empirical_correlations, opts);
+
+            mean_rank_selected.writefile(joinPath(run_dir, "qx_rank_selected_dependence_mean.txt"));
+            mean_rank_gaussian.writefile(joinPath(run_dir, "qx_rank_gaussian_copula_correlation_mean.txt"));
+            mean_rank_empirical.writefile(joinPath(run_dir, "qx_rank_empirical_correlation_mean.txt"));
+
+            const double lc_mean_from_ensemble =
+                (mean_rank_selected.size() >= 2)
+                    ? mean_rank_selected.fitExponentialDecay()
+                    : outputs.lc_mean;
+
+            if (std::isfinite(lc_mean_from_ensemble)) {
+                outputs.lc_mean = lc_mean_from_ensemble;
+            }
+
+            std::ofstream lf(joinPath(run_dir, "lc_mean_summary.txt"));
+            lf << "lc_mean_from_realization_average=" << outputs.lc_mean << "\n";
+            lf << "lc_mean_from_mean_of_realization_lc=" << mean_of(outputs.lc_all) << "\n";
+            lf << "rank_dependence_model=";
+            if (opts.qx_dependence_model == RunOptions::CopulaDependenceModel::Empirical) lf << "empirical\n";
+            else lf << "gaussian_rank\n";
+        }
+
+        if (opts.empirical_copula_bins > 0 && !empirical_copula_sum_by_dx.empty()) {
+            const std::string cop_dir = joinPath(run_dir, "mean_empirical_copula");
+            createDirectory(cop_dir);
+
+            std::ofstream idxf(joinPath(cop_dir, "index.csv"));
+            idxf << "delta_x,count,file\n";
+
+            for (size_t k = 0; k < empirical_copula_sum_by_dx.size(); ++k) {
+                if (k >= empirical_copula_count_by_dx.size()) continue;
+                if (empirical_copula_count_by_dx[k] <= 0) continue;
+                if (empirical_copula_sum_by_dx[k].getnumrows() <= 0 ||
+                    empirical_copula_sum_by_dx[k].getnumcols() <= 0) continue;
+
+                CMatrix meanM = empirical_copula_sum_by_dx[k] /
+                                double(empirical_copula_count_by_dx[k]);
+
+                std::ostringstream name;
+                name << "mean_empirical_copula_dx_" << std::fixed << std::setprecision(6)
+                     << empirical_dx_values[k] << ".csv";
+                const std::string fname = name.str();
+                meanM.writetofile(joinPath(cop_dir, fname));
+
+                idxf << empirical_dx_values[k] << ","
+                     << empirical_copula_count_by_dx[k] << ","
+                     << fname << "\n";
+            }
+        }
 
         // mean PT arrival time over realizations
         if (opts.perform_particle_tracking) {

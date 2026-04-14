@@ -112,6 +112,13 @@ struct FineScaleOutputs
     TimeSeriesSet<double> K_x_correlations;
     TimeSeriesSet<double> K_y_correlations;
 
+    // Rank/copula dependence-vs-distance curves (all realizations)
+    // These are the realization-level curves that can be averaged across
+    // realizations before fitting an ensemble lc.
+    TimeSeriesSet<double> qx_rank_selected_correlations;
+    TimeSeriesSet<double> qx_rank_gaussian_correlations;
+    TimeSeriesSet<double> qx_rank_empirical_correlations;
+
     // Inverse CDFs and PDFs
     TimeSeriesSet<double> inverse_qx_cdfs;
     TimeSeriesSet<double> qx_pdfs;
