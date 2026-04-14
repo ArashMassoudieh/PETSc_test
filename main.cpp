@@ -61,8 +61,12 @@ int main(int argc, char** argv)
 
     opts.analyze_qx_ranks = true; // copula ...
     opts.analyze_qx_copula_diagnostics = true; // expensive; opt-in
-    opts.qx_copula_bootstrap = 50;
-    opts.qx_copula_max_points = 1200;
+    opts.qx_copula_bootstrap = 5;
+    opts.qx_copula_max_points = 100;
+
+    // NEW: keep Gaussian-rank copula path, but allow empirical-copula switch
+    opts.qx_dependence_model = RunOptions::CopulaDependenceModel::Empirical;
+    opts.empirical_copula_bins = 20;
 
     opts.perform_particle_tracking = false;
     opts.perform_upscaled_PT = false;
@@ -172,6 +176,15 @@ int main(int argc, char** argv)
         }
         else if (a.rfind("--copula-max-points=", 0) == 0) {
             opts.qx_copula_max_points = std::max(200, std::stoi(a.substr(std::string("--copula-max-points=").size())));
+        }
+        else if (a == "--copula-gaussian") {
+            opts.qx_dependence_model = RunOptions::CopulaDependenceModel::GaussianRank;
+        }
+        else if (a == "--copula-empirical") {
+            opts.qx_dependence_model = RunOptions::CopulaDependenceModel::Empirical;
+        }
+        else if (a.rfind("--empirical-copula-bins=", 0) == 0) {
+            opts.empirical_copula_bins = std::max(4, std::stoi(a.substr(std::string("--empirical-copula-bins=").size())));
         }
         else if (a == "--lc-auto")           opts.lc_source = RunOptions::LcSource::AutoPreferRankCopula;
         else if (a == "--lc-raw")            opts.lc_source = RunOptions::LcSource::RawQx;
@@ -285,6 +298,17 @@ int main(int argc, char** argv)
         if (rank == 0) {
             std::cout << "BTC-from-files mode enabled.\n";
             std::cout << "Input/output run folder: " << btc_input_dir << "\n";
+        }
+    }
+
+    if (rank == 0) {
+        std::cout << "Selected qx rank-dependence model: "
+                  << (opts.qx_dependence_model == RunOptions::CopulaDependenceModel::Empirical
+                          ? "empirical"
+                          : "gaussian-rank")
+                  << "\n";
+        if (opts.qx_dependence_model == RunOptions::CopulaDependenceModel::Empirical) {
+            std::cout << "Empirical copula bins: " << opts.empirical_copula_bins << "\n";
         }
     }
 

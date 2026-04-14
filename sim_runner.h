@@ -39,6 +39,16 @@ struct RunOptions
     bool analyze_qx_copula_diagnostics = false; // expensive GOF + moment diagnostics
     int  qx_copula_bootstrap = 50;
     int  qx_copula_max_points = 1200;
+
+    // Keep the existing Gaussian-rank copula path, but allow a switch
+    // to an empirical-copula-based dependence mode.
+    enum class CopulaDependenceModel {
+        GaussianRank,
+        Empirical
+    };
+    CopulaDependenceModel qx_dependence_model = CopulaDependenceModel::GaussianRank;
+    int  empirical_copula_bins = 20;
+
     int  qx_rank_num_delta = 30;
     int  qx_rank_num_samples = 10000;
     double qx_rank_delta_x_min = 0.001;
