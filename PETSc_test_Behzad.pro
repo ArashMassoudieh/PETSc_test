@@ -245,6 +245,7 @@ SOURCES += \
     Utilities/Matrix_arma.cpp \
     Utilities/Vector.cpp \
     Utilities/Vector_arma.cpp \
+    Utilities/EmpiricalCopula.cpp \
     grid.cpp \
     petscmatrix.cpp \
     petscsolver.cpp \
@@ -267,6 +268,7 @@ HEADERS += \
     Utilities/Utilities.h \
     Utilities/Vector.h \
     Utilities/Vector_arma.h \
+    Utilities/EmpiricalCopula.h \
     grid.h \
     petsc_init.h \
     petscmatrix.h \
