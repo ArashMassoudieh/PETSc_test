@@ -2,6 +2,7 @@
 // sim_helpers.cpp
 #include "sim_helpers.h"
 #include "sim_runner.h" // for SimParams (used by run-tag helpers)
+#include "Matrix.h"
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -572,6 +573,144 @@ std::vector<double> downsample_evenly(const std::vector<double>& a, int max_poin
         out.push_back(a[idx]);
     }
     return out;
+}
+
+
+bool write_matrix_as_vti_2d(const CMatrix& M,
+                            const std::string& filename,
+                            const std::string& array_name,
+                            bool point_data)
+{
+    const int nx = M.getnumrows();
+    const int ny = M.getnumcols();
+    if (nx <= 0 || ny <= 0) return false;
+
+    std::ofstream f(filename.c_str());
+    if (!f.good()) return false;
+
+    const int ex_i1 = point_data ? (nx - 1) : nx;
+    const int ex_j1 = point_data ? (ny - 1) : ny;
+    const double dx = 1.0 / static_cast<double>(nx);
+    const double dy = 1.0 / static_cast<double>(ny);
+
+    f << "<?xml version=\"1.0\"?>\n";
+    f << "<VTKFile type=\"ImageData\" version=\"0.1\" byte_order=\"LittleEndian\">\n";
+    f << "  <ImageData Origin=\"0 0 0\" "
+      << "Spacing=\"" << dx << " " << dy << " 1\" "
+      << "WholeExtent=\"0 " << ex_i1 << " 0 " << ex_j1 << " 0 0\">\n";
+    f << "    <Piece Extent=\"0 " << ex_i1 << " 0 " << ex_j1 << " 0 0\">\n";
+
+    if (point_data) f << "      <PointData Scalars=\"" << array_name << "\">\n";
+    else            f << "      <CellData Scalars=\"" << array_name << "\">\n";
+
+    f << "        <DataArray type=\"Float64\" Name=\"" << array_name << "\" format=\"ascii\">\n";
+    f << std::setprecision(17);
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            double v = M[i][j];
+            if (!std::isfinite(v)) v = 0.0;
+            f << v << "\n";
+        }
+    }
+    f << "        </DataArray>\n";
+
+    if (point_data) f << "      </PointData>\n";
+    else            f << "      </CellData>\n";
+
+    f << "      <FieldData>\n";
+    f << "        <DataArray type=\"Float64\" Name=\"xmin\" NumberOfTuples=\"1\" format=\"ascii\">0</DataArray>\n";
+    f << "        <DataArray type=\"Float64\" Name=\"xmax\" NumberOfTuples=\"1\" format=\"ascii\">1</DataArray>\n";
+    f << "        <DataArray type=\"Float64\" Name=\"ymin\" NumberOfTuples=\"1\" format=\"ascii\">0</DataArray>\n";
+    f << "        <DataArray type=\"Float64\" Name=\"ymax\" NumberOfTuples=\"1\" format=\"ascii\">1</DataArray>\n";
+    f << "      </FieldData>\n";
+
+    f << "    </Piece>\n";
+    f << "  </ImageData>\n";
+    f << "</VTKFile>\n";
+    return true;
+}
+
+bool write_rank_points_as_vtp(const std::vector<double>& u1,
+                              const std::vector<double>& u2,
+                              const std::vector<double>* qx1,
+                              const std::vector<double>* qx2,
+                              const std::vector<double>* z1,
+                              const std::vector<double>* z2,
+                              const std::string& filename)
+{
+    const int n = (int)std::min(u1.size(), u2.size());
+    if (n <= 0) return false;
+
+    auto same_or_null = [n](const std::vector<double>* v) {
+        return (!v) || ((int)v->size() >= n);
+    };
+    if (!same_or_null(qx1) || !same_or_null(qx2) || !same_or_null(z1) || !same_or_null(z2))
+        return false;
+
+    std::ofstream f(filename.c_str());
+    if (!f.good()) return false;
+
+    auto write_scalar = [&](const std::string& name, const std::vector<double>& a)
+    {
+        f << "        <DataArray type=\"Float64\" Name=\"" << name << "\" format=\"ascii\">\n";
+        f << std::setprecision(17);
+        for (int i = 0; i < n; ++i) {
+            double v = a[i];
+            if (!std::isfinite(v)) v = 0.0;
+            f << v << "\n";
+        }
+        f << "        </DataArray>\n";
+    };
+
+    f << "<?xml version=\"1.0\"?>\n";
+    f << "<VTKFile type=\"PolyData\" version=\"0.1\" byte_order=\"LittleEndian\">\n";
+    f << "  <PolyData>\n";
+    f << "    <Piece NumberOfPoints=\"" << n
+      << "\" NumberOfVerts=\"" << n
+      << "\" NumberOfLines=\"0\" NumberOfStrips=\"0\" NumberOfPolys=\"0\">\n";
+
+    f << "      <PointData Scalars=\"u1\">\n";
+    write_scalar("u1", u1);
+    write_scalar("u2", u2);
+    if (qx1) write_scalar("qx1", *qx1);
+    if (qx2) write_scalar("qx2", *qx2);
+    if (z1)  write_scalar("qx1_normal_score", *z1);
+    if (z2)  write_scalar("qx2_normal_score", *z2);
+
+    std::vector<double> diagdist(n, 0.0), avg_u(n, 0.0);
+    for (int i = 0; i < n; ++i) {
+        diagdist[i] = std::abs(u1[i] - u2[i]);
+        avg_u[i] = 0.5 * (u1[i] + u2[i]);
+    }
+    write_scalar("diag_distance", diagdist);
+    write_scalar("avg_u", avg_u);
+    f << "      </PointData>\n";
+    f << "      <CellData/>\n";
+
+    f << "      <Points>\n";
+    f << "        <DataArray type=\"Float64\" NumberOfComponents=\"3\" format=\"ascii\">\n";
+    f << std::setprecision(17);
+    for (int i = 0; i < n; ++i) {
+        const double x = std::isfinite(u1[i]) ? u1[i] : 0.0;
+        const double y = std::isfinite(u2[i]) ? u2[i] : 0.0;
+        f << x << " " << y << " 0\n";
+    }
+    f << "        </DataArray>\n";
+    f << "      </Points>\n";
+
+    f << "      <Verts>\n";
+    f << "        <DataArray type=\"Int32\" Name=\"connectivity\" format=\"ascii\">\n";
+    for (int i = 0; i < n; ++i) f << i << "\n";
+    f << "        </DataArray>\n";
+    f << "        <DataArray type=\"Int32\" Name=\"offsets\" format=\"ascii\">\n";
+    for (int i = 0; i < n; ++i) f << (i + 1) << "\n";
+    f << "        </DataArray>\n";
+    f << "      </Verts>\n";
+
+    f << "    </Piece>\n";
+    f << "  </PolyData>\n";
+    f << "</VTKFile>\n";
+    return true;
 }
 
 // --------------------------------------------------

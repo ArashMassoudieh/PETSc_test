@@ -372,6 +372,8 @@ static QxRankStats analyze_and_write_rank_pairs(
 
     std::vector<double> z1; z1.reserve(n);
     std::vector<double> z2; z2.reserve(n);
+    std::vector<double> z1_full(n, std::numeric_limits<double>::quiet_NaN());
+    std::vector<double> z2_full(n, std::numeric_limits<double>::quiet_NaN());
     std::ofstream f(scatter_csv_path);
     if (f) {
         f << "u1,u2,qx1,qx2,qx1_normal_score,qx2_normal_score\n";
@@ -381,11 +383,25 @@ static QxRankStats analyze_and_write_rank_pairs(
     for (int i = 0; i < n; ++i) {
         const double nz1 = norminv_approx(u1[i]);
         const double nz2 = norminv_approx(u2[i]);
+        z1_full[i] = nz1;
+        z2_full[i] = nz2;
         if (f) f << u1[i] << "," << u2[i] << "," << q1[i] << "," << q2[i] << "," << nz1 << "," << nz2 << "\n";
         if (std::isfinite(nz1) && std::isfinite(nz2)) {
             z1.push_back(nz1);
             z2.push_back(nz2);
         }
+    }
+
+    {
+        std::string vtp_path = scatter_csv_path;
+        const std::string ext = ".csv";
+        if (vtp_path.size() >= ext.size() &&
+            vtp_path.substr(vtp_path.size() - ext.size()) == ext)
+            vtp_path.replace(vtp_path.size() - ext.size(), ext.size(), ".vtp");
+        else
+            vtp_path += ".vtp";
+
+        write_rank_points_as_vtp(u1, u2, &q1, &q2, &z1_full, &z2_full, vtp_path);
     }
 
     out.n_pairs = n;
@@ -1219,7 +1235,7 @@ static bool run_fine_loop_collect(
             createDirectory(cop_dir);
 
             std::ofstream idxf(joinPath(cop_dir, "index.csv"));
-            idxf << "delta_x,count,file\n";
+            idxf << "delta_x,count,file_csv,file_vti\n";
 
             for (size_t k = 0; k < empirical_copula_sum_by_dx.size(); ++k) {
                 if (k >= empirical_copula_count_by_dx.size()) continue;
@@ -1230,15 +1246,22 @@ static bool run_fine_loop_collect(
                 CMatrix meanM = empirical_copula_sum_by_dx[k] /
                                 double(empirical_copula_count_by_dx[k]);
 
-                std::ostringstream name;
-                name << "mean_empirical_copula_dx_" << std::fixed << std::setprecision(6)
-                     << empirical_dx_values[k] << ".csv";
-                const std::string fname = name.str();
-                meanM.writetofile(joinPath(cop_dir, fname));
+                std::ostringstream name_csv;
+                name_csv << "mean_empirical_copula_dx_" << std::fixed << std::setprecision(6)
+                         << empirical_dx_values[k] << ".csv";
+                const std::string fname_csv = name_csv.str();
+                meanM.writetofile(joinPath(cop_dir, fname_csv));
+
+                std::ostringstream name_vti;
+                name_vti << "mean_empirical_copula_dx_" << std::fixed << std::setprecision(6)
+                         << empirical_dx_values[k] << ".vti";
+                const std::string fname_vti = name_vti.str();
+                write_matrix_as_vti_2d(meanM, joinPath(cop_dir, fname_vti), "empirical_copula", false);
 
                 idxf << empirical_dx_values[k] << ","
                      << empirical_copula_count_by_dx[k] << ","
-                     << fname << "\n";
+                     << fname_csv << ","
+                     << fname_vti << "\n";
             }
         }
 

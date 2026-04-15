@@ -19,8 +19,9 @@
 
 #include <petscsys.h>   // PetscInt
 
-// Forward declaration (avoid including sim_runner.h here)
+// Forward declarations (avoid heavy includes here)
 struct SimParams;
+class CMatrix;
 
 // --------------------
 // FS / path helpers
@@ -175,6 +176,22 @@ double estimate_gaussian_copula_gof_pvalue(const std::vector<double>& u,
                                            unsigned long seed,
                                            double& stat_obs_out);
 std::vector<double> downsample_evenly(const std::vector<double>& a, int max_points);
+
+// --------------------
+// VTK / ParaView helpers for empirical copula outputs
+// --------------------
+bool write_matrix_as_vti_2d(const CMatrix& M,
+                            const std::string& filename,
+                            const std::string& array_name = "copula",
+                            bool point_data = false);
+
+bool write_rank_points_as_vtp(const std::vector<double>& u1,
+                              const std::vector<double>& u2,
+                              const std::vector<double>* qx1,
+                              const std::vector<double>* qx2,
+                              const std::vector<double>* z1,
+                              const std::vector<double>* z2,
+                              const std::string& filename);
 
 // --------------------
 // CSV utilities
