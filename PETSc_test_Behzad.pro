@@ -252,7 +252,8 @@ SOURCES += \
     petscvector.cpp \
     plotter.cpp \
     sim_helpers.cpp \
-    sim_runner.cpp
+    sim_runner.cpp \
+    copula_analysis.cpp
 
 HEADERS += \
     Particle.h \
@@ -276,7 +277,8 @@ HEADERS += \
     petscvector.h \
     plotter.h \
     sim_helpers.h \
-    sim_runner.h
+    sim_runner.h \
+    copula_analysis.h
 
 
 # ============================================================

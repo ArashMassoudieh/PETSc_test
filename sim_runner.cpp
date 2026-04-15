@@ -1,6 +1,7 @@
 //sim_runner.cpp
 #include "sim_runner.h"
 #include "sim_helpers.h"
+#include "copula_analysis.h"
 
 #include <mpi.h>
 
@@ -196,256 +197,6 @@ static void append_reject_log(const std::string& run_dir,
 // ============================================================================
 // PT mean-arrival helpers
 // ============================================================================
-
-// ============================================================================
-// qx-rank helpers (velocity-rank copula diagnostics)
-// ============================================================================
-
-struct QxRankStats
-{
-    double delta_x = 0.0;
-    int n_pairs = 0;
-    double corr_qx = std::numeric_limits<double>::quiet_NaN();
-    double corr_rank = std::numeric_limits<double>::quiet_NaN();
-
-    // Gaussian-rank copula path (existing)
-    double gaussian_copula_rho = std::numeric_limits<double>::quiet_NaN();
-    double gaussian_copula_gof_stat = std::numeric_limits<double>::quiet_NaN();
-    double gaussian_copula_gof_pvalue = std::numeric_limits<double>::quiet_NaN();
-
-    // Shared rank diagnostics
-    double kendall_tau = std::numeric_limits<double>::quiet_NaN();
-    double rho_from_tau = std::numeric_limits<double>::quiet_NaN();
-    double mardia_skewness = std::numeric_limits<double>::quiet_NaN();
-    double mardia_kurtosis = std::numeric_limits<double>::quiet_NaN();
-
-    // Empirical copula path (new)
-    double empirical_copula_stat = std::numeric_limits<double>::quiet_NaN();
-    double empirical_copula_pvalue = std::numeric_limits<double>::quiet_NaN();
-    double empirical_upper_tail_frac_90 = std::numeric_limits<double>::quiet_NaN();
-    double empirical_diagonal_l1 = std::numeric_limits<double>::quiet_NaN();
-
-    // The dependence measure actually selected by the switch
-    double selected_rank_dependence = std::numeric_limits<double>::quiet_NaN();
-};
-
-
-static double empirical_copula_cdf_naive(
-    const std::vector<double>& u1,
-    const std::vector<double>& u2,
-    double u,
-    double v)
-{
-    const int n = (int)std::min(u1.size(), u2.size());
-    if (n <= 0) return std::numeric_limits<double>::quiet_NaN();
-
-    int cnt = 0;
-    for (int i = 0; i < n; ++i) {
-        if (u1[i] <= u && u2[i] <= v) ++cnt;
-    }
-    return double(cnt) / double(n);
-}
-
-
-static CopulaBinnedMatrix build_empirical_binned_copula(
-    const std::vector<double>& u1,
-    const std::vector<double>& u2,
-    int nBins)
-{
-    CopulaBinnedMatrix M(nBins);
-    if (nBins <= 0) return M;
-    M.accumulateUnitPairs(u1, u2);
-    M.normalizeToUnitMass();
-    return M;
-}
-
-static double empirical_copula_cvm_vs_independence(
-    const std::vector<double>& u1,
-    const std::vector<double>& u2)
-{
-    const int n = (int)std::min(u1.size(), u2.size());
-    if (n <= 1) return std::numeric_limits<double>::quiet_NaN();
-
-    double s = 0.0;
-    for (int i = 0; i < n; ++i) {
-        const double cn = empirical_copula_cdf_naive(u1, u2, u1[i], u2[i]);
-        const double c0 = u1[i] * u2[i];
-        if (std::isfinite(cn) && std::isfinite(c0)) {
-            const double d = cn - c0;
-            s += d * d;
-        }
-    }
-    return s / double(n);
-}
-
-static double empirical_copula_upper_tail_fraction(
-    const std::vector<double>& u1,
-    const std::vector<double>& u2,
-    double q)
-{
-    const int n = (int)std::min(u1.size(), u2.size());
-    if (n <= 0) return std::numeric_limits<double>::quiet_NaN();
-
-    int cnt = 0;
-    for (int i = 0; i < n; ++i) {
-        if (u1[i] > q && u2[i] > q) ++cnt;
-    }
-    return double(cnt) / double(n);
-}
-
-static double empirical_copula_diagonal_l1(
-    const std::vector<double>& u1,
-    const std::vector<double>& u2)
-{
-    const int n = (int)std::min(u1.size(), u2.size());
-    if (n <= 1) return std::numeric_limits<double>::quiet_NaN();
-
-    double s = 0.0;
-    for (int k = 1; k <= n; ++k) {
-        const double t = (double(k) - 0.5) / double(n);
-        const double cn = empirical_copula_cdf_naive(u1, u2, t, t);
-        s += std::abs(cn - t);
-    }
-    return s / double(n);
-}
-
-static double estimate_empirical_copula_independence_pvalue(
-    const std::vector<double>& u1,
-    const std::vector<double>& u2,
-    int B,
-    unsigned long seed,
-    double& stat_obs_out)
-{
-    stat_obs_out = empirical_copula_cvm_vs_independence(u1, u2);
-    if (!std::isfinite(stat_obs_out) || B <= 0) return std::numeric_limits<double>::quiet_NaN();
-
-    const int n = (int)std::min(u1.size(), u2.size());
-    if (n <= 1) return std::numeric_limits<double>::quiet_NaN();
-
-    std::mt19937_64 rng(seed);
-    std::uniform_real_distribution<double> U01(1e-12, 1.0 - 1e-12);
-
-    int ge = 0;
-    std::vector<double> a(n), b(n);
-    for (int bb = 0; bb < B; ++bb) {
-        for (int i = 0; i < n; ++i) {
-            a[i] = U01(rng);
-            b[i] = U01(rng);
-        }
-        const double stat_b = empirical_copula_cvm_vs_independence(a, b);
-        if (std::isfinite(stat_b) && stat_b >= stat_obs_out) ++ge;
-    }
-    return double(ge + 1) / double(B + 1);
-}
-
-static QxRankStats analyze_and_write_rank_pairs(
-    const PathwaySet& pair_set,
-    double delta_x,
-    const std::string& scatter_csv_path,
-    bool compute_copula_diagnostics,
-    int copula_bootstrap_B,
-    int copula_max_points,
-    RunOptions::CopulaDependenceModel dependence_model,
-    int empirical_copula_bins,
-    CopulaBinnedMatrix* empirical_binned_out)
-{
-    QxRankStats out;
-    out.delta_x = delta_x;
-
-    if (pair_set.size() < 2) return out;
-    const auto& p1 = pair_set[0];
-    const auto& p2 = pair_set[1];
-    const int n = (int)std::min(p1.size(), p2.size());
-    if (n < 2) return out;
-
-    std::vector<double> q1(n), q2(n);
-    for (int i = 0; i < n; ++i) {
-        q1[i] = p1[i].qx();
-        q2[i] = p2[i].qx();
-    }
-    const std::vector<double> u1 = fractional_ranks_01(q1);
-    const std::vector<double> u2 = fractional_ranks_01(q2);
-
-    if (empirical_binned_out && empirical_copula_bins > 0) {
-        *empirical_binned_out = build_empirical_binned_copula(u1, u2, empirical_copula_bins);
-    }
-
-    std::vector<double> z1; z1.reserve(n);
-    std::vector<double> z2; z2.reserve(n);
-    std::vector<double> z1_full(n, std::numeric_limits<double>::quiet_NaN());
-    std::vector<double> z2_full(n, std::numeric_limits<double>::quiet_NaN());
-    std::ofstream f(scatter_csv_path);
-    if (f) {
-        f << "u1,u2,qx1,qx2,qx1_normal_score,qx2_normal_score\n";
-        f << std::setprecision(15);
-    }
-
-    for (int i = 0; i < n; ++i) {
-        const double nz1 = norminv_approx(u1[i]);
-        const double nz2 = norminv_approx(u2[i]);
-        z1_full[i] = nz1;
-        z2_full[i] = nz2;
-        if (f) f << u1[i] << "," << u2[i] << "," << q1[i] << "," << q2[i] << "," << nz1 << "," << nz2 << "\n";
-        if (std::isfinite(nz1) && std::isfinite(nz2)) {
-            z1.push_back(nz1);
-            z2.push_back(nz2);
-        }
-    }
-
-    {
-        std::string vtp_path = scatter_csv_path;
-        const std::string ext = ".csv";
-        if (vtp_path.size() >= ext.size() &&
-            vtp_path.substr(vtp_path.size() - ext.size()) == ext)
-            vtp_path.replace(vtp_path.size() - ext.size(), ext.size(), ".vtp");
-        else
-            vtp_path += ".vtp";
-
-        write_rank_points_as_vtp(u1, u2, &q1, &q2, &z1_full, &z2_full, vtp_path);
-    }
-
-    out.n_pairs = n;
-    out.corr_qx = pearson_corr(q1, q2);
-    out.corr_rank = pearson_corr(u1, u2);           // Spearman-like via normalized ranks
-    out.gaussian_copula_rho = pearson_corr(z1, z2); // rho of Gaussianized ranks
-    out.selected_rank_dependence =
-        (dependence_model == RunOptions::CopulaDependenceModel::Empirical)
-            ? out.corr_rank
-            : out.gaussian_copula_rho;
-
-    if (compute_copula_diagnostics) {
-        const std::vector<double> q1s = downsample_evenly(q1, copula_max_points);
-        const std::vector<double> q2s = downsample_evenly(q2, copula_max_points);
-        const std::vector<double> u1s = downsample_evenly(u1, copula_max_points);
-        const std::vector<double> u2s = downsample_evenly(u2, copula_max_points);
-
-        out.kendall_tau = kendall_tau_naive(q1s, q2s);
-        out.rho_from_tau = std::sin(0.5 * 3.14159265358979323846 * out.kendall_tau);
-        mardia_bivariate_moments(q1s, q2s, out.mardia_skewness, out.mardia_kurtosis);
-
-        out.gaussian_copula_gof_pvalue =
-            estimate_gaussian_copula_gof_pvalue(u1s, u2s, out.rho_from_tau,
-                                                std::max(10, copula_bootstrap_B),
-                                                777UL + (unsigned long)(1000.0 * delta_x),
-                                                out.gaussian_copula_gof_stat);
-
-        out.empirical_copula_pvalue =
-            estimate_empirical_copula_independence_pvalue(
-                u1s, u2s,
-                std::max(10, copula_bootstrap_B),
-                1777UL + (unsigned long)(1000.0 * delta_x),
-                out.empirical_copula_stat);
-
-        out.empirical_upper_tail_frac_90 = empirical_copula_upper_tail_fraction(u1s, u2s, 0.9);
-        out.empirical_diagonal_l1 = empirical_copula_diagonal_l1(u1s, u2s);
-
-        out.selected_rank_dependence =
-            (dependence_model == RunOptions::CopulaDependenceModel::Empirical)
-                ? out.corr_rank
-                : out.gaussian_copula_rho;
-    }
-        return out;
-}
 
 // ============================================================================
 // Fine-scale helpers
@@ -957,7 +708,7 @@ static bool run_fine_loop_collect(
                         num_samples_per_Delta_x = std::max(100, opts.qx_rank_num_samples);
                     }
 
-                    std::vector<QxRankStats> rank_stats;
+                    std::vector<CopulaDiagnostics> rank_stats;
                     rank_stats.reserve((size_t)num_Delta_x);
 
                     for (int i = 0; i < num_Delta_x; ++i) {
@@ -972,14 +723,21 @@ static bool run_fine_loop_collect(
                                 std::ostringstream fn;
                                 fn << pfx << "qx_rank_pairs_dx_" << std::fixed << std::setprecision(6) << Delta_x << ".csv";
                                 CopulaBinnedMatrix empirical_binned_local;
-                                const QxRankStats st =
-                                    analyze_and_write_rank_pairs(particle_pairs, Delta_x, joinPath(fine_dir, fn.str()),
-                                                                 opts.analyze_qx_copula_diagnostics,
-                                                                 opts.qx_copula_bootstrap,
-                                                                 opts.qx_copula_max_points,
-                                                                 opts.qx_dependence_model,
-                                                                 opts.empirical_copula_bins,
-                                                                 &empirical_binned_local);
+                                const CopulaDiagnostics st =
+                                    ([&]() {
+                                    CopulaAnalysisOptions copts;
+                                    copts.compute_diagnostics = opts.analyze_qx_copula_diagnostics;
+                                    copts.bootstrap_B = opts.qx_copula_bootstrap;
+                                    copts.max_points = opts.qx_copula_max_points;
+                                    copts.empirical_copula_bins = opts.empirical_copula_bins;
+                                    copts.dependence_model =
+                                        (opts.qx_dependence_model == RunOptions::CopulaDependenceModel::Empirical)
+                                            ? CopulaDependenceModel::Empirical
+                                            : CopulaDependenceModel::GaussianRank;
+                                    return analyze_and_write_rank_pairs(
+                                        particle_pairs, Delta_x, joinPath(fine_dir, fn.str()),
+                                        copts, &empirical_binned_local);
+                                })();
                                 rank_stats.push_back(st);
                                 qx_corr_adv_rank_selected.append(Delta_x, st.selected_rank_dependence);
                                 qx_corr_adv_rank_gaussian.append(Delta_x, st.gaussian_copula_rho);
