@@ -10,8 +10,27 @@
 
 #include <gsl/gsl_cdf.h>
 
+// ============================================================================
+// copula_analysis.cpp
+//
+// Workflow-facing copula analysis layer used by sim_runner.
+// This file provides:
+//   - empirical copula diagnostics and bootstrap tests
+//   - Gaussian copula diagnostics and GOF testing
+//   - rank/pseudo-observation transforms
+//   - helpers to build CopulaPairData from PathwaySet samples
+//   - CSV / VTK export for copula point clouds and binned matrices
+// ============================================================================
+
+// ============================================================================
+// File-local empirical copula helpers
+// These stay internal to this translation unit.
+// ============================================================================
 namespace
 {
+    // Empirical copula CDF evaluated by direct counting:
+    //   C(u,v) = P(U <= u, V <= v)
+    // Complexity: O(n)
     double empirical_copula_cdf_naive(
         const std::vector<double>& u1,
         const std::vector<double>& u2,
@@ -28,6 +47,8 @@ namespace
         return double(cnt) / double(n);
     }
 
+    // Cramér–von Mises-type statistic versus the independence copula C0(u,v)=u*v.
+    // Larger values indicate stronger departure from independence.
     double empirical_copula_cvm_vs_independence(
         const std::vector<double>& u1,
         const std::vector<double>& u2)
@@ -47,6 +68,8 @@ namespace
         return s / double(n);
     }
 
+    // Fraction of samples simultaneously in the upper tail:
+    //   U > q and V > q
     double empirical_copula_upper_tail_fraction(
         const std::vector<double>& u1,
         const std::vector<double>& u2,
@@ -62,6 +85,8 @@ namespace
         return double(cnt) / double(n);
     }
 
+    // L1 deviation of the empirical copula along the diagonal u=v.
+    // Useful as a simple summary of departure from perfect dependence.
     double empirical_copula_diagonal_l1(
         const std::vector<double>& u1,
         const std::vector<double>& u2)
@@ -78,6 +103,8 @@ namespace
         return s / double(n);
     }
 
+    // Bootstrap p-value for the null hypothesis of independence.
+    // Simulates independent uniforms and compares the empirical CvM statistic.
     double estimate_empirical_copula_independence_pvalue(
         const std::vector<double>& u1,
         const std::vector<double>& u2,
@@ -108,6 +135,11 @@ namespace
     }
 }
 
+// ============================================================================
+// Basic statistical helpers
+// ============================================================================
+
+// Pearson correlation on two equal-length vectors.
 double pearson_corr(const std::vector<double>& a, const std::vector<double>& b)
 {
     if (a.size() != b.size() || a.size() < 2) return std::numeric_limits<double>::quiet_NaN();
@@ -128,6 +160,8 @@ double pearson_corr(const std::vector<double>& a, const std::vector<double>& b)
     return num / std::sqrt(va * vb);
 }
 
+// Convert raw values to fractional ranks in (0,1).
+// Ties receive the average rank.
 std::vector<double> fractional_ranks_01(const std::vector<double>& x)
 {
     const int n = (int)x.size();
@@ -152,6 +186,8 @@ std::vector<double> fractional_ranks_01(const std::vector<double>& x)
     return r;
 }
 
+// Approximate inverse standard-normal CDF.
+// Used to map pseudo-observations to Gaussian normal scores.
 double norminv_approx(double p)
 {
     const double plow = 0.02425;
@@ -187,6 +223,8 @@ double norminv_approx(double p)
            (((((b[0]*r + b[1])*r + b[2])*r + b[3])*r + b[4])*r + 1.0);
 }
 
+// Approximate Gaussian copula CDF C(u,v; rho).
+// Uses numerical integration over the bivariate normal representation.
 double gaussian_copula_cdf_approx(double u, double v, double rho)
 {
     constexpr double kPi = 3.14159265358979323846;
@@ -215,6 +253,7 @@ double gaussian_copula_cdf_approx(double u, double v, double rho)
     return std::max(0.0, std::min(1.0, sum * h / 3.0));
 }
 
+// Naive O(n^2) Kendall tau implementation.
 double kendall_tau_naive(const std::vector<double>& x, const std::vector<double>& y)
 {
     if (x.size() != y.size() || x.size() < 2) return std::numeric_limits<double>::quiet_NaN();
@@ -235,6 +274,8 @@ double kendall_tau_naive(const std::vector<double>& x, const std::vector<double>
     return double(concordant - discordant) / double(den);
 }
 
+// Mardia skewness and kurtosis for a bivariate sample.
+// These are diagnostic summaries for departure from multivariate normality.
 void mardia_bivariate_moments(const std::vector<double>& x,
                               const std::vector<double>& y,
                               double& skew_out,
@@ -291,6 +332,7 @@ void mardia_bivariate_moments(const std::vector<double>& x,
     skew_out = b1p;
 }
 
+// CvM-type goodness-of-fit statistic for a Gaussian copula with parameter rho.
 double gaussian_copula_cvm_statistic(const std::vector<double>& u,
                                      const std::vector<double>& v,
                                      double rho)
@@ -313,6 +355,7 @@ double gaussian_copula_cvm_statistic(const std::vector<double>& u,
     return s;
 }
 
+// Bootstrap p-value for Gaussian copula goodness of fit.
 double estimate_gaussian_copula_gof_pvalue(const std::vector<double>& u,
                                            const std::vector<double>& v,
                                            double rho,
@@ -346,6 +389,8 @@ double estimate_gaussian_copula_gof_pvalue(const std::vector<double>& u,
     return double(ge + 1) / double(B + 1);
 }
 
+// Evenly downsample a vector to at most max_points entries.
+// Used to keep diagnostics/bootstraps from getting too expensive.
 std::vector<double> downsample_evenly(const std::vector<double>& a, int max_points)
 {
     if (max_points <= 0 || (int)a.size() <= max_points) return a;
@@ -360,6 +405,8 @@ std::vector<double> downsample_evenly(const std::vector<double>& a, int max_poin
     return out;
 }
 
+// Build raw values, pseudo-observations, and Gaussian normal scores
+// from a sampled pair of pathways.
 CopulaPairData build_copula_pair_data(const PathwaySet& pair_set)
 {
     CopulaPairData data;
@@ -391,6 +438,7 @@ CopulaPairData build_copula_pair_data(const PathwaySet& pair_set)
     return data;
 }
 
+// Build a normalized binned empirical copula matrix on the unit square.
 CopulaBinnedMatrix build_empirical_binned_copula(
     const std::vector<double>& u1,
     const std::vector<double>& u2,
@@ -403,6 +451,7 @@ CopulaBinnedMatrix build_empirical_binned_copula(
     return M;
 }
 
+// Run the selected dependence diagnostics on prepared copula pair data.
 CopulaDiagnostics analyze_copula_pair_data(
     const CopulaPairData& data,
     double delta_x,
@@ -468,6 +517,7 @@ CopulaDiagnostics analyze_copula_pair_data(
     return out;
 }
 
+// Write raw/rank/Gaussian-transformed pair data to CSV.
 bool write_rank_pairs_csv(const CopulaPairData& data, const std::string& filename)
 {
     const int n = (int)std::min({data.q1.size(), data.q2.size(), data.u1.size(), data.u2.size(), data.z1.size(), data.z2.size()});
@@ -486,6 +536,7 @@ bool write_rank_pairs_csv(const CopulaPairData& data, const std::string& filenam
     return true;
 }
 
+// Write a 2D matrix to VTK ImageData (.vti) on the unit square.
 bool write_matrix_as_vti_2d(const CMatrix& M,
                             const std::string& filename,
                             const std::string& array_name,
@@ -540,6 +591,8 @@ bool write_matrix_as_vti_2d(const CMatrix& M,
     return true;
 }
 
+// Write copula pseudo-observation points to VTK PolyData (.vtp).
+// Optional scalar arrays can be attached for raw qx values and normal scores.
 bool write_rank_points_as_vtp(const std::vector<double>& u1,
                               const std::vector<double>& u2,
                               const std::vector<double>* qx1,
@@ -623,12 +676,18 @@ bool write_rank_points_as_vtp(const std::vector<double>& u1,
     return true;
 }
 
+// Convenience overload using a CopulaPairData bundle.
 bool write_rank_points_as_vtp(const CopulaPairData& data,
                               const std::string& filename)
 {
     return write_rank_points_as_vtp(data.u1, data.u2, &data.q1, &data.q2, &data.z1, &data.z2, filename);
 }
 
+// High-level helper used by sim_runner:
+//   1) build copula data from a sampled pathway pair set
+//   2) optionally build a binned empirical copula matrix
+//   3) write CSV + VTP outputs
+//   4) return diagnostics
 CopulaDiagnostics analyze_and_write_rank_pairs(
     const PathwaySet& pair_set,
     double delta_x,
