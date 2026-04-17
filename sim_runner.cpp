@@ -471,8 +471,8 @@ static bool run_fine_loop_collect(
             const std::string pfx = rlab + "_";
 
             // ---- locals (do NOT pollute outputs unless we succeed) ----
-            TimeSeries<double> K_corr_x, K_corr_y;
-            TimeSeries<double> vel_corr_x, vel_corr_y;
+            TimeSeries<double> K_corr_x, K_corr_y, K_corr_r;
+            TimeSeries<double> vel_corr_x, vel_corr_y, vel_corr_r;
             TimeSeries<double> qx_corr_adv;
             TimeSeries<double> qx_corr_adv_rank_copula;
             TimeSeries<double> qx_corr_adv_rank_selected;
@@ -538,6 +538,19 @@ static bool run_fine_loop_collect(
                     }
                     K_corr_y.writefile(joinPath(fine_dir, pfx + "K_correlation_y.txt"));
 
+                    for (int i = 0; i < num_deltas; ++i) {
+                        double exponent = static_cast<double>(i) / (num_deltas - 1);
+                        double delta = P.correlation_x_range.first *
+                                       std::pow(P.correlation_x_range.second / P.correlation_x_range.first, exponent);
+                        try {
+                            TimeSeries<double> samples = g.sampleGaussianPerturbation(
+                                "K_normal_score", Grid2D::ArrayKind::Cell,
+                                num_samples_per_delta, delta, 0, PerturbDir::Radial);
+                            K_corr_r.append(delta, samples.correlation_tc());
+                        } catch (...) {}
+                    }
+                    K_corr_r.writefile(joinPath(fine_dir, pfx + "K_correlation_r.txt"));
+
                     lambda_K_x_emp =
                         (P.CorrelationModel == SimParams::correlationmode::exponentialfit) ? K_corr_x.fitExponentialDecay() :
                         (P.CorrelationModel == SimParams::correlationmode::derivative)      ? K_corr_x.getTime(0)/(1.0-K_corr_x.getValue(0)) :
@@ -579,6 +592,7 @@ static bool run_fine_loop_collect(
                     const int num_samples_per_delta = 10000;
                     TimeSeries<double> vel_rank_corr_x;
                     TimeSeries<double> vel_rank_corr_y;
+                    TimeSeries<double> vel_rank_corr_r;
 
                     for (int i = 0; i < num_deltas; ++i) {
                         double exponent = static_cast<double>(i) / (num_deltas - 1);
@@ -615,6 +629,24 @@ static bool run_fine_loop_collect(
                     }
                     vel_corr_y.writefile(joinPath(fine_dir, pfx + "velocity_correlation_y.txt"));
                     vel_rank_corr_y.writefile(joinPath(fine_dir, pfx + "velocity_rank_correlation_y.txt"));
+
+                    for (int i = 0; i < num_deltas; ++i) {
+                        double exponent = static_cast<double>(i) / (num_deltas - 1);
+                        double delta = P.correlation_x_range.first *
+                                       std::pow(P.correlation_x_range.second / P.correlation_x_range.first, exponent);
+                        try {
+                            TimeSeries<double> samples = g.sampleGaussianPerturbation(
+                                "qx_normal_score", Grid2D::ArrayKind::Fx,
+                                num_samples_per_delta, delta, 0, PerturbDir::Radial);
+                            vel_corr_r.append(delta, samples.correlation_tc());
+                            TimeSeries<double> rank_samples = g.sampleGaussianPerturbation(
+                                "qx_ranks", Grid2D::ArrayKind::Fx,
+                                num_samples_per_delta, delta, 0, PerturbDir::Radial);
+                            vel_rank_corr_r.append(delta, rank_samples.correlation_tc());
+                        } catch (...) {}
+                    }
+                    vel_corr_r.writefile(joinPath(fine_dir, pfx + "velocity_correlation_r.txt"));
+                    vel_rank_corr_r.writefile(joinPath(fine_dir, pfx + "velocity_rank_correlation_r.txt"));
 
                     lambda_x_emp =
                         (P.CorrelationModel == SimParams::correlationmode::exponentialfit) ? vel_corr_x.fitExponentialDecay() :
