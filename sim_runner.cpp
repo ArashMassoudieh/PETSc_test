@@ -511,7 +511,7 @@ static bool run_fine_loop_collect(
                 {
                     const int num_deltas = 30;
                     const int num_samples_per_delta = 10000;
-
+                    // Note: There is a bug, samples must be mapped to normal scores (w) for correlation and to uniform score (u) for Copula.
                     for (int i = 0; i < num_deltas; ++i) {
                         double exponent = static_cast<double>(i) / (num_deltas - 1);
                         double delta = P.correlation_x_range.first *
