@@ -60,6 +60,13 @@ struct RunOptions
     };
     LcSource lc_source = LcSource::AutoPreferRankCopula;
 
+    enum class DiffusionCorrSource {
+        AutoPreferRankCopula,
+        RawGaussian,
+        RankCopula
+    };
+    DiffusionCorrSource diffusion_corr_source = DiffusionCorrSource::AutoPreferRankCopula;
+
     // When hardcoded_mean=true, you can supply a qx inverse-CDF file (u,v).
     // Priority used by sim_runner.cpp (hardcoded_mean case):
     //   1) load mean_qx_inverse_cdf.txt from this path (if exists / valid)
@@ -118,6 +125,18 @@ struct FineScaleOutputs
     TimeSeriesSet<double> qx_rank_selected_correlations;
     TimeSeriesSet<double> qx_rank_gaussian_correlations;
     TimeSeriesSet<double> qx_rank_empirical_correlations;
+
+    // Diffusion-side rank/copula dependence-vs-distance curves from
+    // perturbation pairs sampled from qx_ranks.
+    TimeSeriesSet<double> velocity_rank_selected_correlations_x;
+    TimeSeriesSet<double> velocity_rank_gaussian_correlations_x;
+    TimeSeriesSet<double> velocity_rank_empirical_correlations_x;
+    TimeSeriesSet<double> velocity_rank_selected_correlations_y;
+    TimeSeriesSet<double> velocity_rank_gaussian_correlations_y;
+    TimeSeriesSet<double> velocity_rank_empirical_correlations_y;
+    TimeSeriesSet<double> velocity_rank_selected_correlations_r;
+    TimeSeriesSet<double> velocity_rank_gaussian_correlations_r;
+    TimeSeriesSet<double> velocity_rank_empirical_correlations_r;
 
     // Inverse CDFs and PDFs
     TimeSeriesSet<double> inverse_qx_cdfs;

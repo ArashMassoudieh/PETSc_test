@@ -438,6 +438,46 @@ CopulaPairData build_copula_pair_data(const PathwaySet& pair_set)
     return data;
 }
 
+// Build raw values, pseudo-observations, and Gaussian normal scores
+// from a generic paired TimeSeries where t=q1 and c=q2.
+CopulaPairData build_copula_pair_data(const TimeSeries<double>& pairs)
+{
+    CopulaPairData data;
+    const int n = (int)pairs.size();
+    if (n < 2) return data;
+
+    data.q1.reserve(n);
+    data.q2.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        const double q1 = pairs.getTime(i);
+        const double q2 = pairs.getValue(i);
+        if (!std::isfinite(q1) || !std::isfinite(q2)) continue;
+        data.q1.push_back(q1);
+        data.q2.push_back(q2);
+    }
+
+    const int nf = (int)std::min(data.q1.size(), data.q2.size());
+    if (nf < 2) {
+        data.q1.clear();
+        data.q2.clear();
+        data.n_pairs = 0;
+        return data;
+    }
+
+    data.u1 = fractional_ranks_01(data.q1);
+    data.u2 = fractional_ranks_01(data.q2);
+
+    data.z1.resize(nf, std::numeric_limits<double>::quiet_NaN());
+    data.z2.resize(nf, std::numeric_limits<double>::quiet_NaN());
+    for (int i = 0; i < nf; ++i) {
+        data.z1[i] = norminv_approx(data.u1[i]);
+        data.z2[i] = norminv_approx(data.u2[i]);
+    }
+
+    data.n_pairs = nf;
+    return data;
+}
+
 // Build a normalized binned empirical copula matrix on the unit square.
 CopulaBinnedMatrix build_empirical_binned_copula(
     const std::vector<double>& u1,
@@ -697,6 +737,37 @@ CopulaDiagnostics analyze_and_write_rank_pairs(
 {
     CopulaDiagnostics out;
     CopulaPairData data = build_copula_pair_data(pair_set);
+    out.delta_x = delta_x;
+    if (data.n_pairs < 2) return out;
+
+    if (empirical_binned_out && opts.empirical_copula_bins > 0) {
+        *empirical_binned_out = build_empirical_binned_copula(data.u1, data.u2, opts.empirical_copula_bins);
+    }
+
+    write_rank_pairs_csv(data, scatter_csv_path);
+
+    std::string vtp_path = scatter_csv_path;
+    const std::string ext = ".csv";
+    if (vtp_path.size() >= ext.size() &&
+        vtp_path.substr(vtp_path.size() - ext.size()) == ext)
+        vtp_path.replace(vtp_path.size() - ext.size(), ext.size(), ".vtp");
+    else
+        vtp_path += ".vtp";
+
+    write_rank_points_as_vtp(data, vtp_path);
+    return analyze_copula_pair_data(data, delta_x, opts);
+}
+
+// High-level helper for generic sampled perturbation pairs stored as a TimeSeries.
+CopulaDiagnostics analyze_and_write_sample_pairs(
+    const TimeSeries<double>& pairs,
+    double delta_x,
+    const std::string& scatter_csv_path,
+    const CopulaAnalysisOptions& opts,
+    CopulaBinnedMatrix* empirical_binned_out)
+{
+    CopulaDiagnostics out;
+    CopulaPairData data = build_copula_pair_data(pairs);
     out.delta_x = delta_x;
     if (data.n_pairs < 2) return out;
 

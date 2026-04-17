@@ -6,6 +6,7 @@
 
 #include "Matrix.h"
 #include "PathwaySet.h"
+#include "TimeSeries.h"
 
 // ============================================================================
 // Holds paired data for copula analysis between two variables (e.g., qx1, qx2)
@@ -136,6 +137,9 @@ std::vector<double> downsample_evenly(const std::vector<double>& a, int max_poin
 // Build CopulaPairData from a PathwaySet (extract qx pairs, ranks, Gaussian transform)
 CopulaPairData build_copula_pair_data(const PathwaySet& pair_set);
 
+// Build CopulaPairData from generic paired samples stored as (t,c) in a TimeSeries
+CopulaPairData build_copula_pair_data(const TimeSeries<double>& pairs);
+
 // Build a binned empirical copula matrix (2D histogram in [0,1]^2)
 CopulaBinnedMatrix build_empirical_binned_copula(
     const std::vector<double>& u1,
@@ -151,6 +155,14 @@ CopulaDiagnostics analyze_copula_pair_data(
 // Convenience function: build data, analyze, and write CSV of rank pairs
 CopulaDiagnostics analyze_and_write_rank_pairs(
     const PathwaySet& pair_set,
+    double delta_x,
+    const std::string& scatter_csv_path,
+    const CopulaAnalysisOptions& opts,
+    CopulaBinnedMatrix* empirical_binned_out = nullptr);
+
+// Convenience function: analyze generic paired samples and write CSV/VTP
+CopulaDiagnostics analyze_and_write_sample_pairs(
+    const TimeSeries<double>& pairs,
     double delta_x,
     const std::string& scatter_csv_path,
     const CopulaAnalysisOptions& opts,

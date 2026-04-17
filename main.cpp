@@ -56,8 +56,8 @@ int main(int argc, char** argv)
     // and rebuild BTC_mean... outputs without re-solving.
     opts.read_btc_from_files = false;
 
-    opts.solve_fine_scale_transport = true;
-    opts.solve_upscale_transport    = true;
+    opts.solve_fine_scale_transport = false;
+    opts.solve_upscale_transport    = false;
 
     opts.analyze_qx_ranks = true; // copula ...
     opts.analyze_qx_copula_diagnostics = true; // expensive; opt-in
@@ -324,9 +324,9 @@ int main(int argc, char** argv)
     // Params (kept here)
     // -----------------------------
     SimParams P;
-    P.nx = 300; // 300
-    P.ny = 100; // 100
-    P.nu = 100; // 100
+    P.nx = 30; // 300
+    P.ny = 10; // 100
+    P.nu = 10; // 100
     P.Lx = 3.0;
     P.Ly = 1.0;
 
