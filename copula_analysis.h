@@ -168,6 +168,39 @@ CopulaDiagnostics analyze_and_write_sample_pairs(
     const CopulaAnalysisOptions& opts,
     CopulaBinnedMatrix* empirical_binned_out = nullptr);
 
+
+
+// ============================================================================
+// Ensemble empirical-copula accumulation / summary helpers
+// ============================================================================
+
+struct MeanCopulaAccumulator
+{
+    std::vector<CMatrix> sum_by_dx;
+    std::vector<int> count_by_dx;
+    std::vector<double> dx_values;
+
+    void add(int index, double dx, const CMatrix& M, int n_expected_bins);
+};
+
+struct MatrixEnsembleDiagnostics
+{
+    double total_mass = 0.0;
+    double upper_tail_frac_90 = std::numeric_limits<double>::quiet_NaN();
+    double diagonal_l1 = std::numeric_limits<double>::quiet_NaN();
+    double expected_abs_u_minus_v = std::numeric_limits<double>::quiet_NaN();
+    double mean_u = std::numeric_limits<double>::quiet_NaN();
+    double mean_v = std::numeric_limits<double>::quiet_NaN();
+};
+
+MatrixEnsembleDiagnostics summarize_empirical_copula_matrix(const CMatrix& M);
+
+void write_mean_empirical_copula_outputs(
+    const std::string& parent_dir,
+    const std::string& subdir_name,
+    const MeanCopulaAccumulator& acc,
+    const std::string& value_name);
+
 // ============================================================================
 // Output / visualization helpers
 // ============================================================================

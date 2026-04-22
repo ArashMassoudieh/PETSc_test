@@ -7,6 +7,8 @@
 #include <limits>
 #include <random>
 #include <utility>
+#include <sstream>
+#include <filesystem>
 
 #include <gsl/gsl_cdf.h>
 
@@ -132,6 +134,119 @@ namespace
             if (std::isfinite(stat_b) && stat_b >= stat_obs_out) ++ge;
         }
         return double(ge + 1) / double(B + 1);
+    }
+}
+
+
+
+// ============================================================================
+// Ensemble empirical-copula accumulation / summary helpers
+// ============================================================================
+
+void MeanCopulaAccumulator::add(int index, double dx, const CMatrix& M, int n_expected_bins)
+{
+    if (n_expected_bins <= 0) return;
+    if (M.getnumrows() <= 0 || M.getnumcols() <= 0) return;
+    if (M.getnumrows() != n_expected_bins || M.getnumcols() != n_expected_bins) return;
+    if ((int)sum_by_dx.size() <= index) {
+        sum_by_dx.resize((size_t)(index + 1));
+        count_by_dx.resize((size_t)(index + 1), 0);
+        dx_values.resize((size_t)(index + 1), std::numeric_limits<double>::quiet_NaN());
+    }
+    if (sum_by_dx[(size_t)index].getnumrows() == 0 ||
+        sum_by_dx[(size_t)index].getnumcols() == 0) {
+        sum_by_dx[(size_t)index] = CMatrix(n_expected_bins, n_expected_bins);
+        sum_by_dx[(size_t)index].setval(0.0);
+    }
+    sum_by_dx[(size_t)index] += M;
+    count_by_dx[(size_t)index] += 1;
+    dx_values[(size_t)index] = dx;
+}
+
+MatrixEnsembleDiagnostics summarize_empirical_copula_matrix(const CMatrix& M)
+{
+    MatrixEnsembleDiagnostics out;
+    const int nx = M.getnumrows();
+    const int ny = M.getnumcols();
+    if (nx <= 0 || ny <= 0) return out;
+
+    double total = 0.0;
+    double tail = 0.0;
+    double diag_l1 = 0.0;
+    double abs_uv = 0.0;
+    double mean_u = 0.0;
+    double mean_v = 0.0;
+
+    for (int i = 0; i < nx; ++i) {
+        const double uc = (double(i) + 0.5) / double(nx);
+        for (int j = 0; j < ny; ++j) {
+            double w = M[i][j];
+            if (!std::isfinite(w)) continue;
+            if (w < 0.0) w = 0.0;
+            const double vc = (double(j) + 0.5) / double(ny);
+            total += w;
+            if (uc >= 0.9 && vc >= 0.9) tail += w;
+            diag_l1 += w * std::abs(uc - vc);
+            abs_uv += w * std::abs(uc - vc);
+            mean_u += w * uc;
+            mean_v += w * vc;
+        }
+    }
+
+    out.total_mass = total;
+    if (total > 0.0) {
+        out.upper_tail_frac_90 = tail / total;
+        out.diagonal_l1 = diag_l1 / total;
+        out.expected_abs_u_minus_v = abs_uv / total;
+        out.mean_u = mean_u / total;
+        out.mean_v = mean_v / total;
+    }
+    return out;
+}
+
+void write_mean_empirical_copula_outputs(
+    const std::string& parent_dir,
+    const std::string& subdir_name,
+    const MeanCopulaAccumulator& acc,
+    const std::string& value_name)
+{
+    if (acc.sum_by_dx.empty()) return;
+
+    const std::string out_dir = parent_dir + "/" + subdir_name;
+    std::filesystem::create_directories(out_dir);
+
+    std::ofstream idxf(out_dir + "/index.csv");
+    idxf << "delta_x,count,total_mass,upper_tail_frac_90,diagonal_l1,expected_abs_u_minus_v,mean_u,mean_v,file_csv,file_vti\n";
+    idxf << std::setprecision(15);
+
+    for (size_t k = 0; k < acc.sum_by_dx.size(); ++k) {
+        if (k >= acc.count_by_dx.size()) continue;
+        if (k >= acc.dx_values.size()) continue;
+        if (acc.count_by_dx[k] <= 0) continue;
+        if (acc.sum_by_dx[k].getnumrows() <= 0 || acc.sum_by_dx[k].getnumcols() <= 0) continue;
+
+        CMatrix meanM = acc.sum_by_dx[k] / double(acc.count_by_dx[k]);
+        const MatrixEnsembleDiagnostics diag = summarize_empirical_copula_matrix(meanM);
+
+        std::ostringstream stem;
+        stem << subdir_name << "_dx_" << std::fixed << std::setprecision(6) << acc.dx_values[k];
+        const std::string stem_s = stem.str();
+        const std::string fname_csv = stem_s + ".csv";
+        const std::string fname_vti = stem_s + ".vti";
+
+        meanM.writetofile(out_dir + "/" + fname_csv);
+        write_matrix_as_vti_2d(meanM, out_dir + "/" + fname_vti, value_name, false);
+
+        idxf << acc.dx_values[k] << ","
+             << acc.count_by_dx[k] << ","
+             << diag.total_mass << ","
+             << diag.upper_tail_frac_90 << ","
+             << diag.diagonal_l1 << ","
+             << diag.expected_abs_u_minus_v << ","
+             << diag.mean_u << ","
+             << diag.mean_v << ","
+             << fname_csv << ","
+             << fname_vti << "\n";
     }
 }
 

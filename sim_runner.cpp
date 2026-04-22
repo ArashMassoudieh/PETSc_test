@@ -73,6 +73,16 @@ static bool rebuild_from_existing_btc_files(
     RunOutputs& out,
     int rank);
 
+static double fit_corr_length_from_series(const TimeSeries<double>& ts, const SimParams& P)
+{
+    if (ts.size() < 2) return std::numeric_limits<double>::quiet_NaN();
+    return
+        (P.CorrelationModel == SimParams::correlationmode::exponentialfit) ? ts.fitExponentialDecay() :
+        (P.CorrelationModel == SimParams::correlationmode::derivative)      ? ts.getTime(0) / (1.0 - ts.getValue(0)) :
+        (P.CorrelationModel == SimParams::correlationmode::gaussian)        ? ts.fitGaussianDecay() :
+                                                                              ts.fitMaternDecay().second;
+}
+
 // ============================================================================
 // prepare_run_dir_mpi
 // ============================================================================
@@ -476,11 +486,12 @@ static bool run_fine_loop_collect(
     const int nReal = P.nReal_default;
 
     // Ensemble-average empirical copula accumulators by Delta_x.
-    // Each realization contributes a unit-mass binned copula, so averaging
-    // these matrices gives equal realization weight.
-    std::vector<double> empirical_dx_values;
-    std::vector<CMatrix> empirical_copula_sum_by_dx;
-    std::vector<int> empirical_copula_count_by_dx;
+    // Each realization contributes a unit-mass normalized binned copula, so
+    // averaging these matrices gives equal realization weight.
+    MeanCopulaAccumulator qx_mean_empirical_copula;
+    MeanCopulaAccumulator vel_x_mean_empirical_copula;
+    MeanCopulaAccumulator vel_y_mean_empirical_copula;
+    MeanCopulaAccumulator vel_r_mean_empirical_copula;
 
     // cap to avoid infinite loop if PETSc is fundamentally failing
     const int MAX_RETRY_PER_REAL = 50;
@@ -644,12 +655,7 @@ static bool run_fine_loop_collect(
                     const int num_samples_per_delta = 10000;
 
                     auto fit_corr_length = [&](const TimeSeries<double>& ts) {
-                        if (ts.size() < 2) return std::numeric_limits<double>::quiet_NaN();
-                        return
-                            (P.CorrelationModel == SimParams::correlationmode::exponentialfit) ? ts.fitExponentialDecay() :
-                            (P.CorrelationModel == SimParams::correlationmode::derivative)      ? ts.getTime(0)/(1.0-ts.getValue(0)) :
-                            (P.CorrelationModel == SimParams::correlationmode::gaussian)        ? ts.fitGaussianDecay() :
-                                                                                                  ts.fitMaternDecay().second;
+                        return fit_corr_length_from_series(ts, P);
                     };
 
                     auto analyze_direction = [&](PerturbDir dir,
@@ -659,7 +665,8 @@ static bool run_fine_loop_collect(
                                                  TimeSeries<double>& selected_corr,
                                                  TimeSeries<double>& gaussian_corr,
                                                  TimeSeries<double>& empirical_corr,
-                                                 std::vector<CopulaDiagnostics>& stats_out)
+                                                 std::vector<CopulaDiagnostics>& stats_out,
+                                                 MeanCopulaAccumulator* mean_empirical_acc)
                     {
                         for (int i = 0; i < num_deltas; ++i) {
                             double exponent = static_cast<double>(i) / (num_deltas - 1);
@@ -690,8 +697,13 @@ static bool run_fine_loop_collect(
                                             ? CopulaDependenceModel::Empirical
                                             : CopulaDependenceModel::GaussianRank;
 
+                                    CopulaBinnedMatrix empirical_binned_local;
                                     CopulaDiagnostics st = analyze_and_write_sample_pairs(
-                                        rank_samples, delta, joinPath(fine_dir, fn.str()), copts, nullptr);
+                                        rank_samples, delta, joinPath(fine_dir, fn.str()), copts,
+                                        mean_empirical_acc ? &empirical_binned_local : nullptr);
+                                    if (mean_empirical_acc && opts.empirical_copula_bins > 0 && empirical_binned_local.binCount() > 0) {
+                                        mean_empirical_acc->add(i, delta, empirical_binned_local, opts.empirical_copula_bins);
+                                    }
                                     stats_out.push_back(st);
                                     selected_corr.append(delta, st.selected_rank_dependence);
                                     gaussian_corr.append(delta, st.gaussian_copula_rho);
@@ -703,13 +715,13 @@ static bool run_fine_loop_collect(
 
                     analyze_direction(PerturbDir::XOnly, P.correlation_x_range, "x",
                                       vel_corr_x, vel_rank_selected_x, vel_rank_gaussian_x, vel_rank_empirical_x,
-                                      vel_rank_stats_x);
+                                      vel_rank_stats_x, &vel_x_mean_empirical_copula);
                     analyze_direction(PerturbDir::YOnly, P.correlation_y_range, "y",
                                       vel_corr_y, vel_rank_selected_y, vel_rank_gaussian_y, vel_rank_empirical_y,
-                                      vel_rank_stats_y);
+                                      vel_rank_stats_y, &vel_y_mean_empirical_copula);
                     analyze_direction(PerturbDir::Radial, P.correlation_x_range, "r",
                                       vel_corr_r, vel_rank_selected_r, vel_rank_gaussian_r, vel_rank_empirical_r,
-                                      vel_rank_stats_r);
+                                      vel_rank_stats_r, &vel_r_mean_empirical_copula);
 
                     vel_corr_x.writefile(joinPath(fine_dir, pfx + "velocity_correlation_x.txt"));
                     vel_corr_y.writefile(joinPath(fine_dir, pfx + "velocity_correlation_y.txt"));
@@ -910,20 +922,7 @@ static bool run_fine_loop_collect(
                                 qx_corr_adv_rank_empirical.append(Delta_x, st.corr_rank);
 
                                 if (opts.empirical_copula_bins > 0 && empirical_binned_local.binCount() > 0) {
-                                    if ((int)empirical_copula_sum_by_dx.size() <= i) {
-                                        empirical_copula_sum_by_dx.resize((size_t)num_Delta_x);
-                                        empirical_copula_count_by_dx.resize((size_t)num_Delta_x, 0);
-                                        empirical_dx_values.resize((size_t)num_Delta_x, std::numeric_limits<double>::quiet_NaN());
-                                    }
-                                    if (empirical_copula_sum_by_dx[i].getnumrows() == 0 ||
-                                        empirical_copula_sum_by_dx[i].getnumcols() == 0) {
-                                        empirical_copula_sum_by_dx[i] = CMatrix(opts.empirical_copula_bins,
-                                                                                opts.empirical_copula_bins);
-                                        empirical_copula_sum_by_dx[i].setval(0.0);
-                                    }
-                                    empirical_copula_sum_by_dx[i] += empirical_binned_local;
-                                    empirical_copula_count_by_dx[i] += 1;
-                                    empirical_dx_values[i] = Delta_x;
+                                    qx_mean_empirical_copula.add(i, Delta_x, empirical_binned_local, opts.empirical_copula_bins);
                                 }
                             }
                         } catch (...) {}
@@ -1167,47 +1166,43 @@ static bool run_fine_loop_collect(
                 outputs.lc_mean = lc_mean_from_ensemble;
             }
 
-            std::ofstream lf(joinPath(run_dir, "lc_mean_summary.txt"));
-            lf << "lc_mean_from_realization_average=" << outputs.lc_mean << "\n";
-            lf << "lc_mean_from_mean_of_realization_lc=" << mean_of(outputs.lc_all) << "\n";
+            const bool have_vel_rank_x = outputs.velocity_rank_selected_correlations_x.size() > 0;
+            const bool have_vel_rank_y = outputs.velocity_rank_selected_correlations_y.size() > 0;
+            const bool have_vel_rank_r = outputs.velocity_rank_selected_correlations_r.size() > 0;
+
+            const double lx_mean_from_ensemble = have_vel_rank_x
+                ? fit_corr_length_from_series(mean_ts_by_opts(outputs.velocity_rank_selected_correlations_x, opts), P)
+                : outputs.velocity_lx_mean;
+            const double ly_mean_from_ensemble = have_vel_rank_y
+                ? fit_corr_length_from_series(mean_ts_by_opts(outputs.velocity_rank_selected_correlations_y, opts), P)
+                : outputs.velocity_ly_mean;
+            const double lr_mean_from_ensemble = have_vel_rank_r
+                ? fit_corr_length_from_series(mean_ts_by_opts(outputs.velocity_rank_selected_correlations_r, opts), P)
+                : std::numeric_limits<double>::quiet_NaN();
+
+            if (std::isfinite(lx_mean_from_ensemble)) outputs.velocity_lx_mean = lx_mean_from_ensemble;
+            if (std::isfinite(ly_mean_from_ensemble)) outputs.velocity_ly_mean = ly_mean_from_ensemble;
+
+            std::ofstream lf(joinPath(run_dir, "copula_ensemble_summary.txt"));
+            lf << std::setprecision(15);
             lf << "rank_dependence_model=";
             if (opts.qx_dependence_model == RunOptions::CopulaDependenceModel::Empirical) lf << "empirical\n";
             else lf << "gaussian_rank\n";
+            lf << "ensemble_mean_copula_mode=mean_of_normalized_realization_copulas\n";
+            lf << "lc_mean_from_mean_selected_rank_curve=" << outputs.lc_mean << "\n";
+            lf << "lc_mean_from_mean_of_realization_lc=" << mean_of(outputs.lc_all) << "\n";
+            lf << "velocity_lx_mean_from_mean_selected_rank_curve=" << outputs.velocity_lx_mean << "\n";
+            lf << "velocity_lx_mean_from_mean_of_realization_lx=" << mean_of(outputs.velocity_lx_all) << "\n";
+            lf << "velocity_ly_mean_from_mean_selected_rank_curve=" << outputs.velocity_ly_mean << "\n";
+            lf << "velocity_ly_mean_from_mean_of_realization_ly=" << mean_of(outputs.velocity_ly_all) << "\n";
+            lf << "velocity_lr_mean_from_mean_selected_rank_curve=" << lr_mean_from_ensemble << "\n";
         }
 
-        if (opts.empirical_copula_bins > 0 && !empirical_copula_sum_by_dx.empty()) {
-            const std::string cop_dir = joinPath(run_dir, "mean_empirical_copula");
-            createDirectory(cop_dir);
-
-            std::ofstream idxf(joinPath(cop_dir, "index.csv"));
-            idxf << "delta_x,count,file_csv,file_vti\n";
-
-            for (size_t k = 0; k < empirical_copula_sum_by_dx.size(); ++k) {
-                if (k >= empirical_copula_count_by_dx.size()) continue;
-                if (empirical_copula_count_by_dx[k] <= 0) continue;
-                if (empirical_copula_sum_by_dx[k].getnumrows() <= 0 ||
-                    empirical_copula_sum_by_dx[k].getnumcols() <= 0) continue;
-
-                CMatrix meanM = empirical_copula_sum_by_dx[k] /
-                                double(empirical_copula_count_by_dx[k]);
-
-                std::ostringstream name_csv;
-                name_csv << "mean_empirical_copula_dx_" << std::fixed << std::setprecision(6)
-                         << empirical_dx_values[k] << ".csv";
-                const std::string fname_csv = name_csv.str();
-                meanM.writetofile(joinPath(cop_dir, fname_csv));
-
-                std::ostringstream name_vti;
-                name_vti << "mean_empirical_copula_dx_" << std::fixed << std::setprecision(6)
-                         << empirical_dx_values[k] << ".vti";
-                const std::string fname_vti = name_vti.str();
-                write_matrix_as_vti_2d(meanM, joinPath(cop_dir, fname_vti), "empirical_copula", false);
-
-                idxf << empirical_dx_values[k] << ","
-                     << empirical_copula_count_by_dx[k] << ","
-                     << fname_csv << ","
-                     << fname_vti << "\n";
-            }
+        if (opts.empirical_copula_bins > 0) {
+            write_mean_empirical_copula_outputs(run_dir, "mean_empirical_copula", qx_mean_empirical_copula, "empirical_copula");
+            write_mean_empirical_copula_outputs(run_dir, "mean_empirical_copula_velocity_x", vel_x_mean_empirical_copula, "empirical_copula_velocity_x");
+            write_mean_empirical_copula_outputs(run_dir, "mean_empirical_copula_velocity_y", vel_y_mean_empirical_copula, "empirical_copula_velocity_y");
+            write_mean_empirical_copula_outputs(run_dir, "mean_empirical_copula_velocity_r", vel_r_mean_empirical_copula, "empirical_copula_velocity_r");
         }
 
         // mean PT arrival time over realizations
