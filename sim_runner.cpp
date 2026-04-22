@@ -698,11 +698,23 @@ static bool run_fine_loop_collect(
                                             : CopulaDependenceModel::GaussianRank;
 
                                     CopulaBinnedMatrix empirical_binned_local;
+                                    const std::string scatter_csv_path = joinPath(fine_dir, fn.str());
                                     CopulaDiagnostics st = analyze_and_write_sample_pairs(
-                                        rank_samples, delta, joinPath(fine_dir, fn.str()), copts,
+                                        rank_samples, delta, scatter_csv_path, copts,
                                         mean_empirical_acc ? &empirical_binned_local : nullptr);
                                     if (mean_empirical_acc && opts.empirical_copula_bins > 0 && empirical_binned_local.binCount() > 0) {
                                         mean_empirical_acc->add(i, delta, empirical_binned_local, opts.empirical_copula_bins);
+
+                                        std::ostringstream stem;
+                                        stem << pfx << "velocity_empirical_copula_" << tag << "_dx_"
+                                             << std::fixed << std::setprecision(6) << delta;
+                                        const std::string base = joinPath(fine_dir, stem.str());
+                                        write_empirical_copula_matrix_outputs(
+                                            empirical_binned_local,
+                                            base + ".csv",
+                                            base + ".vti",
+                                            base + "_summary.csv",
+                                            "empirical_copula_velocity_" + tag);
                                     }
                                     stats_out.push_back(st);
                                     selected_corr.append(delta, st.selected_rank_dependence);

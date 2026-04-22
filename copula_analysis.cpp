@@ -250,6 +250,40 @@ void write_mean_empirical_copula_outputs(
     }
 }
 
+
+bool write_empirical_copula_matrix_outputs(
+    const CMatrix& M,
+    const std::string& csv_path,
+    const std::string& vti_path,
+    const std::string& summary_csv_path,
+    const std::string& value_name)
+{
+    if (M.getnumrows() <= 0 || M.getnumcols() <= 0) return false;
+
+    const MatrixEnsembleDiagnostics diag = summarize_empirical_copula_matrix(M);
+
+    CMatrix M_copy = M;
+    M_copy.writetofile(csv_path);
+    const bool ok_vti = write_matrix_as_vti_2d(M, vti_path, value_name, false);
+
+    std::ofstream sf(summary_csv_path.c_str());
+    if (sf.good()) {
+        sf << "total_mass,upper_tail_frac_90,diagonal_l1,expected_abs_u_minus_v,mean_u,mean_v,nx,ny,file_csv,file_vti\n";
+        sf << std::setprecision(15);
+        sf << diag.total_mass << ","
+           << diag.upper_tail_frac_90 << ","
+           << diag.diagonal_l1 << ","
+           << diag.expected_abs_u_minus_v << ","
+           << diag.mean_u << ","
+           << diag.mean_v << ","
+           << M.getnumrows() << ","
+           << M.getnumcols() << ","
+           << csv_path << ","
+           << vti_path << "\n";
+    }
+    return ok_vti;
+}
+
 // ============================================================================
 // Basic statistical helpers
 // ============================================================================

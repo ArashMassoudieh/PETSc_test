@@ -201,6 +201,13 @@ void write_mean_empirical_copula_outputs(
     const MeanCopulaAccumulator& acc,
     const std::string& value_name);
 
+bool write_empirical_copula_matrix_outputs(
+    const CMatrix& M,
+    const std::string& csv_path,
+    const std::string& vti_path,
+    const std::string& summary_csv_path,
+    const std::string& value_name);
+
 // ============================================================================
 // Output / visualization helpers
 // ============================================================================
