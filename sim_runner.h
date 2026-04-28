@@ -119,12 +119,23 @@ struct FineScaleOutputs
     TimeSeriesSet<double> K_x_correlations;
     TimeSeriesSet<double> K_y_correlations;
 
-    // Rank/copula dependence-vs-distance curves (all realizations)
-    // These are the realization-level curves that can be averaged across
-    // realizations before fitting an ensemble lc.
+    // Rank/copula dependence-vs-distance curves (all realizations).
+    // X is the legacy advection/pathway direction used for lc selection.
+    // Y and R are saved for diagnostics/mean copula analysis.
     TimeSeriesSet<double> qx_rank_selected_correlations;
     TimeSeriesSet<double> qx_rank_gaussian_correlations;
     TimeSeriesSet<double> qx_rank_empirical_correlations;
+    TimeSeriesSet<double> qx_rank_selected_correlations_y;
+    TimeSeriesSet<double> qx_rank_gaussian_correlations_y;
+    TimeSeriesSet<double> qx_rank_empirical_correlations_y;
+    TimeSeriesSet<double> qx_rank_selected_correlations_r;
+    TimeSeriesSet<double> qx_rank_gaussian_correlations_r;
+    TimeSeriesSet<double> qx_rank_empirical_correlations_r;
+
+    // Raw advection/pathway qx correlations for Y/R directions.
+    // The existing advective_correlations member remains the X direction.
+    TimeSeriesSet<double> advective_correlations_y;
+    TimeSeriesSet<double> advective_correlations_r;
 
     // Diffusion-side rank/copula dependence-vs-distance curves from
     // perturbation pairs sampled from qx_ranks.

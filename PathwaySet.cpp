@@ -10,6 +10,8 @@
 #include <iostream>
 #include <iomanip>
 #include <sstream>
+#include <cmath>
+#include <limits>
 
 PathwaySet::PathwaySet()
 {
@@ -617,6 +619,131 @@ PathwaySet PathwaySet::sampleParticlePairs(double Delta_x, size_t num_samples) c
 
     std::cout << "Sampled " << pathway_at_x.size() << " particle pairs with separation Delta_x = "
               << Delta_x << std::endl;
+
+    return result;
+}
+
+
+PathwaySet PathwaySet::sampleParticlePairsDirectional(double Delta,
+                                                       size_t num_samples,
+                                                       PairSampleDirection direction,
+                                                       double relative_tolerance) const
+{
+    if (direction == PairSampleDirection::XOnly) {
+        return sampleParticlePairs(Delta, num_samples);
+    }
+
+    if (pathways_.empty()) {
+        throw std::runtime_error("sampleParticlePairsDirectional: PathwaySet is empty");
+    }
+    if (!(Delta > 0.0)) {
+        throw std::runtime_error("sampleParticlePairsDirectional: Delta must be positive");
+    }
+
+    relative_tolerance = std::max(0.01, relative_tolerance);
+    const double target = Delta;
+    const double tol = std::max(1e-12, std::abs(target) * relative_tolerance);
+
+    auto particle_separation = [direction](const auto& a, const auto& b) -> double {
+        const double dx = b.x() - a.x();
+        const double dy = b.y() - a.y();
+        if (direction == PairSampleDirection::YOnly) return std::abs(dy);
+        return std::sqrt(dx * dx + dy * dy);
+    };
+
+    auto pathway_can_support = [direction, target](const Pathway& path) -> bool {
+        if (path.size() < 2) return false;
+
+        double xmin = std::numeric_limits<double>::max();
+        double xmax = -std::numeric_limits<double>::max();
+        double ymin = std::numeric_limits<double>::max();
+        double ymax = -std::numeric_limits<double>::max();
+
+        for (size_t i = 0; i < path.size(); ++i) {
+            xmin = std::min(xmin, path[i].x());
+            xmax = std::max(xmax, path[i].x());
+            ymin = std::min(ymin, path[i].y());
+            ymax = std::max(ymax, path[i].y());
+        }
+
+        if (direction == PairSampleDirection::YOnly) {
+            return (ymax - ymin) >= target;
+        }
+
+        const double dx = xmax - xmin;
+        const double dy = ymax - ymin;
+        return std::sqrt(dx * dx + dy * dy) >= target;
+    };
+
+    std::vector<size_t> valid_pathway_indices;
+    for (size_t i = 0; i < pathways_.size(); ++i) {
+        if (pathway_can_support(pathways_[i])) {
+            valid_pathway_indices.push_back(i);
+        }
+    }
+
+    if (valid_pathway_indices.empty()) {
+        throw std::runtime_error("sampleParticlePairsDirectional: no pathways long enough for requested separation");
+    }
+
+    PathwaySet result(2);
+    Pathway pathway_at_a(0);
+    Pathway pathway_at_b(1);
+    pathway_at_a.reserve(num_samples);
+    pathway_at_b.reserve(num_samples);
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<size_t> pathway_dist(0, valid_pathway_indices.size() - 1);
+
+    const int max_attempts_per_sample = 200;
+
+    for (size_t sample = 0; sample < num_samples; ++sample) {
+        bool accepted = false;
+
+        for (int attempt = 0; attempt < max_attempts_per_sample && !accepted; ++attempt) {
+            const size_t random_pathway_idx = valid_pathway_indices[pathway_dist(gen)];
+            const Pathway& selected_pathway = pathways_[random_pathway_idx];
+            if (selected_pathway.size() < 2) continue;
+
+            std::uniform_int_distribution<size_t> index_dist(0, selected_pathway.size() - 1);
+            const size_t i = index_dist(gen);
+
+            double best_err = std::numeric_limits<double>::max();
+            size_t best_j = selected_pathway.size();
+
+            for (size_t j = 0; j < selected_pathway.size(); ++j) {
+                if (j == i) continue;
+                const double sep = particle_separation(selected_pathway[i], selected_pathway[j]);
+                const double err = std::abs(sep - target);
+                if (err < best_err) {
+                    best_err = err;
+                    best_j = j;
+                }
+            }
+
+            if (best_j < selected_pathway.size() && best_err <= tol) {
+                pathway_at_a.addParticle(selected_pathway[i]);
+                pathway_at_b.addParticle(selected_pathway[best_j]);
+                accepted = true;
+            }
+        }
+    }
+
+    if (pathway_at_a.empty() || pathway_at_b.empty()) {
+        throw std::runtime_error("sampleParticlePairsDirectional: failed to sample any valid directional pairs");
+    }
+
+    result.addPathway(pathway_at_a);
+    result.addPathway(pathway_at_b);
+
+    const char* dir_name =
+        (direction == PairSampleDirection::YOnly) ? "YOnly" :
+        (direction == PairSampleDirection::Radial) ? "Radial" : "XOnly";
+
+    std::cout << "Sampled " << pathway_at_a.size()
+              << " directional particle pairs, direction=" << dir_name
+              << ", Delta=" << Delta << std::endl;
 
     return result;
 }

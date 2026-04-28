@@ -77,8 +77,19 @@ public:
     std::pair<double, double> pathLengthRange() const;  // min, max
     std::pair<double, double> travelTimeRange() const;  // min, max
 
-    // Sample particle pairs for correlation analysis
+    // Sample particle pairs for correlation analysis.
+    // The legacy overload samples longitudinal/advection pairs by x separation.
     PathwaySet sampleParticlePairs(double Delta_x, size_t num_samples) const;
+
+    // Direction-aware pair sampling for copula/correlation analysis.
+    // XOnly keeps the legacy x-separation behavior.
+    // YOnly samples pairs whose absolute y separation is close to Delta.
+    // Radial samples pairs whose Euclidean separation is close to Delta.
+    enum class PairSampleDirection { XOnly, YOnly, Radial };
+    PathwaySet sampleParticlePairsDirectional(double Delta,
+                                              size_t num_samples,
+                                              PairSampleDirection direction,
+                                              double relative_tolerance = 0.15) const;
 
     // Calculate correlation between corresponding particles in two pathways
     double calculateCorrelation(size_t pathway1_idx, size_t pathway2_idx,
