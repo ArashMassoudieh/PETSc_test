@@ -2695,3 +2695,444 @@ static double h_exchange(double alpha)
     double log_erfc = gsl_sf_log_erfc(std::sqrt(alpha));
     return -1.0 - log_erfc / alpha;
 }
+
+// -----------------------------------------------------------------------
+// copula_transport.cpp
+//
+// Implementations of:
+//   Grid2D::loadCopulaCSV()
+//   Grid2D::SolveCopulaTransport()
+//
+// Add this file to the PETSc_test build alongside grid.cpp.
+// -----------------------------------------------------------------------
+
+#include "grid.h"
+#include "Matrix.h"
+
+#include <fstream>
+#include <sstream>
+#include <iomanip>
+#include <iostream>
+#include <stdexcept>
+#include <cmath>
+#include <algorithm>
+
+#include "petscmatrix.h"
+#include "petscvector.h"
+
+// -----------------------------------------------------------------------
+// Internal helpers (translation-unit scope)
+// -----------------------------------------------------------------------
+namespace {
+
+/// Global PETSc row index for cell (i_x, j_u) on an (NX x nu) grid.
+/// Layout: x varies slowest, u varies fastest.
+///   global = i_x * nu + j_u
+inline PetscInt gIdx(int i_x, int j_u, int nu)
+{
+    return static_cast<PetscInt>(i_x) * nu + j_u;
+}
+
+/// Verify that every row of a copula matrix sums to approximately
+/// Delta_u = 1/n_u.  Emits a warning (not an error) for noisy
+/// empirical matrices.
+void checkNormalisation(const CMatrix& T, const std::string& label)
+{
+    const int nu = T.getnumrows();
+    if (nu == 0 || T.getnumcols() != nu)
+        throw std::runtime_error("checkNormalisation: " + label
+                                 + " must be a non-empty square matrix");
+
+    const double expected = 1.0 / nu;   // = Delta_u
+    for (int j = 0; j < nu; ++j) {
+        double s = 0.0;
+        for (int k = 0; k < nu; ++k) s += T(j, k);
+        if (std::abs(s - expected) > 0.05 * expected + 1e-12)
+            std::cerr << "[warn] " << label << " row " << j
+                      << " sums to " << s
+                      << " (expected " << expected << ")\n";
+    }
+}
+
+/// Upper bound on non-zeros per row:
+///   2 x-neighbours + nu u-couplings + 1 diagonal + small margin
+inline int nnzPerRow(int nu) { return nu + 4; }
+
+} // anonymous namespace
+
+
+// -----------------------------------------------------------------------
+// Grid2D::loadCopulaCSV
+// -----------------------------------------------------------------------
+CMatrix Grid2D::loadCopulaCSV(const std::string& filename)
+{
+    std::ifstream f(filename);
+    if (!f.is_open())
+        throw std::runtime_error("loadCopulaCSV: cannot open '" + filename + "'");
+
+    // Parse comma-separated rows into a temporary buffer
+    std::vector<std::vector<double>> raw;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty()) continue;
+        std::vector<double> row;
+        std::stringstream ss(line);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            // strip whitespace
+            const auto first = token.find_first_not_of(" \t\r\n");
+            if (first == std::string::npos) continue;
+            token = token.substr(first, token.find_last_not_of(" \t\r\n") - first + 1);
+            row.push_back(std::stod(token));
+        }
+        if (!row.empty()) raw.push_back(std::move(row));
+    }
+
+    const int nu = static_cast<int>(raw.size());
+    if (nu == 0)
+        throw std::runtime_error("loadCopulaCSV: no data found in '" + filename + "'");
+
+    for (int j = 0; j < nu; ++j)
+        if (static_cast<int>(raw[j].size()) != nu)
+            throw std::runtime_error("loadCopulaCSV: non-square matrix in '"
+                                     + filename + "'");
+
+    // Fill CMatrix
+    CMatrix T(nu, nu);
+    for (int j = 0; j < nu; ++j)
+        for (int k = 0; k < nu; ++k)
+            T(j, k) = raw[j][k];
+
+    // Symmetrise:  T <- (T + T^T) / 2
+    for (int j = 0; j < nu; ++j)
+        for (int k = j + 1; k < nu; ++k) {
+            const double sym = 0.5 * (T(j, k) + T(k, j));
+            T(j, k) = T(k, j) = sym;
+        }
+
+    std::cout << "loadCopulaCSV: loaded " << nu << "x" << nu
+              << " matrix from '" << filename << "' (symmetrised)\n";
+    return T;
+}
+
+
+// -----------------------------------------------------------------------
+// Grid2D::SolveCopulaTransport
+// -----------------------------------------------------------------------
+void Grid2D::SolveCopulaTransport(
+    double                               t_end,
+    double                               dt,
+    const CMatrix&                       theta_adv,
+    const CMatrix&                       theta_diff,
+    double                               lambda_a,
+    double                               dt0,
+    const std::function<double(double)>& v_of_u,
+    const char*                          ksp_prefix,
+    TimeSeriesSet<double>*               btc_data,
+    int                                  output_interval,
+    const std::string&                   output_dir)
+{
+    // ----------------------------------------------------------------
+    // 0.  Input validation
+    // ----------------------------------------------------------------
+    if (t_end    <= 0.0) throw std::runtime_error("SolveCopulaTransport: t_end <= 0");
+    if (dt       <= 0.0) throw std::runtime_error("SolveCopulaTransport: dt <= 0");
+    if (dt > t_end)      throw std::runtime_error("SolveCopulaTransport: dt > t_end");
+    if (lambda_a <= 0.0) throw std::runtime_error("SolveCopulaTransport: lambda_a <= 0");
+    if (dt0      <= 0.0) throw std::runtime_error("SolveCopulaTransport: dt0 <= 0");
+
+    const int nu = theta_adv.getnumrows();
+    if (nu == 0)
+        throw std::runtime_error("SolveCopulaTransport: theta_adv is empty");
+    if (theta_diff.getnumrows() != nu || theta_diff.getnumcols() != nu)
+        throw std::runtime_error("SolveCopulaTransport: "
+                                 "theta_adv and theta_diff must be the same size");
+
+    checkNormalisation(theta_adv,  "theta_adv");
+    checkNormalisation(theta_diff, "theta_diff");
+
+    // ----------------------------------------------------------------
+    // 1.  Grid and transport constants
+    // ----------------------------------------------------------------
+    const int    NX      = nx();
+    const double DX      = dx();
+    const double inv_dx  = 1.0 / DX;
+    const double inv_dx2 = inv_dx * inv_dx;
+    const double D       = diffusion_coeff_;
+    const double inv_dt  = 1.0 / dt;
+    const double du      = 1.0 / nu;    // uniform bin width in u
+    const int    N       = NX * nu;     // total degrees of freedom
+
+    // ----------------------------------------------------------------
+    // 2.  Bin-centre velocities  v_j = v(u_j),  u_j = (j + 0.5) * du
+    // ----------------------------------------------------------------
+    std::vector<double> v(nu);
+    for (int j = 0; j < nu; ++j)
+        v[j] = v_of_u((j + 0.5) * du);
+
+    // ----------------------------------------------------------------
+    // 3.  Combined exchange kernel K (nu x nu)
+    //
+    //   K(j,k) = (v_j / lambda_a) * theta_adv(j,k)
+    //          + (1   / dt0      ) * theta_diff(j,k)
+    //
+    //   theta matrices store theta_density * du, so their row sums = du.
+    //   K row sum  K_diag[j] = v_j/lambda_a + 1/dt0   (units: 1/time)
+    // ----------------------------------------------------------------
+    CMatrix K(nu, nu);
+    std::vector<double> K_diag(nu, 0.0);
+
+    for (int j = 0; j < nu; ++j) {
+        const double r_adv  = v[j] / lambda_a;
+        const double r_diff = 1.0  / dt0;
+        double row_sum = 0.0;
+        for (int k = 0; k < nu; ++k) {
+            const double val = r_adv  * theta_adv (j, k)
+            + r_diff * theta_diff(j, k);
+            K(j, k)  = val;
+            row_sum += val;
+        }
+        K_diag[j] = row_sum;   // = (r_adv + r_diff) * du * nu = r_adv + r_diff
+    }
+
+    // ----------------------------------------------------------------
+    // 4.  Print parameters
+    // ----------------------------------------------------------------
+    std::cout << "\n=== SolveCopulaTransport ===\n"
+              << "  Grid:       " << NX << " (x) x " << nu << " (u)"
+              << "   N = " << N << "\n"
+              << "  t_end:      " << t_end    << "\n"
+              << "  dt:         " << dt       << "\n"
+              << "  D:          " << D        << "\n"
+              << "  lambda_a:   " << lambda_a << "\n"
+              << "  dt0:        " << dt0      << "\n"
+              << "  c_left:     " << c_left_  << "\n"
+              << "  v range:    ["
+              << *std::min_element(v.begin(), v.end()) << ", "
+              << *std::max_element(v.begin(), v.end()) << "]\n\n";
+
+    // ----------------------------------------------------------------
+    // 5.  Initialise concentration field c_u = 0
+    // ----------------------------------------------------------------
+    const std::string fieldName = "c_u";
+    auto& cu = field(fieldName);
+    cu.assign(static_cast<std::size_t>(N), 0.0);
+
+    // ----------------------------------------------------------------
+    // 6.  Assemble system matrix A  (built once; fully implicit)
+    //
+    //  Row for cell (i_x, j_u):
+    //
+    //  DIAGONAL:
+    //    inv_dt                          time derivative
+    //    + v_j * inv_dx                  upwind advection (assumes v_j >= 0)
+    //    + D * inv_dx2   or              x-diffusion:
+    //      2D * inv_dx2                    2 neighbours (interior)
+    //                                      1 neighbour  (boundary)
+    //    + K_diag[j_u]                   exchange loss (both copulas)
+    //
+    //  OFF-DIAGONAL IN x  (same j_u):
+    //    -(v_j*inv_dx + D*inv_dx2)  at (i_x-1, j_u)   west
+    //    -(D*inv_dx2)               at (i_x+1, j_u)   east
+    //
+    //  OFF-DIAGONAL IN u  (same i_x, k != j_u):
+    //    -K(j_u, k)                 at (i_x, k)
+    //
+    //  BOUNDARY RULES:
+    //    i_x == 0:     no west column entry; ghost-cell BC goes in RHS
+    //    i_x == NX-1:  zero-gradient east BC; no east column entry
+    // ----------------------------------------------------------------
+    PETScMatrix* Amat = new PETScMatrix(N, N, nnzPerRow(nu));
+
+    {
+        PetscInt Istart, Iend;
+        Amat->ownershipRange(Istart, Iend);
+
+        for (PetscInt Irow = Istart; Irow < Iend; ++Irow) {
+            const int    i_x = static_cast<int>(Irow) / nu;
+            const int    j_u = static_cast<int>(Irow) % nu;
+            const double vj  = v[j_u];
+
+            // ---- diagonal ----
+            double diag = inv_dt
+                          + vj * inv_dx
+                          + K_diag[j_u];
+
+            if (D > 0.0)
+                diag += (i_x > 0 && i_x < NX - 1)
+                            ? 2.0 * D * inv_dx2     // interior: two neighbours
+                            :       D * inv_dx2;    // boundary: one neighbour
+
+            // ---- west neighbour ----
+            if (i_x > 0) {
+                const PetscInt col  = gIdx(i_x - 1, j_u, nu);
+                const double   coef = -(vj * inv_dx
+                                      + (D > 0.0 ? D * inv_dx2 : 0.0));
+                Amat->setValue(Irow, col, coef, ADD_VALUES);
+            }
+
+            // ---- east neighbour ----
+            if (D > 0.0 && i_x < NX - 1) {
+                const PetscInt col  = gIdx(i_x + 1, j_u, nu);
+                const double   coef = -(D * inv_dx2);
+                Amat->setValue(Irow, col, coef, ADD_VALUES);
+            }
+
+            // ---- u-exchange gain from all other bins ----
+            for (int k = 0; k < nu; ++k) {
+                if (k == j_u) continue;
+                const PetscInt col  = gIdx(i_x, k, nu);
+                const double   coef = -K(j_u, k);
+                Amat->setValue(Irow, col, coef, ADD_VALUES);
+            }
+
+            // ---- diagonal ----
+            Amat->setValue(Irow, Irow, diag, ADD_VALUES);
+        }
+
+        Amat->assemble();
+    }
+
+    // ----------------------------------------------------------------
+    // 7.  BTC bookkeeping
+    // ----------------------------------------------------------------
+    const bool record_btc = (btc_data != nullptr && !BTCLocations_.empty());
+    if (record_btc) {
+        btc_data->resize(BTCLocations_.size());
+        for (size_t b = 0; b < BTCLocations_.size(); ++b) {
+            std::ostringstream nm;
+            nm << "x=" << std::fixed << std::setprecision(2) << BTCLocations_[b];
+            btc_data->setSeriesName(b, nm.str());
+        }
+        std::cout << "Recording BTCs at " << BTCLocations_.size() << " locations\n";
+    }
+
+    // Mean concentration at a given x-location:
+    //   C(x,t) = INT_0^1 c_u du  ~=  SUM_j c_u_j * du
+    auto meanAtX = [&](const std::vector<double>& cu_vec, double x_loc) -> double
+    {
+        int i_x = static_cast<int>(x_loc / DX);
+        i_x = std::max(0, std::min(NX - 1, i_x));
+        double sum = 0.0;
+        for (int j = 0; j < nu; ++j)
+            sum += cu_vec[static_cast<std::size_t>(i_x) * nu + j];
+        return sum * du;
+    };
+
+    // ----------------------------------------------------------------
+    // 8.  Time loop
+    // ----------------------------------------------------------------
+    const int total_steps = static_cast<int>(std::ceil(t_end / dt));
+    double    current_time = 0.0;
+    int       step_count   = 0;
+
+    // Record initial (t = 0) BTC values
+    if (record_btc) {
+        std::vector<double> vals(BTCLocations_.size());
+        for (size_t b = 0; b < BTCLocations_.size(); ++b)
+            vals[b] = meanAtX(cu, BTCLocations_[b]);
+        btc_data->append(current_time, vals);
+    }
+
+    PETScVector c_vec(N);
+    PETScVector b_vec(N);
+
+    while (current_time < t_end - 1e-14 * t_end) {
+
+        // ---- Pack cu[] into PETSc vector ----
+        {
+            std::vector<PetscInt>    idx_v(N);
+            std::vector<PetscScalar> val_v(N);
+            for (int k = 0; k < N; ++k) {
+                idx_v[k] = k;
+                val_v[k] = static_cast<PetscScalar>(cu[k]);
+            }
+            VecSetValues(c_vec.raw(), N, idx_v.data(), val_v.data(), INSERT_VALUES);
+            VecAssemblyBegin(c_vec.raw());
+            VecAssemblyEnd  (c_vec.raw());
+        }
+
+        // ---- Build RHS:  b_j = (1/dt) * c_old_j  +  left-BC ghost terms ----
+        {
+            PetscInt bs, be;
+            b_vec.ownershipRange(bs, be);
+
+            const PetscScalar* c_arr;
+            VecGetArrayRead(c_vec.raw(), &c_arr);
+
+            for (PetscInt Irow = bs; Irow < be; ++Irow) {
+                const int    i_x = static_cast<int>(Irow) / nu;
+                const int    j_u = static_cast<int>(Irow) % nu;
+                const double vj  = v[j_u];
+
+                double rhs = static_cast<double>(c_arr[Irow]) * inv_dt;
+
+                // Left boundary: ghost cell = c_left_ (uniform across u)
+                if (i_x == 0) {
+                    rhs += vj * inv_dx * c_left_;          // advection
+                    if (D > 0.0)
+                        rhs += D * inv_dx2 * c_left_;      // diffusion
+                }
+
+                b_vec.setValue(Irow, rhs, INSERT_VALUES);
+            }
+
+            VecRestoreArrayRead(c_vec.raw(), &c_arr);
+        }
+        b_vec.assemble();
+
+        // ---- Solve  A * c_new = b ----
+        PETScVector c_new = ksp_prefix ? Amat->solveNew(b_vec, ksp_prefix)
+                                       : ((*Amat) / b_vec);
+
+        // ---- Unpack solution ----
+        {
+            std::vector<PetscInt>    idx_v(N);
+            std::vector<PetscScalar> val_v(N);
+            for (int k = 0; k < N; ++k) idx_v[k] = k;
+            VecGetValues(c_new.raw(), N, idx_v.data(), val_v.data());
+            for (int k = 0; k < N; ++k)
+                cu[static_cast<std::size_t>(k)] = static_cast<double>(val_v[k]);
+        }
+
+        ++step_count;
+        current_time += dt;
+
+        // ---- BTC recording ----
+        if (record_btc) {
+            std::vector<double> vals(BTCLocations_.size());
+            for (size_t b = 0; b < BTCLocations_.size(); ++b)
+                vals[b] = meanAtX(cu, BTCLocations_[b]);
+            btc_data->append(current_time, vals);
+        }
+
+        // ---- Progress and optional VTI snapshot ----
+        if (output_interval > 0 && step_count % output_interval == 0) {
+            std::cout << "  step " << std::setw(6) << step_count
+                      << " / "    << total_steps
+                      << "   t = " << std::fixed    << std::setprecision(4)
+                      << current_time
+                      << "  ("    << std::setprecision(1)
+                      << 100.0 * current_time / t_end << "%)\n";
+
+            if (!output_dir.empty()) {
+                std::ostringstream fname;
+                fname << output_dir << "/copula_cu_"
+                      << std::setw(5) << std::setfill('0') << step_count
+                      << ".vti";
+                writeNamedVTI_Auto(fieldName, fname.str());
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // 9.  Cleanup and summary
+    // ----------------------------------------------------------------
+    delete Amat;
+
+    std::cout << "\n=== SolveCopulaTransport complete ===\n"
+              << "  Final time:  " << current_time << "\n"
+              << "  Steps taken: " << step_count   << "\n";
+    if (record_btc)
+        std::cout << "  BTC points:  " << (*btc_data)[0].size() << "\n";
+}

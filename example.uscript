@@ -1,0 +1,128 @@
+# ===========================================================================
+# example.uscript
+# Complete upscaling workflow example
+# Lines starting with # are comments
+# $varname substitutes any previously set variable
+# ===========================================================================
+
+# ---- Paths ----------------------------------------------------------------
+set output_dir     = /home/arash/Projects/UpscalingResults
+set resume_run_dir = Finished Runs/100Realizations_std2_D0.1_aniso
+
+# ---- Grid and domain ------------------------------------------------------
+set nx             = 300
+set ny             = 100
+set nu             = 20
+set Lx             = 3.0
+set Ly             = 1.0
+
+# ---- K-field statistics ---------------------------------------------------
+set stdev          = 2.0
+set corr_x         = 1.0
+set corr_y         = 0.1
+set g_mean         = 0.0
+set correlation_model = derivative
+
+# ---- Transport ------------------------------------------------------------
+set diffusion      = 0.01
+set t_end          = 20.0
+set x_locations    = 0.5, 1.5, 2.5
+set n_realizations = 20
+
+# ---- Run options ----------------------------------------------------------
+set fine_transport    = true
+set upscale_transport = true
+set particle_tracking = false
+set qx_ranks          = true
+set copula_model      = empirical
+set copula_bins       = 20
+set mixing_model      = ExponentialVDep
+set mean_ts_mode      = Longest
+
+# ---- Run fine-scale simulations -------------------------------------------
+# Generates K-fields, solves flow+transport, extracts and averages copulas.
+# Writes mean_empirical_copula_advection.csv, mean_empirical_copula_velocity.csv,
+# mean_params.txt, mean_qx_inverse_cdf.txt, BTC_mean.csv, etc. to run_dir.
+# After this statement $lc_mean, $lx_mean, $ly_mean, $run_dir are set automatically.
+run fine
+
+# ---- Write mean outputs ---------------------------------------------------
+write btc_mean     = BTC_mean.csv
+write btc_mean_pdf = BTC_mean_pdf.csv
+write btc_compare  = BTC_Compare
+write params       = run_params.txt
+
+# ---- Run upscaled OU/FP model using fitted parameters ---------------------
+run upscale
+write btc_mean     = BTC_mean_upscaled.csv
+
+# ---- Run copula-based transport -------------------------------------------
+# theta_adv and theta_diff paths: "auto" = look in $run_dir
+# copula_lambda_a: "auto" = use $lc_mean set after run fine
+set copula_adv_path   = auto
+set copula_diff_path  = auto
+set copula_lambda_a   = auto
+set copula_dt0        = 0.5
+run copula_transport
+
+# ---- Score ----------------------------------------------------------------
+score btc_compare against $run_dir/BTC_mean.csv
+
+# ---- Plot -----------------------------------------------------------------
+plot btc = BTC_mean_pdf.csv
+
+# ===========================================================================
+# Sweep over diffusion coefficient
+# After each iteration: run_dir is a NEW folder (tagged with the D value),
+# means are written automatically, $score is set by the score statement.
+# ===========================================================================
+sweep diffusion in [0.0, 0.001, 0.01, 0.05, 0.1]
+    run fine
+    run copula_transport
+    write btc_mean     = BTC_mean.csv
+    write btc_mean_pdf = BTC_mean_pdf.csv
+    write btc_compare  = BTC_Compare
+    score btc_compare against $resume_run_dir/BTC_mean.csv
+    plot btc = BTC_mean_pdf.csv
+end sweep
+
+# ===========================================================================
+# Nested sweep: stdev x diffusion
+# ===========================================================================
+sweep stdev in [1.0, 2.0]
+    sweep diffusion in [0.0, 0.01, 0.1]
+        run fine
+        run copula_transport
+        write btc_mean = BTC_mean_std$stdev_D$diffusion.csv
+        score btc_compare against $resume_run_dir/BTC_mean.csv
+    end sweep
+end sweep
+
+# ===========================================================================
+# Calibration: sweep diffusion_factor, score each, inspect summary CSV
+# (The script does not pick the best automatically — you inspect the scores.)
+# ===========================================================================
+sweep diffusion_factor in [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+    run upscale
+    write btc_mean = BTC_mean_df$diffusion_factor.csv
+    score btc_compare against $resume_run_dir/BTC_mean.csv
+end sweep
+
+
+# ===========================================================================
+# main.cpp patch — add these lines inside the existing CLI block:
+# ===========================================================================
+#
+#   // --- Script mode ---
+#   for (int i = 1; i < argc; ++i) {
+#       std::string a = argv[i];
+#       if (a.rfind("--script=", 0) == 0) {
+#           const std::string script_path = a.substr(9);
+#           const bool ok = runScriptFile(script_path, rank);
+#           MPI_Barrier(PETSC_COMM_WORLD);
+#           return ok ? 0 : 1;
+#       }
+#   }
+#
+# Usage:
+#   mpirun -np 4 ./PETSc_test --script=example.uscript

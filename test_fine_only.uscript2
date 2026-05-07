@@ -1,0 +1,111 @@
+# ==========================================================================
+# test_fine_only.uscript2
+#
+# Step 1: 10 realizations, 60x20 grid, domain 3x1.
+#   - Generate K-field (SGS, exponential variogram)
+#   - Solve Darcy flow
+#   - Save K, Head, qx, qy as VTI per realization
+#   - Extract advective copula (along x trajectories)
+#   - Extract diffusive copula (spatial perturbation in x and y)
+#   - Extract marginal velocity CDF
+#   - Accumulate mean copulas and mean CDF across all realizations
+#   - Save mean copulas and mean CDF
+# ==========================================================================
+
+# ---- Output root ----------------------------------------------------------
+set out = ./results/step1
+
+# ---- Variables ------------------------------------------------------------
+set stdev  = 2.0
+set corr_x = 1.0
+set corr_y = 0.1
+set seed   = 1000
+
+# ---- Create the grid (persists across all iterations) --------------------
+grid g = nx:60, ny:20, Lx:3.0, Ly:1.0
+
+# ---- Create copula accumulators ------------------------------------------
+# adv_copula:  advective (along-trajectory) rank correlations in x
+# diff_x_copula: diffusive (spatial perturbation) rank correlations in x
+# diff_y_copula: diffusive (spatial perturbation) rank correlations in y
+accumulator adv_copula    = bins:20
+accumulator diff_x_copula = bins:20
+accumulator diff_y_copula = bins:20
+
+# ==========================================================================
+# Realization loop
+# ==========================================================================
+repeat i = 1:10
+{
+    # ---- Generate K normal-score field (mean=0, variance=1) --------------
+    g.create_field  name=K_ns, type=gaussian_sgs, lx=$corr_x, ly=$corr_y, stdev=1.0, seed=$seed
+
+    # ---- Map to lognormal K ----------------------------------------------
+    g.to_lognormal  input=K_ns, stdev=$stdev, mean=0.0, output=K
+
+    # ---- Save K fields ---------------------------------------------------
+    g.save          field=K_ns, file=$out/r$i/K_ns.vti
+    g.save          field=K,    file=$out/r$i/K.vti
+
+    # ---- Solve Darcy flow ------------------------------------------------
+    g.solve_darcy   Kx=K, Ky=K, H_west=1.0, H_east=0.0
+
+    # ---- Save flow fields ------------------------------------------------
+    g.save          field=head, file=$out/r$i/Head.vti
+    g.save          field=qx,   file=$out/r$i/qx.vti
+    g.save          field=qy,   file=$out/r$i/qy.vti
+
+    # ---- Compute velocity ranks and normal scores ------------------------
+    g.to_ranks        input=qx, output=qx_ranks
+    g.to_normal_score input=qx, output=qx_ns
+
+    # ---- Save velocity rank fields ---------------------------------------
+    g.save  field=qx_ranks, file=$out/r$i/qx_ranks.vti
+    g.save  field=qx_ns,    file=$out/r$i/qx_ns.vti
+
+    # ---- Extract advective copula (x direction) --------------------------
+    # range = delta_min : delta_max : n_steps  (log-spaced)
+    # Samples pairs of velocity ranks along x-direction trajectories.
+    # Representative copula (at geometric mean delta) is saved and accumulated.
+    # Correlation vs delta is saved for diagnostic.
+    g.extract_copula  field=qx_ranks, direction=x,
+                      range=0.001:$corr_x:20, samples=5000, bins=20,
+                      accumulate=adv_copula,
+                      save=$out/r$i/copula_adv_x.csv,
+                      save_corr=$out/r$i/corr_adv_x.txt
+
+    # ---- Extract diffusive copula x (spatial perturbation in x) ----------
+    # Samples pairs of velocity ranks at spatially perturbed locations in x.
+    g.extract_copula  field=qx_ranks, direction=x,
+                      range=0.001:$corr_x:20, samples=5000, bins=20,
+                      accumulate=diff_x_copula,
+                      save=$out/r$i/copula_diff_x.csv,
+                      save_corr=$out/r$i/corr_diff_x.txt
+
+    # ---- Extract diffusive copula y (spatial perturbation in y) ----------
+    g.extract_copula  field=qx_ranks, direction=y,
+                      range=0.001:$corr_y:20, samples=5000, bins=20,
+                      accumulate=diff_y_copula,
+                      save=$out/r$i/copula_diff_y.csv,
+                      save_corr=$out/r$i/corr_diff_y.txt
+
+    # ---- Extract marginal velocity CDF -----------------------------------
+    # Accumulates into qx_cdf for later mean computation
+    g.extract_cdf   field=qx, output=qx_cdf, bins=100, threshold=1e-6,
+                    save=$out/r$i/qx_cdf.txt
+
+    # ---- Advance seed for next realization --------------------------------
+    set seed = 2000
+}
+
+# ==========================================================================
+# Post-loop: save ensemble means
+# ==========================================================================
+
+# Mean copulas
+adv_copula.save_mean    file=$out/mean_copula_adv_x.csv
+diff_x_copula.save_mean file=$out/mean_copula_diff_x.csv
+diff_y_copula.save_mean file=$out/mean_copula_diff_y.csv
+
+# Mean marginal velocity CDF
+g.save_mean_cdf  cdf=qx_cdf, file=$out/mean_qx_cdf.txt

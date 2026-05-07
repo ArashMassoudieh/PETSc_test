@@ -1,0 +1,111 @@
+# ==========================================================================
+# test_fine_only.uscript
+#
+# Step 1 test: 10 fine-scale realizations on a 60x20 grid (domain 3x1).
+#
+# What this script does:
+#   - Generates 10 K-field realizations (lognormal, exponential variogram)
+#   - Solves Darcy flow for each realization
+#   - Writes K, head, qx, qy as VTI files per realization
+#   - Extracts velocity normal scores and ranks
+#   - Computes advective and diffusive copulas per realization
+#   - Accumulates and writes ensemble-mean copulas
+#   - Writes mean marginal velocity distribution (mean_qx_inverse_cdf.txt)
+#   - Writes mean correlation lengths (mean_params.txt)
+#
+# Does NOT run transport (fine_transport = false)
+# Does NOT run upscaled model
+# Does NOT do particle tracking
+# ==========================================================================
+
+# ---- Output location ------------------------------------------------------
+set output_dir = ./UpscalingResults_test
+
+# ---- Grid: 60 cells in x, 20 cells in y, domain 3 x 1 -------------------
+set nx   = 60
+set ny   = 20
+set Lx   = 3.0
+set Ly   = 1.0
+
+# nu is only used for the upscaled model but set it anyway
+set nu   = 20
+
+# ---- K-field statistics ---------------------------------------------------
+set stdev   = 2.0
+set g_mean  = 0.0
+set corr_x  = 1.0
+set corr_y  = 0.1
+
+# Variogram model for K-field generation and correlation fitting
+# exponential matches the SGS variogram used in the field generator
+set correlation_model = exponential
+
+# Sampling range for correlation estimation:
+#   x direction: 0.001 to corr_x  (i.e. 0.001 to 1.0)
+#   y direction: 0.001 to corr_y  (i.e. 0.001 to 0.1)
+set corr_x_range = 0.001, 1.0
+set corr_y_range = 0.001, 0.1
+
+# ---- Number of realizations -----------------------------------------------
+set n_realizations = 10
+
+# ---- Random seed -----------------------------------------------------------
+set seed = 20260115
+
+# ---- Transport: OFF for this test -----------------------------------------
+set fine_transport    = false
+set upscale_transport = false
+
+# ---- Particle tracking: OFF -----------------------------------------------
+set particle_tracking = false
+set upscaled_pt       = false
+
+# ---- Copula analysis: ON --------------------------------------------------
+set qx_ranks          = true
+set copula_model      = empirical
+set copula_bins       = 20
+set copula_analysis   = false    # expensive GOF diagnostics: off for now
+set copula_bootstrap  = 5
+set copula_max_points = 1000
+
+# Sampling density for rank-pair extraction
+set qx_rank_num_delta   = 20
+set qx_rank_num_samples = 5000
+
+# ---- Mean time-series mode ------------------------------------------------
+set mean_ts_mode = Longest
+
+# ---- Run fine-scale loop --------------------------------------------------
+# This single statement:
+#   - Loops over n_realizations internally (with retry/reject on KSP failure)
+#   - Writes per-realization folders: fine_r0001/ ... fine_r0010/
+#     Each contains: K.vti, Head.vti, qx.vti, qy.vti,
+#                    qx_ranks.vti, qx_normal_score.vti,
+#                    advective_correlations.txt,
+#                    velocity_rank_*_copula_*.txt,
+#                    qx_inverse_cdf.txt
+#   - Accumulates ensemble-mean copulas across all realizations
+#   - Writes to run_dir/:
+#       mean_empirical_copula_advection_r_dx_<dx>.csv   (advective copula)
+#       mean_empirical_copula_velocity_x_r_dx_<dx>.csv  (diffusive copula x)
+#       mean_empirical_copula_velocity_y_r_dx_<dx>.csv  (diffusive copula y)
+#       mean_qx_inverse_cdf.txt                         (marginal velocity CDF)
+#       mean_params.txt                                 (lc, lx, ly, dt means)
+#       advective_correlations_mean.txt
+#       diffusion_x_correlations_mean.txt
+#       diffusion_y_correlations_mean.txt
+run fine
+
+# ---- Write mean outputs explicitly ----------------------------------------
+# (run fine already writes these automatically, but being explicit here
+#  makes the script self-documenting and lets you change filenames)
+write params = mean_params.txt
+
+# ---- Confirm what was produced --------------------------------------------
+# After this script runs, check run_dir/ for:
+#   fine_r0001/ ... fine_r0010/    per-realization results
+#   mean_empirical_copula_advection_r_dx_*.csv
+#   mean_empirical_copula_velocity_x_r_dx_*.csv
+#   mean_qx_inverse_cdf.txt
+#   mean_params.txt
+#   advective_correlations_mean.txt

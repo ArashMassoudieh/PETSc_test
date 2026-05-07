@@ -16,7 +16,7 @@ DEFINES += Arash
 
 INCLUDEPATH += Utilities
 
-SOURCES += main.cpp \
+SOURCES += \
     Utilities/Matrix.cpp \
     Utilities/Matrix_arma.cpp \
     Utilities/NormalDist.cpp \
@@ -28,10 +28,14 @@ SOURCES += main.cpp \
     Utilities/Vector.cpp \
     Utilities/Vector_arma.cpp \
     grid.cpp \
+    main_script.cpp \
     petscmatrix.cpp \
     petscsolver.cpp \
     petscvector.cpp \
     plotter.cpp \
+    script_executor.cpp \
+    script_parser.cpp \
+    script_types.cpp \
     sim_helpers.cpp \
     sim_runner.cpp
 
@@ -82,6 +86,9 @@ HEADERS += \
     petscsolver.h \
     petscvector.h \
     plotter.h \
+    script_executor.h \
+    script_parser.h \
+    script_types.h \
     sim_helpers.h \
     sim_runner.h
 
@@ -245,3 +252,6 @@ GRID_USE_VTK {
 
 
 }
+
+DISTFILES += \
+    example.uscript

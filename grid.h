@@ -617,6 +617,46 @@ public:
                             double var_log,
                             unsigned int seed = 0);
 
+                // ---- Loading -----------------------------------------------------------
+
+                /// Load a copula matrix from a comma-separated CSV file (n_u x n_u).
+                /// Values must be theta(u_j, u_j') * Delta_u  (rows sum to Delta_u = 1/n_u).
+                /// The matrix is symmetrised on load:  T <- (T + T^T) / 2.
+                static CMatrix loadCopulaCSV(const std::string& filename);
+
+                // ---- Main solver -------------------------------------------------------
+
+                /// Solve the copula-based upscaled transport equation:
+                ///
+                ///   dc_u/dt + v(u) dc_u/dx = D d2c_u/dx2
+                ///       + (v(u)/lambda_a) * INT_0^1 theta_adv(u,u')  [c_u(u') - c_u(u)] du'
+                ///       + (1/dt0)         * INT_0^1 theta_diff(u,u') [c_u(u') - c_u(u)] du'
+                ///
+                /// @param t_end            End time
+                /// @param dt               Time step
+                /// @param theta_adv        Advective copula  (n_u x n_u, rows sum to Delta_u)
+                /// @param theta_diff       Diffusive copula  (n_u x n_u, rows sum to Delta_u)
+                /// @param lambda_a         Advective correlation length
+                /// @param dt0              Diffusive reference timescale
+                /// @param v_of_u           Velocity as a function of rank u in [0,1]
+                /// @param ksp_prefix       PETSc KSP options prefix (may be nullptr)
+                /// @param btc_data         Optional BTC output (nullptr = skip)
+                /// @param output_interval  Write VTI snapshot every N steps (0 = never)
+                /// @param output_dir       Directory for VTI output
+                void SolveCopulaTransport(
+                    double                               t_end,
+                    double                               dt,
+                    const CMatrix&                       theta_adv,
+                    const CMatrix&                       theta_diff,
+                    double                               lambda_a,
+                    double                               dt0,
+                    const std::function<double(double)>& v_of_u,
+                    const char*                          ksp_prefix,
+                    TimeSeriesSet<double>*               btc_data        = nullptr,
+                    int                                  output_interval = 0,
+                    const std::string&                   output_dir      = "");
+
+
 
 private:
     int nx_, ny_;
