@@ -27,15 +27,15 @@ SOURCES += \
     Utilities/Utilities.cpp \
     Utilities/Vector.cpp \
     Utilities/Vector_arma.cpp \
+    copula_analysis.cpp \
     grid.cpp \
-    main_script.cpp \
+    main_script2.cpp \
     petscmatrix.cpp \
     petscsolver.cpp \
     petscvector.cpp \
     plotter.cpp \
-    script_executor.cpp \
-    script_parser.cpp \
-    script_types.cpp \
+    script2_executor.cpp \
+    script2_parser.cpp \
     sim_helpers.cpp \
     sim_runner.cpp
 
@@ -80,15 +80,16 @@ HEADERS += \
     Utilities/Utilities.h \
     Utilities/Vector.h \
     Utilities/Vector_arma.h \
+    copula_analysis.h \
     grid.h \
     petsc_init.h \
     petscmatrix.h \
     petscsolver.h \
     petscvector.h \
     plotter.h \
-    script_executor.h \
-    script_parser.h \
-    script_types.h \
+    script2_executor.h \
+    script2_parser.h \
+    script2_types.h \
     sim_helpers.h \
     sim_runner.h
 

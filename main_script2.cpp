@@ -15,7 +15,6 @@
 #include <string>
 #include <mpi.h>
 
-#include "script_executor.h"    // sim_runner pipeline engine  (.uscript)
 #include "script2_executor.h"   // direct Grid2D engine         (.uscript2)
 
 int main(int argc, char** argv)
@@ -51,13 +50,10 @@ int main(int argc, char** argv)
     const std::string ext = (dot == std::string::npos) ? "" : script_path.substr(dot);
 
     bool ok = false;
-    if (ext == ".uscript2") {
-        if (rank == 0) std::cout << "=== Direct Grid2D script ===\n\n";
-        ok = runScript2File(script_path, rank);
-    } else {
-        if (rank == 0) std::cout << "=== Pipeline script ===\n\n";
-        ok = runScriptFile(script_path, rank);
-    }
+
+    if (rank == 0) std::cout << "=== Direct Grid2D script ===\n\n";
+    ok = runScript2File(script_path, rank);
+
 
     MPI_Barrier(PETSC_COMM_WORLD);
     return ok ? 0 : 1;

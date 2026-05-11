@@ -1610,8 +1610,9 @@ void Grid2D::SolveTransport(const double& t_end,
     else
         filename_ = filename;
 
-    // Write initial state
-    writeNamedVTI_Auto("C", output_dir + "/" + makeVtiName(filename_, 0));
+    if (output_interval > 0) {
+        writeNamedVTI_Auto("C", output_dir + "/" + makeVtiName(filename_, 0));
+    }
 
     // Record initial BTC values (t=0)
     if (record_btc) {
@@ -1765,6 +1766,10 @@ void Grid2D::assignConstant(const std::string& name, ArrayKind kind, double valu
     }
 
     std::fill(A->begin(), A->end(), value);
+
+    if (kind == ArrayKind::Cell && name == "C") {
+        c_current_.reset();
+    }
 }
 
 void Grid2D::computeMassBalanceError(const std::string& fieldName) {

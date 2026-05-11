@@ -34,11 +34,40 @@ std::string stripComment(const std::string& line) {
     return line;
 }
 
+// Return true if (after stripping comment + trailing whitespace) the line
+// ends in a continuation character: '\' or ','.
+// Returns the trimmed line via out-param; returns whether to continue.
+bool isContinuation(const std::string& raw, std::string& out_stripped)
+{
+    std::string s = stripComment(raw);
+    // Remove trailing whitespace
+    auto last = s.find_last_not_of(" \t\r\n");
+    if (last == std::string::npos) { out_stripped = ""; return false; }
+    s = s.substr(0, last + 1);
+
+    if (s.empty()) { out_stripped = ""; return false; }
+
+    char c = s.back();
+    if (c == '\\') {
+        // Drop the backslash from the merged line
+        s.pop_back();
+        out_stripped = s;
+        return true;
+    }
+    if (c == ',') {
+        // Keep the comma in the merged line — it's part of the arg list
+        out_stripped = s;
+        return true;
+    }
+    out_stripped = s;
+    return false;
+}
+
 // Split "key=value, key=value, ..." into S2Arg list.
 // Values may contain commas only if they don't conflict with arg separators,
 // so we split on commas that are NOT inside brackets [] or quotes.
 std::vector<S2Arg> parseArgs(const std::string& s,
-                              const std::string& src, int lineno)
+                             const std::string& src, int lineno)
 {
     std::vector<S2Arg> result;
     std::string cur;
@@ -59,7 +88,7 @@ std::vector<S2Arg> parseArgs(const std::string& s,
             const auto eq = tok.find('=');
             if (eq == std::string::npos)
                 throw std::runtime_error(src + ":" + std::to_string(lineno)
-                    + ": argument missing '=': '" + tok + "'");
+                                         + ": argument missing '=': '" + tok + "'");
             S2Arg a;
             a.key   = trim(tok.substr(0, eq));
             a.value = trim(tok.substr(eq + 1));
@@ -124,14 +153,15 @@ std::size_t parseBlock(
         if (line == "}") {
             if (!inside_block)
                 throw std::runtime_error(src + ":" + std::to_string(lineno)
-                    + ": unexpected '}'");
+                                         + ": unexpected '}'");
             return pos;   // caller sees block is done
         }
 
         // ---- Block open (standalone "{") — should not appear at top level ----
         if (line == "{") {
             throw std::runtime_error(src + ":" + std::to_string(lineno)
-                + ": '{' must follow a 'repeat' statement on the NEXT line");
+                                     + ": '{' must follow a 'repeat' or 'foreach' "
+                                      "statement on the NEXT line");
         }
 
         // ---- set var = value ----
@@ -140,7 +170,7 @@ std::size_t parseBlock(
             const auto eq = rest.find('=');
             if (eq == std::string::npos)
                 throw std::runtime_error(src + ":" + std::to_string(lineno)
-                    + ": 'set' missing '='");
+                                         + ": 'set' missing '='");
             S2Stmt s;
             s.kind   = S2Kind::Set;
             s.lineno = lineno;
@@ -156,14 +186,12 @@ std::size_t parseBlock(
             const auto eq = rest.find('=');
             if (eq == std::string::npos)
                 throw std::runtime_error(src + ":" + std::to_string(lineno)
-                    + ": 'grid' syntax: grid NAME = nx:N, ny:M, Lx:L, Ly:L");
+                                         + ": 'grid' syntax: grid NAME = nx:N, ny:M, Lx:L, Ly:L");
             S2Stmt s;
             s.kind   = S2Kind::GridCreate;
             s.lineno = lineno;
             s.obj    = trim(rest.substr(0, eq));
-            // Re-parse args as key:value (using colon as separator in values)
             const std::string argtxt = trim(rest.substr(eq + 1));
-            // Split on commas first, then on first colon per token
             std::stringstream ss(argtxt);
             std::string tok;
             while (std::getline(ss, tok, ',')) {
@@ -172,7 +200,7 @@ std::size_t parseBlock(
                 const auto co = tok.find(':');
                 if (co == std::string::npos)
                     throw std::runtime_error(src + ":" + std::to_string(lineno)
-                        + ": grid arg missing ':': '" + tok + "'");
+                                             + ": grid arg missing ':': '" + tok + "'");
                 S2Arg a;
                 a.key   = trim(tok.substr(0, co));
                 a.value = trim(tok.substr(co + 1));
@@ -188,7 +216,7 @@ std::size_t parseBlock(
             const auto eq = rest.find('=');
             if (eq == std::string::npos)
                 throw std::runtime_error(src + ":" + std::to_string(lineno)
-                    + ": 'accumulator' syntax: accumulator NAME = bins:N");
+                                         + ": 'accumulator' syntax: accumulator NAME = bins:N");
             S2Stmt s;
             s.kind   = S2Kind::AccumCreate;
             s.lineno = lineno;
@@ -205,13 +233,12 @@ std::size_t parseBlock(
         }
 
         // ---- repeat VAR = start:end ----
-        // Body must be on subsequent lines inside { }
         if (low.substr(0, 7) == "repeat ") {
             const std::string rest = trim(line.substr(7));
             const auto eq = rest.find('=');
             if (eq == std::string::npos)
                 throw std::runtime_error(src + ":" + std::to_string(lineno)
-                    + ": 'repeat' syntax: repeat VAR = start:end");
+                                         + ": 'repeat' syntax: repeat VAR = start:end");
 
             S2Stmt s;
             s.kind     = S2Kind::RepeatBegin;
@@ -221,37 +248,62 @@ std::size_t parseBlock(
             s.loop_start = lo;
             s.loop_end   = hi;
 
-            // Next non-blank line must be "{"
             while (pos < end && trim(stripComment(lines[pos])).empty()) ++pos;
             if (pos >= end || trim(stripComment(lines[pos])) != "{")
                 throw std::runtime_error(src + ":" + std::to_string(lineno)
-                    + ": 'repeat' block must be followed by '{' on the next line");
-            ++pos;  // consume "{"
+                                         + ": 'repeat' block must be followed by '{' on the next line");
+            ++pos;
 
-            // Recursively parse body until "}"
             pos = parseBlock(lines, linenums, pos, src, s.body, /*inside_block=*/true);
             out.push_back(std::move(s));
             continue;
         }
 
+        // ---- foreach VAR = lo:hi:n  (geometric / log-spaced over doubles) ----
+        // Range is parsed at execution time so that $vars can be expanded.
+        if (low.substr(0, 8) == "foreach ") {
+            const std::string rest = trim(line.substr(8));
+            const auto eq = rest.find('=');
+            if (eq == std::string::npos)
+                throw std::runtime_error(src + ":" + std::to_string(lineno)
+                                         + ": 'foreach' syntax: foreach VAR = lo:hi:n");
+
+            S2Stmt s;
+            s.kind        = S2Kind::ForeachBegin;
+            s.lineno      = lineno;
+            s.loop_var    = trim(rest.substr(0, eq));
+            s.foreach_rng = trim(rest.substr(eq + 1));   // raw "lo:hi:n", may contain $vars
+
+            if (s.loop_var.empty() || s.foreach_rng.empty())
+                throw std::runtime_error(src + ":" + std::to_string(lineno)
+                                         + ": 'foreach' syntax: foreach VAR = lo:hi:n");
+
+            while (pos < end && trim(stripComment(lines[pos])).empty()) ++pos;
+            if (pos >= end || trim(stripComment(lines[pos])) != "{")
+                throw std::runtime_error(src + ":" + std::to_string(lineno)
+                                         + ": 'foreach' block must be followed by '{' on the next line");
+            ++pos;
+
+            pos = parseBlock(lines, linenums, pos, src, s.body, /*inside_block=*/true);
+            out.push_back(std::move(s));
+            continue;
+        }
         // ---- NAME.method  arg=val, arg=val, ... ----
-        // Also handles NAME.method with no args (e.g. adv_copula.save_mean file=...)
         {
             const auto dot = line.find('.');
             if (dot != std::string::npos) {
                 const std::string obj    = trim(line.substr(0, dot));
                 const std::string rest   = trim(line.substr(dot + 1));
 
-                // Split method name from args (first whitespace)
                 const auto sp = rest.find_first_of(" \t");
                 const std::string method = (sp == std::string::npos)
-                                           ? rest : trim(rest.substr(0, sp));
+                                               ? rest : trim(rest.substr(0, sp));
                 const std::string argtxt = (sp == std::string::npos)
-                                           ? "" : trim(rest.substr(sp + 1));
+                                               ? "" : trim(rest.substr(sp + 1));
 
                 if (obj.empty() || method.empty())
                     throw std::runtime_error(src + ":" + std::to_string(lineno)
-                        + ": bad method call: '" + line + "'");
+                                             + ": bad method call: '" + line + "'");
 
                 S2Stmt s;
                 s.kind   = S2Kind::MethodCall;
@@ -267,15 +319,14 @@ std::size_t parseBlock(
 
         // ---- Unknown ----
         throw std::runtime_error(src + ":" + std::to_string(lineno)
-            + ": unrecognised statement: '" + line + "'");
+                                 + ": unrecognised statement: '" + line + "'");
     }
 
     if (inside_block)
         throw std::runtime_error(src + ": reached end of file inside a block "
-                                 "(missing '}')");
+                                       "(missing '}')");
     return pos;
 }
-
 } // anonymous namespace
 
 // -----------------------------------------------------------------------
@@ -283,15 +334,54 @@ std::size_t parseBlock(
 // -----------------------------------------------------------------------
 S2Program parseScript2String(const std::string& text, const std::string& src)
 {
+    // First pass: split into raw lines with line numbers
+    std::vector<std::string> raw_lines;
+    std::vector<int>         raw_linenums;
+    {
+        std::istringstream ss(text);
+        std::string line;
+        int n = 0;
+        while (std::getline(ss, line)) {
+            ++n;
+            raw_lines.push_back(line);
+            raw_linenums.push_back(n);
+        }
+    }
+
+    // Second pass: merge continuation lines.
+    // A line is continued if (after stripping comment and trailing whitespace)
+    // it ends in '\' (dropped from output) or ',' (kept in output).
+    // Continuations inside repeat blocks { } are NOT merged across the brace.
     std::vector<std::string> lines;
     std::vector<int>         linenums;
-    std::istringstream ss(text);
-    std::string line;
-    int n = 0;
-    while (std::getline(ss, line)) {
-        ++n;
-        lines.push_back(line);
-        linenums.push_back(n);
+    {
+        std::size_t i = 0;
+        while (i < raw_lines.size()) {
+            std::string acc;
+            int         first_lineno = raw_linenums[i];
+            std::string piece;
+            bool cont = isContinuation(raw_lines[i], piece);
+            acc = piece;
+            while (cont && i + 1 < raw_lines.size()) {
+                ++i;
+                // Strip leading whitespace from continuation so joins read cleanly
+                std::string next = raw_lines[i];
+                // Need to also strip the comment from `next` before checking
+                std::string next_piece;
+                bool next_cont = isContinuation(next, next_piece);
+                // Lead-trim next_piece
+                auto first = next_piece.find_first_not_of(" \t");
+                if (first != std::string::npos)
+                    next_piece = next_piece.substr(first);
+                if (!acc.empty() && !next_piece.empty() && acc.back() != ' ')
+                    acc += ' ';
+                acc += next_piece;
+                cont = next_cont;
+            }
+            lines.push_back(acc);
+            linenums.push_back(first_lineno);
+            ++i;
+        }
     }
 
     S2Program prog;

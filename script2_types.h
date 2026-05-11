@@ -11,10 +11,13 @@
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+#include "TimeSeriesSet.h"
+
 
 // -----------------------------------------------------------------------
 // Statement kinds
 // -----------------------------------------------------------------------
+// In the S2Kind enum, add ForeachBegin:
 enum class S2Kind {
     Blank,          // empty line or comment
     Set,            // set var = value
@@ -22,6 +25,7 @@ enum class S2Kind {
     AccumCreate,    // accumulator NAME = bins:N
     MethodCall,     // NAME.method  arg=val, arg=val, ...
     RepeatBegin,    // repeat VAR = start:end
+    ForeachBegin,   // foreach VAR = lo:hi:n  (geometric / log-spaced)
     BlockOpen,      // {
     BlockClose,     // }
 };
@@ -37,6 +41,7 @@ struct S2Arg {
 // -----------------------------------------------------------------------
 // A single parsed statement
 // -----------------------------------------------------------------------
+// In the S2Stmt struct, add foreach fields next to the repeat fields:
 struct S2Stmt {
     S2Kind               kind    = S2Kind::Blank;
     int                  lineno  = 0;
@@ -52,12 +57,18 @@ struct S2Stmt {
     // MethodCall: object name + method name + args
     std::string          method;    // method name  (e.g. "create_field")
 
-    // RepeatBegin: loop variable + range
+    // RepeatBegin: loop variable + integer range
     std::string          loop_var;
     int                  loop_start = 1;
     int                  loop_end   = 1;
 
-    // Body of repeat block (nested statements)
+    // ForeachBegin: same loop_var, plus geometric range over doubles
+    double               foreach_lo = 0.0;
+    double               foreach_hi = 0.0;
+    int                  foreach_n  = 1;
+    std::string          foreach_rng;
+
+    // Body of repeat / foreach block (nested statements)
     std::vector<S2Stmt>  body;
 };
 
@@ -182,9 +193,40 @@ public:
 
     // Write mean as CSV (bins x bins, comma-separated, rows sum to 1/bins)
     void saveMean(const std::string& path) const;
+    void saveMeanVTI(const std::string& path) const;
 
 private:
     int                  bins_  = 20;
     int                  count_ = 0;
     std::vector<double>  sum_;
+};
+
+// -----------------------------------------------------------------------
+// BTC accumulator
+// Accumulates per-realization breakthrough-curve TimeSeriesSets and
+// computes the ensemble mean.  Each realization is assumed to have the
+// same BTC locations and to record concentrations at the same time grid
+// (which SolveTransport guarantees when t_end/dt are fixed).
+// -----------------------------------------------------------------------
+
+class BTCAccumulator
+{
+public:
+    BTCAccumulator() = default;
+
+    // Add one realization's BTC set.  Just stores a copy.
+    void add(const TimeSeriesSet<double>& bset) { sets_.push_back(bset); ++count_; }
+
+    // Compute ensemble mean using mean_ts_longest_cols and write to file.
+    void saveMean(const std::string& path,
+                  double time_eps = 1e-12,
+                  int    start_item = 0) const;
+
+    int  count()    const { return count_; }
+    bool empty()    const { return count_ == 0; }
+    const std::vector<TimeSeriesSet<double>>& sets() const { return sets_; }
+
+private:
+    int                                       count_ = 0;
+    std::vector<TimeSeriesSet<double>>        sets_;
 };

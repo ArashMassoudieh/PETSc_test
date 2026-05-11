@@ -5,107 +5,154 @@
 #   - Generate K-field (SGS, exponential variogram)
 #   - Solve Darcy flow
 #   - Save K, Head, qx, qy as VTI per realization
-#   - Extract advective copula (along x trajectories)
-#   - Extract diffusive copula (spatial perturbation in x and y)
+#   - Extract advective copula (along x trajectories) at multiple distances
+#   - Extract diffusive copula (spatial perturbation in x and y) at multiple distances
 #   - Extract marginal velocity CDF
-#   - Accumulate mean copulas and mean CDF across all realizations
-#   - Save mean copulas and mean CDF
+#   - Solve transport, save VTI snapshots, save per-realization BTC
+#   - Accumulate mean copulas (per distance), mean CDF, and mean BTC across all realizations
+#   - Save mean copulas, mean CDF, and mean BTC
+#
+# Continuation:  lines ending in ',' or '\' are joined with the next line.
 # ==========================================================================
 
 # ---- Output root ----------------------------------------------------------
-set out = ./results/step1
+set out = /home/arash/Projects/UpscalingResults/Test
 
 # ---- Variables ------------------------------------------------------------
-set stdev  = 2.0
-set corr_x = 1.0
-set corr_y = 0.1
-set seed   = 1000
+set stdev     = 2.0
+set corr_x    = 1.0
+set corr_y    = 0.1
+set base_seed = 1000
+
+# ---- Transport parameters -------------------------------------------------
+set t_end       = 10.0
+set dt          = 0.01
+set diffusion   = 1.0e-4
+set porosity    = 1.0
+set c_left      = 1.0
+set btc_x       = 0.5, 1.0, 1.5, 2.0, 2.5
+set out_every   = 50
 
 # ---- Create the grid (persists across all iterations) --------------------
 grid g = nx:60, ny:20, Lx:3.0, Ly:1.0
 
-# ---- Create copula accumulators ------------------------------------------
-# adv_copula:  advective (along-trajectory) rank correlations in x
-# diff_x_copula: diffusive (spatial perturbation) rank correlations in x
-# diff_y_copula: diffusive (spatial perturbation) rank correlations in y
-accumulator adv_copula    = bins:20
-accumulator diff_x_copula = bins:20
-accumulator diff_y_copula = bins:20
+# Note: copula accumulators (adv_copula_x_K, diff_r_copula_K for K = 1..6)
+# and the BTC accumulator (btc_mean) are auto-created on first use inside
+# the realization loop.
 
 # ==========================================================================
 # Realization loop
 # ==========================================================================
 repeat i = 1:10
 {
+    # ---- Per-realization seed (varies each iteration) --------------------
+    set seed = $i
+
     # ---- Generate K normal-score field (mean=0, variance=1) --------------
-    g.create_field  name=K_ns, type=gaussian_sgs, lx=$corr_x, ly=$corr_y, stdev=1.0, seed=$seed
+    g.create_field  name=K_ns, type=gaussian_sgs,
+                    lx=$corr_x, ly=$corr_y,
+                    stdev=1.0, seed=$seed
 
     # ---- Map to lognormal K ----------------------------------------------
     g.to_lognormal  input=K_ns, stdev=$stdev, mean=0.0, output=K
 
     # ---- Save K fields ---------------------------------------------------
-    g.save          field=K_ns, file=$out/r$i/K_ns.vti
-    g.save          field=K,    file=$out/r$i/K.vti
+    g.save  field=K_ns, file=$out/r$i/K_ns.vti
+    g.save  field=K,    file=$out/r$i/K.vti
 
     # ---- Solve Darcy flow ------------------------------------------------
-    g.solve_darcy   Kx=K, Ky=K, H_west=1.0, H_east=0.0
+    g.solve_darcy  Kx=K, Ky=K, H_west=1.0, H_east=0.0
 
     # ---- Save flow fields ------------------------------------------------
-    g.save          field=head, file=$out/r$i/Head.vti
-    g.save          field=qx,   file=$out/r$i/qx.vti
-    g.save          field=qy,   file=$out/r$i/qy.vti
+    g.save  field=head, file=$out/r$i/Head.vti
+    g.save  field=qx,   file=$out/r$i/qx.vti
+    g.save  field=qy,   file=$out/r$i/qy.vti
 
     # ---- Compute velocity ranks and normal scores ------------------------
-    g.to_ranks        input=qx, output=qx_ranks
-    g.to_normal_score input=qx, output=qx_ns
+    g.to_ranks         input=qx, output=qx_ranks
+    g.to_normal_score  input=qx, output=qx_ns
 
     # ---- Save velocity rank fields ---------------------------------------
     g.save  field=qx_ranks, file=$out/r$i/qx_ranks.vti
     g.save  field=qx_ns,    file=$out/r$i/qx_ns.vti
 
-    # ---- Extract advective copula (x direction) --------------------------
-    # range = delta_min : delta_max : n_steps  (log-spaced)
-    # Samples pairs of velocity ranks along x-direction trajectories.
-    # Representative copula (at geometric mean delta) is saved and accumulated.
-    # Correlation vs delta is saved for diagnostic.
-    g.extract_copula  field=qx_ranks, direction=x,
-                      range=0.001:$corr_x:20, samples=5000, bins=20,
-                      accumulate=adv_copula,
-                      save=$out/r$i/copula_adv_x.csv,
-                      save_corr=$out/r$i/corr_adv_x.txt
+    # ---- Advective copula: 6 geometrically spaced distances in x ---------
+    # Range chosen to span sub- to super-correlation-length separations.
+    foreach d_adv = 0.01:$corr_x:6
+    {
+        g.extract_copula  field=qx_ranks, direction=x,
+                          range=$d_adv:$d_adv:1,
+                          samples=5000, bins=20,
+                          accumulate=adv_copula_x_${d_adv_idx},
+                          save=$out/r$i/copula_adv/copula_adv_x_${d_adv_idx}.csv
+    }
 
-    # ---- Extract diffusive copula x (spatial perturbation in x) ----------
-    # Samples pairs of velocity ranks at spatially perturbed locations in x.
+    # ---- Correlation-vs-delta curve for advective (full sweep) -----------
     g.extract_copula  field=qx_ranks, direction=x,
-                      range=0.001:$corr_x:20, samples=5000, bins=20,
-                      accumulate=diff_x_copula,
-                      save=$out/r$i/copula_diff_x.csv,
-                      save_corr=$out/r$i/corr_diff_x.txt
+                      range=0.001:$corr_x:20,
+                      samples=5000, bins=20,
+                      save_corr=$out/r$i/copula_adv/corr_adv_x.txt
 
-    # ---- Extract diffusive copula y (spatial perturbation in y) ----------
-    g.extract_copula  field=qx_ranks, direction=y,
-                      range=0.001:$corr_y:20, samples=5000, bins=20,
-                      accumulate=diff_y_copula,
-                      save=$out/r$i/copula_diff_y.csv,
-                      save_corr=$out/r$i/corr_diff_y.txt
+    # ---- Diffusive copula x: 6 geometrically spaced distances ------------
+    foreach d_dx = 0.01:$corr_x:6
+    {
+        g.extract_copula  field=qx_ranks, direction=r,
+                          range=$d_dx:$d_dx:1,
+                          samples=5000, bins=20,
+                          accumulate=diff_r_copula_${d_dx_idx},
+                          save=$out/r$i/copula_diff/copula_diff_${d_dx_idx}.csv
+    }
+
+    # ---- Correlation-vs-delta curve for diffusive x (full sweep) ---------
+    g.extract_copula  field=qx_ranks, direction=x,
+                      range=0.001:$corr_x:20,
+                      samples=5000, bins=20,
+                      save_corr=$out/r$i/copula_diff/corr_diff.txt
 
     # ---- Extract marginal velocity CDF -----------------------------------
     # Accumulates into qx_cdf for later mean computation
-    g.extract_cdf   field=qx, output=qx_cdf, bins=100, threshold=1e-6,
-                    save=$out/r$i/qx_cdf.txt
+    g.extract_cdf  field=qx, output=qx_cdf,
+                   bins=100, threshold=1e-6,
+                   save=$out/r$i/v_cdf/qx_cdf.txt
 
-    # ---- Advance seed for next realization --------------------------------
-    set seed = 2000
+    # ---- Transport -------------------------------------------------------
+    # Set scalar transport parameters and BTC sampling locations on the grid.
+    g.assign_constant   field=C, kind=cell, value=0.0
+    g.set_transport     diffusion=$diffusion, porosity=$porosity, c_left=$c_left
+    g.set_btc_locations x=$btc_x
+
+
+    # Solve transport, write VTI snapshots every $out_every steps, save the
+    # per-realization BTC to CSV, and accumulate into the ensemble-mean BTC.
+     g.solve_transport   t_end=$t_end,
+                        dt_factor=0.5,
+                        output_interval=$out_every,
+                        output_dir=$out/r$i/transport,
+                        output_base=transport_C,
+                        realization=$i,
+                        save_btc=$out/r$i/btc.csv,
+                        accumulate=btc_mean
 }
 
 # ==========================================================================
 # Post-loop: save ensemble means
 # ==========================================================================
 
-# Mean copulas
-adv_copula.save_mean    file=$out/mean_copula_adv_x.csv
-diff_x_copula.save_mean file=$out/mean_copula_diff_x.csv
-diff_y_copula.save_mean file=$out/mean_copula_diff_y.csv
+# Mean copulas — one file per distance index for each of the three sweeps
+foreach d = 0.01:$corr_x:6
+{
+    adv_copula_x_${d_idx}.save_mean      file=$out/mean_copula_adv_x_d$d.csv
+    adv_copula_x_${d_idx}.save_mean_vti  file=$out/mean_copula_adv_x_d$d.vti
+}
+
+foreach d = 0.01:$corr_x:6
+{
+    diff_r_copula_${d_idx}.save_mean      file=$out/mean_copula_diff_d$d.csv
+    diff_r_copula_${d_idx}.save_mean_vti  file=$out/mean_copula_diff_d$d.vti
+}
 
 # Mean marginal velocity CDF
 g.save_mean_cdf  cdf=qx_cdf, file=$out/mean_qx_cdf.txt
+
+# Mean breakthrough curves across all realizations
+btc_mean.save_mean  file=$out/mean_btc.csv

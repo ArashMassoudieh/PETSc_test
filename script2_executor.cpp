@@ -22,6 +22,8 @@
 #include <memory>
 #include <algorithm>
 #include <functional>
+#include "copula_analysis.h"
+#include "TimeSeriesSet.h"
 
 // -----------------------------------------------------------------------
 // Runtime state: named grids and accumulators
@@ -30,12 +32,13 @@ namespace {
 
 struct RuntimeState
 {
-    S2Context                                    ctx;
-    std::map<std::string, std::unique_ptr<Grid2D>>          grids;
-    std::map<std::string, std::unique_ptr<CopulaAccumulator>> accums;
+    S2Context                                                  ctx;
+    std::map<std::string, std::unique_ptr<Grid2D>>             grids;
+    std::map<std::string, std::unique_ptr<CopulaAccumulator>>  accums;
+    std::map<std::string, std::unique_ptr<BTCAccumulator>>     btc_accums;   // <-- added
     // Mean CDF accumulator: sum of per-realization CDFs (vector of (u,v) pairs)
     // keyed by a label the user assigns with g.extract_cdf output=NAME
-    std::map<std::string, std::vector<TimeSeries<double>>>  cdf_sets;
+    std::map<std::string, std::vector<TimeSeries<double>>>     cdf_sets;
 
     int rank = 0;
 
@@ -43,7 +46,7 @@ struct RuntimeState
         auto it = grids.find(name);
         if (it == grids.end())
             throw std::runtime_error("grid '" + name + "' not found — "
-                                     "declare it with: grid " + name + " = nx:...");
+                                                       "declare it with: grid " + name + " = nx:...");
         return *it->second;
     }
 
@@ -51,11 +54,17 @@ struct RuntimeState
         auto it = accums.find(name);
         if (it == accums.end())
             throw std::runtime_error("accumulator '" + name + "' not found — "
-                                     "declare it with: accumulator " + name + " = bins:...");
+                                                              "declare it with: accumulator " + name + " = bins:...");
+        return *it->second;
+    }
+
+    BTCAccumulator& btc(const std::string& name) {                          // <-- added
+        auto it = btc_accums.find(name);
+        if (it == btc_accums.end())
+            throw std::runtime_error("btc accumulator '" + name + "' not found");
         return *it->second;
     }
 };
-
 // -----------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------
@@ -152,16 +161,6 @@ void writeCopulaCSV(const std::vector<double>& mat, int n_bins,
     }
 }
 
-// -----------------------------------------------------------------------
-// CopulaAccumulator::saveMean  (implementation here; declared in header)
-// -----------------------------------------------------------------------
-void CopulaAccumulator::saveMean(const std::string& path) const
-{
-    const auto m = mean();
-    writeCopulaCSV(m, bins_, path);
-    std::cout << "  Saved mean copula (" << bins_ << "x" << bins_
-              << ", " << count_ << " realizations) -> " << path << "\n";
-}
 
 // -----------------------------------------------------------------------
 // Forward declaration
@@ -173,10 +172,10 @@ bool execStmts(const std::vector<S2Stmt>& stmts, RuntimeState& st);
 // -----------------------------------------------------------------------
 bool execMethod(const S2Stmt& stmt, RuntimeState& st)
 {
-    const std::string& obj    = stmt.obj;
+    S2Context&         ctx    = st.ctx;
+    const std::string  obj    = ctx.expand(stmt.obj);
     const std::string& method = stmt.method;
     const auto&        args   = stmt.args;
-    S2Context&         ctx    = st.ctx;
     const int          rank   = st.rank;
     const int          lineno = stmt.lineno;
 
@@ -195,9 +194,41 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
             return true;
         }
 
+        // accum.save_mean_vti  file=path
+        if (method == "save_mean_vti") {
+            if (rank == 0) {
+                const std::string path = ctx.expand(ctx.argVal(args, "file", obj + "_mean.vti"));
+                ensureDir(path.substr(0, path.find_last_of("/\\")), rank);
+                acc.saveMeanVTI(path);
+            }
+            MPI_Barrier(PETSC_COMM_WORLD);
+            return true;
+        }
+
         throw std::runtime_error("line " + std::to_string(lineno)
             + ": unknown accumulator method '" + method + "'");
     }
+
+    // ---- BTC accumulator methods ----
+    if (st.btc_accums.count(obj)) {
+        BTCAccumulator& bacc = st.btc(obj);
+
+        if (method == "save_mean") {
+            if (rank == 0) {
+                const std::string path = ctx.expand(ctx.argVal(args, "file", obj + "_mean.csv"));
+                ensureDir(path.substr(0, path.find_last_of("/\\")), rank);
+                bacc.saveMean(path);
+                std::cout << "  " << obj << ".save_mean ("
+                          << bacc.count() << " realizations) -> " << path << "\n";
+            }
+            MPI_Barrier(PETSC_COMM_WORLD);
+            return true;
+        }
+
+        throw std::runtime_error("line " + std::to_string(lineno)
+                                 + ": unknown btc-accumulator method '" + method + "'");
+    }
+
 
     // ---- Grid methods ----
     Grid2D& g = st.grid(obj);
@@ -280,6 +311,32 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
     }
 
     // ------------------------------------------------------------------
+    // g.assign_constant  field=C, kind=cell, value=0.0
+    //                    (kind ∈ {cell, fx, fy}; default cell)
+    // Initializes or resets a field to a constant value.
+    // ------------------------------------------------------------------
+    if (method == "assign_constant") {
+        const std::string fname = ctx.argVal(args, "field", "");
+        if (fname.empty())
+            throw std::runtime_error("line " + std::to_string(lineno)
+                                     + ": assign_constant requires field=NAME");
+
+        const std::string kindstr = ctx.argVal(args, "kind", "cell");
+        Grid2D::ArrayKind kind =
+            (kindstr == "fx" || kindstr == "Fx") ? Grid2D::ArrayKind::Fx :
+                (kindstr == "fy" || kindstr == "Fy") ? Grid2D::ArrayKind::Fy :
+                Grid2D::ArrayKind::Cell;
+
+        const double value = ctx.argDouble(args, "value", 0.0);
+
+        g.assignConstant(fname, kind, value);
+        if (rank == 0)
+            std::cout << "  assign_constant " << fname
+                      << " (kind=" << kindstr << ") = " << value << "\n";
+        return true;
+    }
+
+    // ------------------------------------------------------------------
     // g.extract_copula  field=qx_ranks, direction=x,
     //                   range=0.001:1.0:20, samples=5000,
     //                   accumulate=adv_copula,
@@ -308,34 +365,36 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
 
         PerturbDir dir =
             (dirstr == "y" || dirstr == "Y") ? PerturbDir::YOnly  :
-            (dirstr == "r" || dirstr == "R") ? PerturbDir::Radial :
-                                               PerturbDir::XOnly;
+                (dirstr == "r" || dirstr == "R") ? PerturbDir::Radial :
+                PerturbDir::XOnly;
 
-        // Use the representative delta = geometric mean of range
+        // Representative delta = geometric mean of range; this is the
+        // distance at which the saved/accumulated copula is built.
+        // (When lo == hi, this is just that single distance.)
         const double delta_rep = std::sqrt(rng.lo * rng.hi);
 
-        // Sample correlation vs delta (log-spaced) and build copula at delta_rep
-        TimeSeries<double> corr_ts;   // correlation vs delta
+        // Sweep log-spaced deltas across the range; record correlation
+        // vs delta for save_corr, and capture the copula at the delta
+        // closest to delta_rep in log space.
+        TimeSeries<double> corr_ts;
         std::vector<double> copula_mat;
+        double best_log_dist = 1e30;
 
         for (int k = 0; k < rng.n; ++k) {
-            const double exponent = static_cast<double>(k) / (rng.n - 1);
+            const double exponent = (rng.n == 1) ? 0.0
+                                                 : static_cast<double>(k) / (rng.n - 1);
             const double delta    = rng.lo * std::pow(rng.hi / rng.lo, exponent);
 
             try {
                 TimeSeries<double> pairs = g.sampleGaussianPerturbation(
                     field, kind, n_samples, delta, 0, dir);
 
-                // Correlation of ranks at this delta
                 corr_ts.append(delta, pairs.correlation_tc());
 
-                // Bin into copula at representative delta
-                if (std::abs(delta - delta_rep) <=
-                    std::abs(delta - delta_rep) + 1e-12) {
-                    // Pick the delta closest to delta_rep
-                    // (simpler: just use the last computed for now,
-                    //  and overwrite — caller can use save_corr to see all)
-                    copula_mat = binnedCopula(pairs, bins);
+                const double ldist = std::abs(std::log(delta) - std::log(delta_rep));
+                if (ldist < best_log_dist) {
+                    best_log_dist = ldist;
+                    copula_mat    = binnedCopula(pairs, bins);
                 }
             } catch (...) {
                 if (rank == 0)
@@ -343,46 +402,35 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
             }
         }
 
-        // Find closest delta index to geometric mean
-        {
-            double best = 1e30;
-            for (int k = 0; k < rng.n; ++k) {
-                const double exponent = static_cast<double>(k) / (rng.n - 1);
-                const double delta    = rng.lo * std::pow(rng.hi / rng.lo, exponent);
-                if (std::abs(std::log(delta) - std::log(delta_rep)) < best) {
-                    best = std::abs(std::log(delta) - std::log(delta_rep));
-                    // Re-sample at this best delta for the copula
-                    try {
-                        TimeSeries<double> pairs = g.sampleGaussianPerturbation(
-                            field, kind, n_samples, delta, 0, dir);
-                        copula_mat = binnedCopula(pairs, bins);
-                    } catch (...) {}
-                }
-            }
-        }
-
         if (rank == 0) {
             std::cout << "  extract_copula " << field << " dir=" << dirstr
                       << " range=[" << rng.lo << ":" << rng.hi << ":" << rng.n << "]"
-                      << " bins=" << bins << "\n";
+                      << " bins=" << bins
+                      << "  delta_rep=" << delta_rep << "\n";
 
-            // Save per-realization copula
             if (!savef.empty()) {
                 ensureDir(savef.substr(0, savef.find_last_of("/\\")), rank);
                 if (!copula_mat.empty())
                     writeCopulaCSV(copula_mat, bins, savef);
             }
 
-            // Save correlation-vs-delta
             if (!savecorr.empty()) {
                 ensureDir(savecorr.substr(0, savecorr.find_last_of("/\\")), rank);
                 corr_ts.writefile(savecorr);
             }
         }
 
-        // Accumulate into mean (all ranks do the accumulation so it's consistent,
-        // but only rank 0 writes)
+        // Accumulate into the named accumulator, auto-creating it on
+        // first use.  This makes per-distance accumulator names inside
+        // a 'foreach' loop work without requiring a separate
+        // 'accumulator NAME = bins:N' declaration for each one.
         if (!accname.empty() && !copula_mat.empty()) {
+            if (st.accums.find(accname) == st.accums.end()) {
+                st.accums[accname] = std::make_unique<CopulaAccumulator>(bins);
+                if (rank == 0)
+                    std::cout << "  [auto] created accumulator '" << accname
+                              << "' (bins=" << bins << ")\n";
+            }
             st.accum(accname).add(copula_mat);
         }
 
@@ -515,6 +563,132 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
         return true;
     }
 
+    // ------------------------------------------------------------------
+    // g.set_transport  diffusion=1e-4, porosity=0.3, c_left=1.0
+    //                  (any subset)
+    // ------------------------------------------------------------------
+    if (method == "set_transport") {
+        if (ctx.argHas(args, "diffusion") || ctx.argHas(args, "D")) {
+            const double D = ctx.argDouble(args,
+                                           ctx.argHas(args, "diffusion") ? "diffusion" : "D",
+                                           0.0);
+            g.SetVal("diffusion", D);
+        }
+        if (ctx.argHas(args, "porosity")) {
+            g.SetVal("porosity", ctx.argDouble(args, "porosity", 1.0));
+        }
+        if (ctx.argHas(args, "c_left") || ctx.argHas(args, "left_bc")) {
+            const double c = ctx.argDouble(args,
+                                           ctx.argHas(args, "c_left") ? "c_left" : "left_bc",
+                                           1.0);
+            g.SetVal("c_left", c);
+        }
+        if (rank == 0)
+            std::cout << "  set_transport applied\n";
+        return true;
+    }
+
+    // ------------------------------------------------------------------
+    // g.set_btc_locations  x=0.5,1.0,1.5,2.0,2.5
+    // ------------------------------------------------------------------
+    if (method == "set_btc_locations") {
+        const std::string xstr = ctx.argVal(args, "x", "");
+        if (xstr.empty())
+            throw std::runtime_error("line " + std::to_string(lineno)
+                                     + ": set_btc_locations requires x=val,val,...");
+
+        std::vector<double> locs;
+        std::stringstream ss(xstr);
+        std::string tok;
+        while (std::getline(ss, tok, ',')) {
+            const auto first = tok.find_first_not_of(" \t");
+            const auto last  = tok.find_last_not_of(" \t");
+            if (first == std::string::npos) continue;
+            tok = tok.substr(first, last - first + 1);
+            if (!tok.empty()) locs.push_back(std::stod(tok));
+        }
+        g.setBTCLocations(locs);
+        if (rank == 0) {
+            std::cout << "  set_btc_locations: " << locs.size() << " locations: ";
+            for (size_t k = 0; k < locs.size(); ++k)
+                std::cout << locs[k] << (k + 1 < locs.size() ? ", " : "\n");
+        }
+        return true;
+    }
+
+    // ------------------------------------------------------------------
+    // g.solve_transport  t_end=10.0, dt=0.01,
+    //                    output_interval=10,
+    //                    output_dir=$out/r$i,
+    //                    output_base=transport_C,
+    //                    realization=$i,
+    //                    save_btc=$out/r$i/btc.csv,
+    //                    accumulate=btc_mean
+    // ------------------------------------------------------------------
+    if (method == "solve_transport") {
+        const double      t_end       = ctx.argDouble(args, "t_end", 1.0);
+        const double      dt_user     = ctx.argDouble(args, "dt",          -1.0);
+        const double      dt_factor   = ctx.argDouble(args, "dt_factor",    0.5);
+        const double      dt_max      = ctx.argDouble(args, "dt_max",      -1.0);
+        const int         out_interval= ctx.argInt   (args, "output_interval", 0);
+        const std::string out_dir     = ctx.argVal   (args, "output_dir",  "");
+        const std::string out_base    = ctx.argVal   (args, "output_base", "transport_C");
+        const int         realization = ctx.argInt   (args, "realization", -1);
+        const std::string savebtc     = ctx.argVal   (args, "save_btc",    "");
+        const std::string accname     = ctx.argVal   (args, "accumulate",  "");
+
+        // Compute CFL-stable dt from the actual qx field of this realization.
+        // dt_cfl = dt_factor * dx / qx_max, matching run_fine_loop_collect.
+        // If the user supplied an explicit dt, use it; otherwise use dt_cfl,
+        // optionally capped by dt_max.
+        const auto qx_minmax = g.fieldMinMax("qx", Grid2D::ArrayKind::Fx);
+        const double qx_max  = qx_minmax.second;
+        const double dt_cfl  = (qx_max > 0.0) ? dt_factor * g.dx() / qx_max
+                                             : t_end;   // diffusion-only fallback
+
+        double dt = (dt_user > 0.0) ? dt_user : dt_cfl;
+        if (dt_max > 0.0 && dt > dt_max) dt = dt_max;
+
+        if (!out_dir.empty()) ensureDir(out_dir, rank);
+
+        TimeSeriesSet<double>  btc_data;
+        TimeSeriesSet<double>* btc_ptr =
+            (!savebtc.empty() || !accname.empty() || !g.getBTCLocations().empty())
+                ? &btc_data : nullptr;
+
+        if (rank == 0) {
+            std::cout << "  solve_transport t_end=" << t_end
+                      << " dt=" << dt
+                      << " (cfl=" << dt_cfl << ", qx_max=" << qx_max << ")"
+                      << " realization=" << realization << "\n";
+        }
+
+        const std::string ksp_pref = ctx.argVal(args, "ksp_prefix", "transport_");
+        g.SolveTransport(t_end, dt,
+                         ksp_pref.empty() ? nullptr : ksp_pref.c_str(),
+                         out_interval, out_dir, out_base,
+                         btc_ptr, realization);
+
+        if (!savebtc.empty() && btc_ptr) {
+            if (rank == 0) {
+                ensureDir(savebtc.substr(0, savebtc.find_last_of("/\\")), rank);
+                btc_data.write(savebtc);
+                std::cout << "  saved per-realization BTC -> " << savebtc << "\n";
+            }
+            MPI_Barrier(PETSC_COMM_WORLD);
+        }
+
+        if (!accname.empty() && btc_ptr) {
+            if (st.btc_accums.find(accname) == st.btc_accums.end()) {
+                st.btc_accums[accname] = std::make_unique<BTCAccumulator>();
+                if (rank == 0)
+                    std::cout << "  [auto] created BTC accumulator '" << accname << "'\n";
+            }
+            st.btc(accname).add(btc_data);
+        }
+
+        return true;
+    }
     throw std::runtime_error("line " + std::to_string(lineno)
         + ": unknown method '" + obj + "." + method + "'");
 }
@@ -569,7 +743,6 @@ bool execStmts(const std::vector<S2Stmt>& stmts, RuntimeState& st)
                           << ":" << stmt.loop_end << " ---\n";
 
             for (int i = stmt.loop_start; i <= stmt.loop_end; ++i) {
-                // Make loop variable available as $VAR
                 st.ctx.set(stmt.loop_var, std::to_string(i));
 
                 if (st.rank == 0)
@@ -580,16 +753,71 @@ bool execStmts(const std::vector<S2Stmt>& stmts, RuntimeState& st)
             break;
         }
 
+        case S2Kind::ForeachBegin: {
+            // Expand $vars in the raw "lo:hi:n" string, then parse it now.
+            const std::string rng_str = st.ctx.expand(stmt.foreach_rng);
+
+            double lo = 0.0, hi = 0.0;
+            int    n  = 1;
+            {
+                const auto c1 = rng_str.find(':');
+                const auto c2 = (c1 == std::string::npos)
+                                    ? std::string::npos
+                                    : rng_str.find(':', c1 + 1);
+                if (c1 == std::string::npos || c2 == std::string::npos)
+                    throw std::runtime_error("line " + std::to_string(stmt.lineno)
+                                             + ": 'foreach' expects lo:hi:n, got '"
+                                             + rng_str + "'");
+                try {
+                    lo = std::stod(rng_str.substr(0, c1));
+                    hi = std::stod(rng_str.substr(c1 + 1, c2 - c1 - 1));
+                    n  = std::stoi(rng_str.substr(c2 + 1));
+                } catch (...) {
+                    throw std::runtime_error("line " + std::to_string(stmt.lineno)
+                                             + ": 'foreach' could not parse '"
+                                             + rng_str + "'");
+                }
+                if (n < 1)
+                    throw std::runtime_error("line " + std::to_string(stmt.lineno)
+                                             + ": 'foreach' n must be >= 1");
+                if (lo <= 0.0 || hi <= 0.0)
+                    throw std::runtime_error("line " + std::to_string(stmt.lineno)
+                                             + ": 'foreach' requires positive lo and hi "
+                                               "(geometric spacing)");
+            }
+
+            if (st.rank == 0)
+                std::cout << "\n--- foreach " << stmt.loop_var
+                          << " = " << lo << ":" << hi << ":" << n
+                          << "  (geometric) ---\n";
+
+            for (int k = 0; k < n; ++k) {
+                const double exponent = (n == 1) ? 0.0
+                                                 : static_cast<double>(k) / (n - 1);
+                const double d = lo * std::pow(hi / lo, exponent);
+
+                std::ostringstream oss;
+                oss << std::setprecision(10) << d;
+                st.ctx.set(stmt.loop_var, oss.str());
+                st.ctx.set(stmt.loop_var + "_idx", std::to_string(k + 1));
+
+                if (st.rank == 0)
+                    std::cout << "\n=== " << stmt.loop_var << " = " << d
+                              << "  (idx " << (k + 1) << "/" << n << ") ===\n";
+
+                if (!execStmts(stmt.body, st)) return false;
+            }
+            break;
+        }
+
         case S2Kind::BlockOpen:
         case S2Kind::BlockClose:
-            // Should never appear in a flat list after parsing
             throw std::runtime_error("execStmts: unexpected block delimiter at line "
                                      + std::to_string(stmt.lineno));
         }
     }
     return true;
 }
-
 } // anonymous namespace
 
 // -----------------------------------------------------------------------
@@ -629,3 +857,52 @@ bool runScript2File(const std::string& path, int rank)
         return false;
     }
 }
+
+// -----------------------------------------------------------------------
+// CopulaAccumulator::saveMean  (implementation here; declared in header)
+// -----------------------------------------------------------------------
+void CopulaAccumulator::saveMean(const std::string& path) const
+{
+    const auto m = mean();
+    writeCopulaCSV(m, bins_, path);
+    std::cout << "  Saved mean copula (" << bins_ << "x" << bins_
+              << ", " << count_ << " realizations) -> " << path << "\n";
+}
+
+void BTCAccumulator::saveMean(const std::string& path,
+                              double time_eps,
+                              int    start_item) const
+{
+    if (count_ == 0 || sets_.empty())
+        throw std::runtime_error("BTCAccumulator::saveMean: no data");
+
+    TimeSeriesSet<double> mean =
+        mean_ts_longest_cols<double>(sets_, start_item, time_eps);
+
+    mean.write(path);   // or whatever your TimeSeriesSet write method is named
+}
+
+void CopulaAccumulator::saveMeanVTI(const std::string& path) const
+{
+    if (count_ == 0 || sum_.empty())
+        throw std::runtime_error("CopulaAccumulator::saveMeanVTI: no data");
+
+    const std::vector<double> m = mean();   // flat bins_ x bins_, row-major
+
+    // Convert flat row-major vector to CMatrix.
+    // Our convention: m[r * bins_ + c] where r = u1-bin, c = u2-bin.
+    // write_matrix_as_vti_2d treats M[i][j] as the value at (i, j) in
+    // the output grid (i along x, j along y), so we map r -> i, c -> j.
+    CMatrix M(bins_, bins_);
+    for (int i = 0; i < bins_; ++i) {
+        for (int j = 0; j < bins_; ++j) {
+            M[i][j] = m[i * bins_ + j];
+        }
+    }
+
+    if (!write_matrix_as_vti_2d(M, path, /*array_name=*/"copula",
+                                /*point_data=*/false))
+        throw std::runtime_error("CopulaAccumulator::saveMeanVTI: "
+                                 "write_matrix_as_vti_2d failed for '" + path + "'");
+}
+
