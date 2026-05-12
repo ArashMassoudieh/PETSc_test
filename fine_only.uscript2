@@ -1,0 +1,155 @@
+# ==========================================================================
+# test_fine_only.uscript2
+#
+# Step 1: 10 realizations, 60x20 grid, domain 3x1.
+#   - Generate K-field (SGS, exponential variogram)
+#   - Solve Darcy flow
+#   - Save K, Head, qx, qy as VTI per realization
+#   - Extract advective copula at the targeted lambda_a distance
+#   - Extract diffusive copula (radial) at the targeted lambda_d distance
+#   - Extract advective correlation-vs-distance curve (for diagnostics)
+#   - Extract diffusive correlation-vs-distance curve (for diagnostics)
+#   - Extract marginal velocity CDF
+#   - Solve transport, save VTI snapshots, save per-realization BTC
+#   - Accumulate mean copulas, mean CDF, and mean BTC across realizations
+#   - Save mean copulas, mean CDF, and mean BTC
+#
+# Continuation: lines ending in ',' or '\' are joined with the next line.
+# ==========================================================================
+
+# ---- Output root ----------------------------------------------------------
+set out = /home/arash/Projects/UpscalingResults/Test
+
+# ---- K-field parameters --------------------------------------------------
+set stdev     = 2.0
+set corr_x    = 1.0
+set corr_y    = 0.1
+set base_seed = 1000
+
+# ---- Targeted copula extraction distances --------------------------------
+# These must match the lambda_a / lambda_d used in the upscaled run.
+# d_adv  = lambda_x   (advective correlation length)
+# d_diff = lambda_y   (transverse correlation length)
+set d_adv  = 1.0
+set d_diff = 0.1
+
+# ---- Transport parameters -------------------------------------------------
+set t_end       = 10.0
+set dt          = 0.01
+set diffusion   = 1.0e-4
+set porosity    = 1.0
+set c_left      = 1.0
+set btc_x       = 0.5, 1.0, 1.5, 2.0, 2.5
+set out_every   = 50
+
+# ---- Create the grid (persists across all iterations) --------------------
+grid g = nx:60, ny:20, Lx:3.0, Ly:1.0
+
+# Note: copula accumulators (adv_copula, diff_copula) and the BTC
+# accumulator (btc_mean) are auto-created on first use inside the loop.
+
+# ==========================================================================
+# Realization loop
+# ==========================================================================
+repeat i = 1:10
+{
+    # ---- Per-realization seed (varies each iteration) --------------------
+    set seed = $i
+
+    # ---- Generate K normal-score field (mean=0, variance=1) --------------
+    g.create_field  name=K_ns, type=gaussian_sgs,
+                    lx=$corr_x, ly=$corr_y,
+                    stdev=1.0, seed=$seed
+
+    # ---- Map to lognormal K ----------------------------------------------
+    g.to_lognormal  input=K_ns, stdev=$stdev, mean=0.0, output=K
+
+    # ---- Save K fields ---------------------------------------------------
+    g.save  field=K_ns, file=$out/r$i/K_ns.vti
+    g.save  field=K,    file=$out/r$i/K.vti
+
+    # ---- Solve Darcy flow ------------------------------------------------
+    g.solve_darcy  Kx=K, Ky=K, H_west=1.0, H_east=0.0
+
+    # ---- Save flow fields ------------------------------------------------
+    g.save  field=head, file=$out/r$i/Head.vti
+    g.save  field=qx,   file=$out/r$i/qx.vti
+    g.save  field=qy,   file=$out/r$i/qy.vti
+
+    # ---- Compute velocity ranks and normal scores ------------------------
+    g.to_ranks         input=qx, output=qx_ranks
+    g.to_normal_score  input=qx, output=qx_ns
+
+    # ---- Save velocity rank fields ---------------------------------------
+    g.save  field=qx_ranks, file=$out/r$i/qx_ranks.vti
+    g.save  field=qx_ns,    file=$out/r$i/qx_ns.vti
+
+    # ---- Advective copula at the targeted distance d_adv -----------------
+    # Single distance only; accumulates into adv_copula for ensemble mean.
+    g.extract_copula  field=qx_ranks, direction=x,
+                      range=$d_adv:$d_adv:1,
+                      samples=5000, bins=20,
+                      accumulate=adv_copula,
+                      save=$out/r$i/copula_adv/copula_adv_x.csv
+
+    # ---- Advective correlation-vs-distance curve (diagnostics) -----------
+    # Full geometric sweep; not accumulated, just saved per realization.
+    g.extract_copula  field=qx_ranks, direction=x,
+                      range=0.001:$corr_x:20,
+                      samples=5000, bins=20,
+                      save_corr=$out/r$i/copula_adv/corr_adv_x.txt
+
+    # ---- Diffusive copula at the targeted distance d_diff ----------------
+    # Radial direction (isotropic); accumulates into diff_copula.
+    g.extract_copula  field=qx_ranks, direction=r,
+                      range=$d_diff:$d_diff:1,
+                      samples=5000, bins=20,
+                      accumulate=diff_copula,
+                      save=$out/r$i/copula_diff/copula_diff_r.csv
+
+    # ---- Diffusive correlation-vs-distance curve (diagnostics) -----------
+    g.extract_copula  field=qx_ranks, direction=r,
+                      range=0.001:$corr_x:20,
+                      samples=5000, bins=20,
+                      save_corr=$out/r$i/copula_diff/corr_diff_r.txt
+
+    # ---- Extract marginal velocity CDF -----------------------------------
+    # Accumulates into qx_cdf for later mean computation.
+    g.extract_cdf  field=qx, output=qx_cdf,
+                   bins=100, threshold=1e-6,
+                   save=$out/r$i/v_cdf/qx_cdf.txt
+
+    # ---- Transport -------------------------------------------------------
+    g.assign_constant   field=C, kind=cell, value=0.0
+    g.set_transport     diffusion=$diffusion, porosity=$porosity, c_left=$c_left
+    g.set_btc_locations x=$btc_x
+
+    # Solve transport, write VTI snapshots every $out_every steps, save the
+    # per-realization BTC, and accumulate into the ensemble-mean BTC.
+    g.solve_transport   t_end=$t_end,
+                        dt_factor=0.5,
+                        output_interval=$out_every,
+                        output_dir=$out/r$i/transport,
+                        output_base=transport_C,
+                        realization=$i,
+                        save_btc=$out/r$i/btc.csv,
+                        accumulate=btc_mean
+}
+
+# ==========================================================================
+# Post-loop: save ensemble means
+# ==========================================================================
+
+# Mean advective copula at d_adv
+adv_copula.save_mean      file=$out/mean_copula_adv_x.csv
+adv_copula.save_mean_vti  file=$out/mean_copula_adv_x.vti
+
+# Mean diffusive copula at d_diff
+diff_copula.save_mean      file=$out/mean_copula_diff_r.csv
+diff_copula.save_mean_vti  file=$out/mean_copula_diff_r.vti
+
+# Mean marginal velocity CDF
+g.save_mean_cdf  cdf=qx_cdf, file=$out/mean_qx_cdf.txt
+
+# Mean breakthrough curves across all realizations
+btc_mean.save_mean  file=$out/mean_btc.csv

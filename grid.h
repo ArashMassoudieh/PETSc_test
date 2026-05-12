@@ -598,6 +598,9 @@ public:
                                                  double variance = 1.0,
                                                  unsigned int seed = 0);
 
+    static void checkNormalisation(const CMatrix& T, const std::string& label);
+
+
     /**
      * @brief Generate log-normal hydraulic conductivity field
      *
@@ -649,7 +652,7 @@ public:
                     const CMatrix&                       theta_adv,
                     const CMatrix&                       theta_diff,
                     double                               lambda_a,
-                    double                               dt0,
+                    double                               lambda_d,
                     const std::function<double(double)>& v_of_u,
                     const char*                          ksp_prefix,
                     TimeSeriesSet<double>*               btc_data        = nullptr,

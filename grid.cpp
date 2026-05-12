@@ -2738,17 +2738,26 @@ inline PetscInt gIdx(int i_x, int j_u, int nu)
     return static_cast<PetscInt>(i_x) * nu + j_u;
 }
 
+
+
+/// Upper bound on non-zeros per row:
+///   2 x-neighbours + nu u-couplings + 1 diagonal + small margin
+inline int nnzPerRow(int nu) { return nu + 4; }
+
+} // anonymous namespace
+
+
 /// Verify that every row of a copula matrix sums to approximately
 /// Delta_u = 1/n_u.  Emits a warning (not an error) for noisy
 /// empirical matrices.
-void checkNormalisation(const CMatrix& T, const std::string& label)
+void Grid2D::checkNormalisation(const CMatrix& T, const std::string& label)
 {
     const int nu = T.getnumrows();
     if (nu == 0 || T.getnumcols() != nu)
         throw std::runtime_error("checkNormalisation: " + label
                                  + " must be a non-empty square matrix");
 
-    const double expected = 1.0 / nu;   // = Delta_u
+    const double expected = 1.0;
     for (int j = 0; j < nu; ++j) {
         double s = 0.0;
         for (int k = 0; k < nu; ++k) s += T(j, k);
@@ -2758,13 +2767,6 @@ void checkNormalisation(const CMatrix& T, const std::string& label)
                       << " (expected " << expected << ")\n";
     }
 }
-
-/// Upper bound on non-zeros per row:
-///   2 x-neighbours + nu u-couplings + 1 diagonal + small margin
-inline int nnzPerRow(int nu) { return nu + 4; }
-
-} // anonymous namespace
-
 
 // -----------------------------------------------------------------------
 // Grid2D::loadCopulaCSV
@@ -2830,7 +2832,7 @@ void Grid2D::SolveCopulaTransport(
     const CMatrix&                       theta_adv,
     const CMatrix&                       theta_diff,
     double                               lambda_a,
-    double                               dt0,
+    double                               lambda_d,
     const std::function<double(double)>& v_of_u,
     const char*                          ksp_prefix,
     TimeSeriesSet<double>*               btc_data,
@@ -2844,7 +2846,7 @@ void Grid2D::SolveCopulaTransport(
     if (dt       <= 0.0) throw std::runtime_error("SolveCopulaTransport: dt <= 0");
     if (dt > t_end)      throw std::runtime_error("SolveCopulaTransport: dt > t_end");
     if (lambda_a <= 0.0) throw std::runtime_error("SolveCopulaTransport: lambda_a <= 0");
-    if (dt0      <= 0.0) throw std::runtime_error("SolveCopulaTransport: dt0 <= 0");
+    if (lambda_d <= 0.0) throw std::runtime_error("SolveCopulaTransport: lambda_d <= 0");
 
     const int nu = theta_adv.getnumrows();
     if (nu == 0)
@@ -2868,6 +2870,15 @@ void Grid2D::SolveCopulaTransport(
     const double du      = 1.0 / nu;    // uniform bin width in u
     const int    N       = NX * nu;     // total degrees of freedom
 
+    // Layout: x-fastest, so flat index = j_u * NX + i_x.  This matches
+    // VTK ImageData convention so writeNamedVTI_Auto works directly.
+    auto gIdxXfast = [NX](int i_x, int j_u) -> PetscInt {
+        return static_cast<PetscInt>(j_u) * NX + i_x;
+    };
+
+    // Diffusive exchange rate from extraction distance:  r_diff = 2D / lambda_d^2
+    const double r_diff = 2.0 * D / (lambda_d * lambda_d);
+
     // ----------------------------------------------------------------
     // 2.  Bin-centre velocities  v_j = v(u_j),  u_j = (j + 0.5) * du
     // ----------------------------------------------------------------
@@ -2878,18 +2889,17 @@ void Grid2D::SolveCopulaTransport(
     // ----------------------------------------------------------------
     // 3.  Combined exchange kernel K (nu x nu)
     //
-    //   K(j,k) = (v_j / lambda_a) * theta_adv(j,k)
-    //          + (1   / dt0      ) * theta_diff(j,k)
+    //   K(j,k) = (v_j / lambda_a)   * theta_adv (j,k)
+    //          + (2D  / lambda_d^2) * theta_diff(j,k)
     //
-    //   theta matrices store theta_density * du, so their row sums = du.
-    //   K row sum  K_diag[j] = v_j/lambda_a + 1/dt0   (units: 1/time)
+    //   theta matrices store theta*du, so row sums = 1.
+    //   K row sum  K_diag[j] = v_j/lambda_a + 2D/lambda_d^2   (units: 1/time)
     // ----------------------------------------------------------------
     CMatrix K(nu, nu);
     std::vector<double> K_diag(nu, 0.0);
 
     for (int j = 0; j < nu; ++j) {
-        const double r_adv  = v[j] / lambda_a;
-        const double r_diff = 1.0  / dt0;
+        const double r_adv = v[j] / lambda_a;
         double row_sum = 0.0;
         for (int k = 0; k < nu; ++k) {
             const double val = r_adv  * theta_adv (j, k)
@@ -2897,7 +2907,7 @@ void Grid2D::SolveCopulaTransport(
             K(j, k)  = val;
             row_sum += val;
         }
-        K_diag[j] = row_sum;   // = (r_adv + r_diff) * du * nu = r_adv + r_diff
+        K_diag[j] = row_sum;   // = r_adv + r_diff (row sums of theta matrices = 1)
     }
 
     // ----------------------------------------------------------------
@@ -2906,11 +2916,13 @@ void Grid2D::SolveCopulaTransport(
     std::cout << "\n=== SolveCopulaTransport ===\n"
               << "  Grid:       " << NX << " (x) x " << nu << " (u)"
               << "   N = " << N << "\n"
+              << "  Layout:     x-fastest (j_u * NX + i_x)\n"
               << "  t_end:      " << t_end    << "\n"
               << "  dt:         " << dt       << "\n"
               << "  D:          " << D        << "\n"
               << "  lambda_a:   " << lambda_a << "\n"
-              << "  dt0:        " << dt0      << "\n"
+              << "  lambda_d:   " << lambda_d << "\n"
+              << "  r_diff:     " << r_diff   << "  (= 2D/lambda_d^2)\n"
               << "  c_left:     " << c_left_  << "\n"
               << "  v range:    ["
               << *std::min_element(v.begin(), v.end()) << ", "
@@ -2926,14 +2938,14 @@ void Grid2D::SolveCopulaTransport(
     // ----------------------------------------------------------------
     // 6.  Assemble system matrix A  (built once; fully implicit)
     //
-    //  Row for cell (i_x, j_u):
+    //  With x-fastest storage, row index Irow = j_u * NX + i_x, so:
+    //    j_u = Irow / NX,  i_x = Irow % NX
     //
     //  DIAGONAL:
     //    inv_dt                          time derivative
     //    + v_j * inv_dx                  upwind advection (assumes v_j >= 0)
-    //    + D * inv_dx2   or              x-diffusion:
-    //      2D * inv_dx2                    2 neighbours (interior)
-    //                                      1 neighbour  (boundary)
+    //    + D * inv_dx2 (boundary) or
+    //      2D * inv_dx2 (interior)       x-diffusion
     //    + K_diag[j_u]                   exchange loss (both copulas)
     //
     //  OFF-DIAGONAL IN x  (same j_u):
@@ -2954,8 +2966,8 @@ void Grid2D::SolveCopulaTransport(
         Amat->ownershipRange(Istart, Iend);
 
         for (PetscInt Irow = Istart; Irow < Iend; ++Irow) {
-            const int    i_x = static_cast<int>(Irow) / nu;
-            const int    j_u = static_cast<int>(Irow) % nu;
+            const int    j_u = static_cast<int>(Irow) / NX;
+            const int    i_x = static_cast<int>(Irow) % NX;
             const double vj  = v[j_u];
 
             // ---- diagonal ----
@@ -2970,7 +2982,7 @@ void Grid2D::SolveCopulaTransport(
 
             // ---- west neighbour ----
             if (i_x > 0) {
-                const PetscInt col  = gIdx(i_x - 1, j_u, nu);
+                const PetscInt col  = gIdxXfast(i_x - 1, j_u);
                 const double   coef = -(vj * inv_dx
                                       + (D > 0.0 ? D * inv_dx2 : 0.0));
                 Amat->setValue(Irow, col, coef, ADD_VALUES);
@@ -2978,7 +2990,7 @@ void Grid2D::SolveCopulaTransport(
 
             // ---- east neighbour ----
             if (D > 0.0 && i_x < NX - 1) {
-                const PetscInt col  = gIdx(i_x + 1, j_u, nu);
+                const PetscInt col  = gIdxXfast(i_x + 1, j_u);
                 const double   coef = -(D * inv_dx2);
                 Amat->setValue(Irow, col, coef, ADD_VALUES);
             }
@@ -2986,7 +2998,7 @@ void Grid2D::SolveCopulaTransport(
             // ---- u-exchange gain from all other bins ----
             for (int k = 0; k < nu; ++k) {
                 if (k == j_u) continue;
-                const PetscInt col  = gIdx(i_x, k, nu);
+                const PetscInt col  = gIdxXfast(i_x, k);
                 const double   coef = -K(j_u, k);
                 Amat->setValue(Irow, col, coef, ADD_VALUES);
             }
@@ -3014,13 +3026,14 @@ void Grid2D::SolveCopulaTransport(
 
     // Mean concentration at a given x-location:
     //   C(x,t) = INT_0^1 c_u du  ~=  SUM_j c_u_j * du
+    // With x-fastest storage, flat index = j * NX + i_x.
     auto meanAtX = [&](const std::vector<double>& cu_vec, double x_loc) -> double
     {
         int i_x = static_cast<int>(x_loc / DX);
         i_x = std::max(0, std::min(NX - 1, i_x));
         double sum = 0.0;
         for (int j = 0; j < nu; ++j)
-            sum += cu_vec[static_cast<std::size_t>(i_x) * nu + j];
+            sum += cu_vec[static_cast<std::size_t>(j) * NX + i_x];
         return sum * du;
     };
 
@@ -3066,8 +3079,8 @@ void Grid2D::SolveCopulaTransport(
             VecGetArrayRead(c_vec.raw(), &c_arr);
 
             for (PetscInt Irow = bs; Irow < be; ++Irow) {
-                const int    i_x = static_cast<int>(Irow) / nu;
-                const int    j_u = static_cast<int>(Irow) % nu;
+                const int    j_u = static_cast<int>(Irow) / NX;
+                const int    i_x = static_cast<int>(Irow) % NX;
                 const double vj  = v[j_u];
 
                 double rhs = static_cast<double>(c_arr[Irow]) * inv_dt;

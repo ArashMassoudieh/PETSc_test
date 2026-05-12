@@ -32,16 +32,20 @@
 // ============================================================
 // FS / path helpers
 // ============================================================
+
 bool createDirectory(const std::string& path)
 {
-#if defined(_WIN32)
-    int status = _mkdir(path.c_str());
-#else
-    int status = mkdir(path.c_str(), 0755);
-#endif
-    if (status == 0) return true;
-    if (errno == EEXIST) return true;
-    return false;
+    if (path.empty()) return true;
+    std::error_code ec;
+    std::filesystem::create_directories(path, ec);
+    if (ec) {
+        // Tolerate "already exists" — create_directories returns false in that case
+        // but doesn't set ec, so any ec here is a genuine failure.
+        std::cerr << "[warn] createDirectory: failed to create '" << path
+                  << "': " << ec.message() << "\n";
+        return false;
+    }
+    return true;
 }
 
 bool fileExists(const std::string& path)

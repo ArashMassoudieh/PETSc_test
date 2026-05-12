@@ -56,3 +56,7 @@ build-qmake-jason/obj/
 *.o
 
 build-qmake-poweredge/bin/
+
+.qtc_clangd/.cache/clangd/index/
+
+.qtc_clangd/

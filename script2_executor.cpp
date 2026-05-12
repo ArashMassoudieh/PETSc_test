@@ -35,10 +35,14 @@ struct RuntimeState
     S2Context                                                  ctx;
     std::map<std::string, std::unique_ptr<Grid2D>>             grids;
     std::map<std::string, std::unique_ptr<CopulaAccumulator>>  accums;
-    std::map<std::string, std::unique_ptr<BTCAccumulator>>     btc_accums;   // <-- added
+    std::map<std::string, std::unique_ptr<BTCAccumulator>>     btc_accums;
     // Mean CDF accumulator: sum of per-realization CDFs (vector of (u,v) pairs)
     // keyed by a label the user assigns with g.extract_cdf output=NAME
     std::map<std::string, std::vector<TimeSeries<double>>>     cdf_sets;
+
+    // ---- Loaded objects (from disk, e.g. precomputed mean copulas/CDFs) ----
+    std::map<std::string, CMatrix>            copulas;   // <-- added
+    std::map<std::string, TimeSeries<double>> cdfs;      // <-- added
 
     int rank = 0;
 
@@ -49,7 +53,6 @@ struct RuntimeState
                                                        "declare it with: grid " + name + " = nx:...");
         return *it->second;
     }
-
     CopulaAccumulator& accum(const std::string& name) {
         auto it = accums.find(name);
         if (it == accums.end())
@@ -57,12 +60,27 @@ struct RuntimeState
                                                               "declare it with: accumulator " + name + " = bins:...");
         return *it->second;
     }
-
-    BTCAccumulator& btc(const std::string& name) {                          // <-- added
+    BTCAccumulator& btc(const std::string& name) {
         auto it = btc_accums.find(name);
         if (it == btc_accums.end())
             throw std::runtime_error("btc accumulator '" + name + "' not found");
         return *it->second;
+    }
+
+    // ---- Accessors for loaded objects ----
+    CMatrix& copula(const std::string& name) {                              // <-- added
+        auto it = copulas.find(name);
+        if (it == copulas.end())
+            throw std::runtime_error("copula '" + name + "' not loaded — "
+                                                         "load it with: g.load_copula name=" + name + ", file=...");
+        return it->second;
+    }
+    TimeSeries<double>& cdf(const std::string& name) {                      // <-- added
+        auto it = cdfs.find(name);
+        if (it == cdfs.end())
+            throw std::runtime_error("cdf '" + name + "' not loaded — "
+                                                      "load it with: g.load_cdf name=" + name + ", file=...");
+        return it->second;
     }
 };
 // -----------------------------------------------------------------------
@@ -474,7 +492,6 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
     if (method == "save_mean_cdf") {
         const std::string cdfname = ctx.argVal(args, "cdf", "qx_cdf");
         const std::string savef   = ctx.argVal(args, "file", "mean_qx_cdf.txt");
-
         if (rank == 0) {
             auto it = st.cdf_sets.find(cdfname);
             if (it == st.cdf_sets.end() || it->second.empty()) {
@@ -483,21 +500,181 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
                 return true;
             }
             const auto& cdfs = it->second;
-            // Build mean CDF on a uniform u grid
-            const int nu = (int)cdfs[0].size();
-            TimeSeries<double> mean_cdf;
-            for (int k = 0; k < nu; ++k) {
-                double u_sum = 0.0, v_sum = 0.0;
-                for (const auto& ts : cdfs) {
-                    u_sum += ts.getTime(k);
-                    v_sum += ts.getValue(k);
-                }
-                mean_cdf.append(u_sum / cdfs.size(), v_sum / cdfs.size());
-            }
+
+            // Pack into a TimeSeriesSet, treating u as "time"
+            TimeSeriesSet<double> tss;
+            for (const auto& ts : cdfs) tss.append(ts, "");
+
+            // Reference-grid interpolation (handles non-uniform u-grids,
+            // skips realizations whose u-support doesn't cover a given u)
+            TimeSeries<double> mean_cdf =
+                tss.mean_ts_longest(/*start_item=*/0, /*time_eps=*/1e-12);
+
             ensureDir(savef.substr(0, savef.find_last_of("/\\")), rank);
             mean_cdf.writefile(savef);
             std::cout << "  save_mean_cdf " << cdfname << " ("
-                      << cdfs.size() << " realizations) -> " << savef << "\n";
+                      << cdfs.size() << " realizations) -> "
+                      << savef << "  (" << mean_cdf.size() << " points)\n";
+        }
+        MPI_Barrier(PETSC_COMM_WORLD);
+        return true;
+    }
+
+    // load_copula
+    if (method == "load_copula") {
+        const std::string name = ctx.argVal(args, "name", "");
+        const std::string file = ctx.argVal(args, "file", "");
+        if (name.empty() || file.empty()) {
+            std::cerr << "[err] load_copula: need name and file\n";
+            return false;
+        }
+        if (rank == 0) {
+            try {
+                CMatrix M = CMatrix::readCSV(file);
+                Grid2D::checkNormalisation(M, name);   // warns on noisy rows
+                st.copulas[name] = std::move(M);
+                std::cout << "  load_copula " << name << " ("
+                          << st.copulas[name].getnumrows() << "x"
+                          << st.copulas[name].getnumcols()
+                          << ") <- " << file << "\n";
+            } catch (const std::exception& e) {
+                std::cerr << "[err] load_copula: " << e.what() << "\n";
+                return false;
+            }
+        }
+        MPI_Barrier(PETSC_COMM_WORLD);
+        return true;
+    }
+
+    // load_cdf
+    if (method == "load_cdf") {
+        const std::string name  = ctx.argVal(args, "name", "");
+        const std::string file  = ctx.argVal(args, "file", "");
+        const double      u_cap = std::stod(ctx.argVal(args, "u_cap", "0.95"));
+        if (name.empty() || file.empty()) {
+            std::cerr << "[err] load_cdf: need name and file\n";
+            return false;
+        }
+        if (rank == 0) {
+            TimeSeries<double> cdf;
+            if (!cdf.readfile(file)) {
+                std::cerr << "[err] load_cdf: failed to read " << file << "\n";
+                return false;
+            }
+            // Apply u_cap by truncating at the last point with u <= u_cap
+            TimeSeries<double> capped;
+            double v_cap = 0.0;
+            for (int i = 0; i < (int)cdf.size(); ++i) {
+                const double u = cdf.getTime(i);
+                const double v = cdf.getValue(i);
+                if (u <= u_cap) { capped.append(u, v); v_cap = v; }
+                else break;
+            }
+            capped.append(u_cap, v_cap);  // sentinel: v(u >= u_cap) = v_cap
+            st.cdfs[name] = std::move(capped);
+            std::cout << "  load_cdf " << name << " ("
+                      << st.cdfs[name].size() << " pts, u_cap=" << u_cap
+                      << ") <- " << file << "\n";
+        }
+        MPI_Barrier(PETSC_COMM_WORLD);
+        return true;
+    }
+    if (method == "solve_copula_transport") {
+        const std::string adv_name   = ctx.argVal(args, "theta_adv",  "");
+        const std::string diff_name  = ctx.argVal(args, "theta_diff", "");
+        const std::string cdf_name   = ctx.argVal(args, "v_of_u",     "");
+        const double lambda_a        = std::stod(ctx.argVal(args, "lambda_a",  "1.0"));
+        const double lambda_d        = std::stod(ctx.argVal(args, "lambda_d",  "0.1"));
+        const double diffusion       = std::stod(ctx.argVal(args, "diffusion", "0.0"));
+        const double t_end           = std::stod(ctx.argVal(args, "t_end",     "10.0"));
+        const double dt              = std::stod(ctx.argVal(args, "dt",        "0.01"));
+        const double c_left          = std::stod(ctx.argVal(args, "c_left",    "1.0"));
+        const int    output_interval = std::stoi(ctx.argVal(args, "output_interval", "0"));
+        const std::string output_dir = ctx.argVal(args, "output_dir", "");
+        const std::string save_btc   = ctx.argVal(args, "save_btc",   "");
+        const std::string btc_x_str  = ctx.argVal(args, "btc_x",      "");
+
+        // Look up the named objects
+        auto it_adv  = st.copulas.find(adv_name);
+        auto it_diff = st.copulas.find(diff_name);
+        auto it_cdf  = st.cdfs.find(cdf_name);
+        if (it_adv == st.copulas.end()) {
+            std::cerr << "[err] solve_copula_transport: theta_adv '"
+                      << adv_name << "' not loaded\n";
+            return false;
+        }
+        if (it_diff == st.copulas.end()) {
+            std::cerr << "[err] solve_copula_transport: theta_diff '"
+                      << diff_name << "' not loaded\n";
+            return false;
+        }
+        if (it_cdf == st.cdfs.end()) {
+            std::cerr << "[err] solve_copula_transport: v_of_u '"
+                      << cdf_name << "' not loaded\n";
+            return false;
+        }
+
+        const CMatrix& theta_adv  = it_adv->second;
+        const CMatrix& theta_diff = it_diff->second;
+        const TimeSeries<double>& cdf = it_cdf->second;
+
+        // Build v(u) by linear interpolation of the loaded CDF, with tail cap
+        auto v_of_u = [&cdf](double u) -> double {
+            const int n = (int)cdf.size();
+            if (n == 0) return 0.0;
+            if (u <= cdf.getTime(0))     return cdf.getValue(0);
+            if (u >= cdf.getTime(n - 1)) return cdf.getValue(n - 1);
+            // Binary search for the bracketing interval
+            int lo = 0, hi = n - 1;
+            while (hi - lo > 1) {
+                int mid = (lo + hi) / 2;
+                if (cdf.getTime(mid) <= u) lo = mid; else hi = mid;
+            }
+            const double u0 = cdf.getTime(lo),  u1 = cdf.getTime(hi);
+            const double v0 = cdf.getValue(lo), v1 = cdf.getValue(hi);
+            const double a = (u - u0) / (u1 - u0);
+            return (1.0 - a) * v0 + a * v1;
+        };
+
+        // Set diffusion coefficient on the grid (used by SolveCopulaTransport
+        // for the x-direction diffusion AND for computing r_diff = 2D/lambda_d^2)
+        Grid2D& g = st.grid(obj);
+        g.SetVal("diffusion",diffusion);
+        g.SetVal("c_left",c_left);
+
+        // Parse BTC locations
+        if (!btc_x_str.empty()) {
+            std::vector<double> locs;
+            std::stringstream ss(btc_x_str);
+            std::string tok;
+            while (std::getline(ss, tok, ',')) {
+                const auto first = tok.find_first_not_of(" \t");
+                const auto last  = tok.find_last_not_of(" \t");
+                if (first == std::string::npos) continue;
+                tok = tok.substr(first, last - first + 1);
+                if (!tok.empty()) locs.push_back(std::stod(tok));
+            }
+            g.setBTCLocations(locs);
+        }
+
+        // Set up output
+        if (!output_dir.empty()) ensureDir(output_dir, rank);
+
+        TimeSeriesSet<double> btc_data;
+        g.SolveCopulaTransport(
+            t_end, dt,
+            theta_adv, theta_diff,
+            lambda_a, lambda_d,
+            v_of_u,
+            "upscaled_",                          // ksp_prefix
+            save_btc.empty() ? nullptr : &btc_data,
+            output_interval,
+            output_dir);
+
+        if (!save_btc.empty() && rank == 0) {
+            ensureDir(save_btc.substr(0, save_btc.find_last_of("/\\")), rank);
+            btc_data.write(save_btc);
+            std::cout << "  saved upscaled BTC -> " << save_btc << "\n";
         }
         MPI_Barrier(PETSC_COMM_WORLD);
         return true;

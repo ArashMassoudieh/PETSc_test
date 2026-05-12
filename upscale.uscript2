@@ -1,0 +1,66 @@
+# ==========================================================================
+# test_upscale_Dsweep.uscript2
+#
+# Step 2: Run the upscaled copula-based transport model using the mean
+# copulas and mean velocity CDF precomputed in the fine-scale step.
+#
+# Sweeps over four diffusion coefficients D in {0, 0.001, 0.01, 0.1} at
+# fixed (lambda_a, lambda_d). Solves the integro-differential PDE in (x, u):
+#
+#   dc/dt + v(u) dc/dx = D d^2 c/dx^2
+#                       - [v(u)/lambda_a + 2D/lambda_d^2] c
+#                       + (v(u)/lambda_a) integral[ theta_adv(u,u')  c du']
+#                       + (2D/lambda_d^2) integral[ theta_diff(u,u') c du']
+#
+# Outputs per-D subdirectories with VTI snapshots and a BTC csv that can
+# be compared against the fine-scale ensemble mean ($in/mean_btc.csv).
+# ==========================================================================
+
+# ---- Paths ---------------------------------------------------------------
+set in  = /home/arash/Projects/UpscalingResults/Test
+set out = /home/arash/Projects/UpscalingResults/Test/Upscaled
+
+# ---- Fixed copula distances (must match the fine-scale extraction) -------
+set lambda_a = 1.0
+set lambda_d = 0.1
+
+# ---- Transport parameters (shared across the D sweep) --------------------
+set t_end     = 10.0
+set dt        = 0.01
+set c_left    = 1.0
+set btc_x     = 0.5, 1.0, 1.5, 2.0, 2.5
+set out_every = 50
+
+# ==========================================================================
+# Grid for the upscaled solve
+#
+# Same Lx and Nx as the fine-scale grid so BTC locations align directly.
+# The y-dimension is not used by SolveCopulaTransport — the second axis is
+# velocity rank u, whose resolution comes from the loaded copula size.
+# ny=1 makes the y-dimension degenerate.
+# ==========================================================================
+grid g_up = nx:60, ny:20, Lx:3.0, Ly:1.0
+
+# ==========================================================================
+# Load precomputed mean copulas and mean velocity CDF from disk
+# ==========================================================================
+g_up.load_copula  name=theta_adv,  file=$in/mean_copula_adv_x.csv
+g_up.load_copula  name=theta_diff, file=$in/mean_copula_diff_r.csv
+g_up.load_cdf     name=v_of_u,     file=$in/mean_qx_cdf.txt, u_cap=0.95
+
+# ==========================================================================
+# Diffusion sweep: D = 0, 0.001, 0.01, 0.1
+# ==========================================================================
+g_up.solve_copula_transport  theta_adv=theta_adv,
+                             theta_diff=theta_diff,
+                             v_of_u=v_of_u,
+                             lambda_a=$lambda_a,
+                             lambda_d=$lambda_d,
+                             diffusion=0.0,
+                             t_end=$t_end,
+                             dt=$dt,
+                             c_left=$c_left,
+                             btc_x=$btc_x,
+                             output_interval=$out_every,
+                             output_dir=$out/D_0/transport,
+                             save_btc=$out/D_0/btc.csv
