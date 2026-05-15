@@ -1,0 +1,142 @@
+# ==========================================================================
+# homogeneous.uscript2
+#
+# Near-homogeneous control test: sigma_lnK = 0.05 so the velocity field is
+# essentially uniform. Fine-scale Monte Carlo and upscaled copula-based
+# solver should agree closely. Any residual gap is diagnostic of a
+# remaining numerical/structural issue (not heterogeneity-induced
+# non-Fickian transport).
+#
+# This script runs both fine-scale (2 realizations, enough for a tight
+# velocity field) and the upscaled solve on the resulting mean
+# copula + CDF. Output goes to a separate folder so it doesn't collide
+# with the production heterogeneous results.
+#
+# Output layout:
+#   $out/r{1,2}/                       per-realization fine-scale
+#   $out/mean_copula_adv_x.csv         ensemble mean adv copula
+#   $out/mean_copula_diff_r.csv        ensemble mean diff copula
+#   $out/mean_qx_cdf.txt               ensemble mean velocity CDF
+#   $out/mean_btc.csv                  ensemble mean fine-scale BTC
+#   $out/Upscaled/D_0/btc.csv          upscaled BTC
+# ==========================================================================
+
+# ---- Paths ---------------------------------------------------------------
+set out = /home/arash/Projects/UpscalingResults/Homogeneous
+
+# ---- K-field parameters --------------------------------------------------
+# sigma_lnK = 0.05 -> near-uniform K, near-uniform qx, narrow velocity CDF
+set stdev     = 0.05
+set corr_x    = 1.0
+set corr_y    = 0.1
+
+# ---- Targeted copula extraction distance --------------------------------
+# d_adv must match the lambda_a passed to the upscaled solve.
+set d_adv     = 0.2
+set d_diff    = 0.1
+
+# ---- Transport parameters -------------------------------------------------
+set t_end       = 50.0
+set diffusion   = 0.0
+set porosity    = 1.0
+set c_left      = 1.0
+set btc_x       = 0.5, 1.5, 2.5
+set out_every   = 50
+
+# ---- Grid ----------------------------------------------------------------
+grid g = nx:60, ny:20, Lx:3.0, Ly:1.0
+
+# ==========================================================================
+# Fine-scale ensemble (2 realizations)
+# ==========================================================================
+repeat i = 1:2
+{
+    set seed = $i
+
+    # K field (near-uniform)
+    g.create_field  name=K_ns, type=gaussian_sgs,
+                    lx=$corr_x, ly=$corr_y,
+                    stdev=1.0, seed=$seed
+    g.to_lognormal  input=K_ns, stdev=$stdev, mean=0.0, output=K
+
+    g.save  field=K,    file=$out/r$i/K.vti
+
+    # Flow
+    g.solve_darcy  Kx=K, Ky=K, H_west=1.0, H_east=0.0
+    g.save  field=head, file=$out/r$i/Head.vti
+    g.save  field=qx,   file=$out/r$i/qx.vti
+    g.save  field=qy,   file=$out/r$i/qy.vti
+
+    # Velocity ranks
+    g.to_ranks  input=qx, output=qx_ranks
+
+    # Advective copula at d_adv (single distance, accumulated)
+    g.extract_copula  field=qx_ranks, direction=x,
+                      range=$d_adv:$d_adv:1,
+                      samples=20000, bins=20,
+                      accumulate=adv_copula,
+                      save=$out/r$i/copula_adv/copula_adv_x.csv
+
+    # Diffusive copula (kept for symmetry; D=0 so it carries no weight)
+    g.extract_copula  field=qx_ranks, direction=r,
+                      range=$d_diff:$d_diff:1,
+                      samples=20000, bins=20,
+                      accumulate=diff_copula,
+                      save=$out/r$i/copula_diff/copula_diff_r.csv
+
+    # Velocity CDF
+    g.extract_cdf  field=qx, output=qx_cdf,
+                   bins=100, threshold=1e-6,
+                   save=$out/r$i/v_cdf/qx_cdf.txt
+
+    # Transport
+    g.assign_constant   field=C, kind=cell, value=0.0
+    g.set_transport     diffusion=$diffusion, porosity=$porosity, c_left=$c_left
+    g.set_btc_locations x=$btc_x
+
+    g.solve_transport   t_end=$t_end,
+                        dt_factor=0.5,
+                        output_interval=$out_every,
+                        output_dir=$out/r$i/transport,
+                        output_base=transport_C,
+                        realization=$i,
+                        save_btc=$out/r$i/btc.csv,
+                        accumulate=btc_mean
+}
+
+# ==========================================================================
+# Save ensemble means
+# ==========================================================================
+adv_copula.save_mean      file=$out/mean_copula_adv_x.csv
+adv_copula.save_mean_vti  file=$out/mean_copula_adv_x.vti
+diff_copula.save_mean     file=$out/mean_copula_diff_r.csv
+diff_copula.save_mean_vti file=$out/mean_copula_diff_r.vti
+
+g.save_mean_cdf  cdf=qx_cdf, file=$out/mean_qx_cdf.txt
+
+btc_mean.save_mean  file=$out/mean_btc.csv
+
+# ==========================================================================
+# Upscaled solve on the ensemble-mean inputs
+# ==========================================================================
+grid gu = nx:60, ny:20, Lx:3.0, Ly:1.0
+
+gu.load_copula  name=theta_adv,  file=$out/mean_copula_adv_x.csv
+gu.load_copula  name=theta_diff, file=$out/mean_copula_diff_r.csv
+gu.load_cdf     name=v_of_u,     file=$out/mean_qx_cdf.txt, u_cap=1.0
+
+gu.set_btc_locations x=$btc_x
+
+gu.solve_copula_transport  theta_adv=theta_adv,
+                           theta_diff=theta_diff,
+                           v_of_u=v_of_u,
+                           lambda_a=$d_adv,
+                           lambda_d=$d_diff,
+                           diffusion=$diffusion,
+                           t_end=$t_end,
+                           dt=0.005,
+                           c_left=$c_left,
+                           btc_x=$btc_x,
+                           output_interval=$out_every,
+                           output_dir=$out/Upscaled/D_0/transport,
+                           save_btc=$out/Upscaled/D_0/btc.csv

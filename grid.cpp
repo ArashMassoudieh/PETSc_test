@@ -2889,27 +2889,36 @@ void Grid2D::SolveCopulaTransport(
     // ----------------------------------------------------------------
     // 3.  Combined exchange kernel K (nu x nu)
     //
-    //   K(j,k) = (v_j / lambda_a)   * theta_adv (j,k)
-    //          + (2D  / lambda_d^2) * theta_diff(j,k)
+    //   K(j,k) = ( <v_j, v_k> / lambda_a ) * theta_adv (j,k)
+    //          + ( 2D  / lambda_d^2     ) * theta_diff(j,k)
+    //
+    //   <v_j, v_k> is the arithmetic mean (v_j + v_k)/2, which makes the
+    //   advective exchange rate symmetric in (j,k) -- required by
+    //   detailed balance / second-law symmetry of f(v, v') in Massoudieh
+    //   & Dentz (2020), Eq. 6.  With v_j/lambda_a alone, slow ranks act
+    //   as one-way traps (no escape mechanism), which produces a
+    //   spuriously heavy tail.
     //
     //   theta matrices store theta*du, so row sums = 1.
-    //   K row sum  K_diag[j] = v_j/lambda_a + 2D/lambda_d^2   (units: 1/time)
+    //   K_diag[j] is the off-diagonal row sum:
+    //     K_diag[j] = sum over k!=j of K(j, k)
+    //   This is the rate of mass leaving bin j (mass-conservative).
     // ----------------------------------------------------------------
     CMatrix K(nu, nu);
     std::vector<double> K_diag(nu, 0.0);
 
     for (int j = 0; j < nu; ++j) {
-        const double r_adv = v[j] / lambda_a;
-        double row_sum = 0.0;
+        double row_sum_off = 0.0;
         for (int k = 0; k < nu; ++k) {
-            const double val = r_adv  * theta_adv (j, k)
-            + r_diff * theta_diff(j, k);
-            K(j, k)  = val;
-            row_sum += val;
+            const double v_pair = 0.5 * (v[j] + v[k]);          // symmetric average
+            const double r_adv  = v_pair / lambda_a;
+            const double val    = r_adv  * theta_adv (j, k)
+                               + r_diff * theta_diff(j, k);
+            K(j, k) = val;
+            if (k != j) row_sum_off += val;
         }
-        K_diag[j] = row_sum;   // = r_adv + r_diff (row sums of theta matrices = 1)
+        K_diag[j] = row_sum_off;
     }
-
     // ----------------------------------------------------------------
     // 4.  Print parameters
     // ----------------------------------------------------------------

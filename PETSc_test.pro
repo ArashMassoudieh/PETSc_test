@@ -255,4 +255,6 @@ GRID_USE_VTK {
 }
 
 DISTFILES += \
-    example.uscript
+    fine_only.uscript2 \
+    test_fine_only.uscript2 \
+    upscale.uscript2

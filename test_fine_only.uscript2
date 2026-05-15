@@ -25,7 +25,7 @@ set corr_y    = 0.1
 set base_seed = 1000
 
 # ---- Transport parameters -------------------------------------------------
-set t_end       = 10.0
+set t_end       = 30.0
 set dt          = 0.01
 set diffusion   = 1.0e-4
 set porosity    = 1.0

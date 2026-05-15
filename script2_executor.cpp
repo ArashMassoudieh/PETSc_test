@@ -394,10 +394,8 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
         // Sweep log-spaced deltas across the range; record correlation
         // vs delta for save_corr, and capture the copula at the delta
         // closest to delta_rep in log space.
+        // ---- Sweep deltas to record correlation-vs-distance (diagnostic) ----
         TimeSeries<double> corr_ts;
-        std::vector<double> copula_mat;
-        double best_log_dist = 1e30;
-
         for (int k = 0; k < rng.n; ++k) {
             const double exponent = (rng.n == 1) ? 0.0
                                                  : static_cast<double>(k) / (rng.n - 1);
@@ -406,36 +404,41 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
             try {
                 TimeSeries<double> pairs = g.sampleGaussianPerturbation(
                     field, kind, n_samples, delta, 0, dir);
-
                 corr_ts.append(delta, pairs.correlation_tc());
-
-                const double ldist = std::abs(std::log(delta) - std::log(delta_rep));
-                if (ldist < best_log_dist) {
-                    best_log_dist = ldist;
-                    copula_mat    = binnedCopula(pairs, bins);
-                }
             } catch (...) {
                 if (rank == 0)
-                    std::cerr << "  [warn] extract_copula: failed at delta=" << delta << "\n";
+                    std::cerr << "  [warn] extract_copula: correlation sweep "
+                              << "failed at delta=" << delta << "\n";
             }
         }
 
-        if (rank == 0) {
-            std::cout << "  extract_copula " << field << " dir=" << dirstr
-                      << " range=[" << rng.lo << ":" << rng.hi << ":" << rng.n << "]"
-                      << " bins=" << bins
-                      << "  delta_rep=" << delta_rep << "\n";
+        // ---- Build copula at delta_rep, once ----
+        std::vector<double> copula_mat;
+        try {
+            TimeSeries<double> pairs = g.sampleGaussianPerturbation(
+                field, kind, n_samples, delta_rep, 0, dir);
 
-            if (!savef.empty()) {
-                ensureDir(savef.substr(0, savef.find_last_of("/\\")), rank);
-                if (!copula_mat.empty())
-                    writeCopulaCSV(copula_mat, bins, savef);
+            copula_mat = binnedCopula(pairs, bins);
+
+            // Sinkhorn-normalize to enforce uniform marginals
+            CopulaBinnedMatrix M(bins);
+            for (int i = 0; i < bins; ++i)
+                for (int j = 0; j < bins; ++j)
+                    M[i][j] = copula_mat[i * bins + j];
+
+            if (!M.sinkhornNormalize(200, 1e-10, /*repair_empties=*/true)) {
+                if (rank == 0)
+                    std::cerr << "  [warn] extract_copula: Sinkhorn did not converge "
+                              << "at delta_rep=" << delta_rep << "\n";
             }
 
-            if (!savecorr.empty()) {
-                ensureDir(savecorr.substr(0, savecorr.find_last_of("/\\")), rank);
-                corr_ts.writefile(savecorr);
-            }
+            for (int i = 0; i < bins; ++i)
+                for (int j = 0; j < bins; ++j)
+                    copula_mat[i * bins + j] = M[i][j];
+        } catch (...) {
+            if (rank == 0)
+                std::cerr << "  [warn] extract_copula: copula extraction failed "
+                          << "at delta_rep=" << delta_rep << "\n";
         }
 
         // Accumulate into the named accumulator, auto-creating it on
@@ -550,7 +553,7 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
     if (method == "load_cdf") {
         const std::string name  = ctx.argVal(args, "name", "");
         const std::string file  = ctx.argVal(args, "file", "");
-        const double      u_cap = std::stod(ctx.argVal(args, "u_cap", "0.95"));
+        const double      u_cap = std::stod(ctx.argVal(args, "u_cap", "1.00"));
         if (name.empty() || file.empty()) {
             std::cerr << "[err] load_cdf: need name and file\n";
             return false;
@@ -673,7 +676,7 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
 
         if (!save_btc.empty() && rank == 0) {
             ensureDir(save_btc.substr(0, save_btc.find_last_of("/\\")), rank);
-            btc_data.write(save_btc);
+            btc_data.derivative().write(save_btc);
             std::cout << "  saved upscaled BTC -> " << save_btc << "\n";
         }
         MPI_Barrier(PETSC_COMM_WORLD);
@@ -849,7 +852,7 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
         if (!savebtc.empty() && btc_ptr) {
             if (rank == 0) {
                 ensureDir(savebtc.substr(0, savebtc.find_last_of("/\\")), rank);
-                btc_data.write(savebtc);
+                btc_data.derivative().write(savebtc);
                 std::cout << "  saved per-realization BTC -> " << savebtc << "\n";
             }
             MPI_Barrier(PETSC_COMM_WORLD);
@@ -861,7 +864,7 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
                 if (rank == 0)
                     std::cout << "  [auto] created BTC accumulator '" << accname << "'\n";
             }
-            st.btc(accname).add(btc_data);
+            st.btc(accname).add(btc_data.derivative());
         }
 
         return true;

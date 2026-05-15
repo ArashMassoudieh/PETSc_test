@@ -18,7 +18,7 @@
 # ==========================================================================
 
 # ---- Output root ----------------------------------------------------------
-set out = /home/arash/Projects/UpscalingResults/Test
+set out = /home/arash/Projects/UpscalingResults/D=0_01
 
 # ---- K-field parameters --------------------------------------------------
 set stdev     = 2.0
@@ -30,20 +30,20 @@ set base_seed = 1000
 # These must match the lambda_a / lambda_d used in the upscaled run.
 # d_adv  = lambda_x   (advective correlation length)
 # d_diff = lambda_y   (transverse correlation length)
-set d_adv  = 1.0
+set d_adv  = 0.2
 set d_diff = 0.1
 
 # ---- Transport parameters -------------------------------------------------
-set t_end       = 10.0
+set t_end       = 50.0
 set dt          = 0.01
-set diffusion   = 1.0e-4
+set diffusion   = 0.01
 set porosity    = 1.0
 set c_left      = 1.0
-set btc_x       = 0.5, 1.0, 1.5, 2.0, 2.5
+set btc_x       = 0.5, 1.5, 2.5
 set out_every   = 50
 
 # ---- Create the grid (persists across all iterations) --------------------
-grid g = nx:60, ny:20, Lx:3.0, Ly:1.0
+grid g = nx:300, ny:100, Lx:3.0, Ly:1.0
 
 # Note: copula accumulators (adv_copula, diff_copula) and the BTC
 # accumulator (btc_mean) are auto-created on first use inside the loop.
@@ -51,7 +51,7 @@ grid g = nx:60, ny:20, Lx:3.0, Ly:1.0
 # ==========================================================================
 # Realization loop
 # ==========================================================================
-repeat i = 1:10
+repeat i = 1:100
 {
     # ---- Per-realization seed (varies each iteration) --------------------
     set seed = $i
@@ -88,7 +88,7 @@ repeat i = 1:10
     # Single distance only; accumulates into adv_copula for ensemble mean.
     g.extract_copula  field=qx_ranks, direction=x,
                       range=$d_adv:$d_adv:1,
-                      samples=5000, bins=20,
+                      samples=15000, bins=100,
                       accumulate=adv_copula,
                       save=$out/r$i/copula_adv/copula_adv_x.csv
 
@@ -96,21 +96,21 @@ repeat i = 1:10
     # Full geometric sweep; not accumulated, just saved per realization.
     g.extract_copula  field=qx_ranks, direction=x,
                       range=0.001:$corr_x:20,
-                      samples=5000, bins=20,
+                      samples=15000, bins=100,
                       save_corr=$out/r$i/copula_adv/corr_adv_x.txt
 
     # ---- Diffusive copula at the targeted distance d_diff ----------------
     # Radial direction (isotropic); accumulates into diff_copula.
     g.extract_copula  field=qx_ranks, direction=r,
                       range=$d_diff:$d_diff:1,
-                      samples=5000, bins=20,
+                      samples=5000, bins=100,
                       accumulate=diff_copula,
                       save=$out/r$i/copula_diff/copula_diff_r.csv
 
     # ---- Diffusive correlation-vs-distance curve (diagnostics) -----------
     g.extract_copula  field=qx_ranks, direction=r,
                       range=0.001:$corr_x:20,
-                      samples=5000, bins=20,
+                      samples=5000, bins=100,
                       save_corr=$out/r$i/copula_diff/corr_diff_r.txt
 
     # ---- Extract marginal velocity CDF -----------------------------------
@@ -124,13 +124,13 @@ repeat i = 1:10
     g.set_transport     diffusion=$diffusion, porosity=$porosity, c_left=$c_left
     g.set_btc_locations x=$btc_x
 
-    # Solve transport, write VTI snapshots every $out_every steps, save the
-    # per-realization BTC, and accumulate into the ensemble-mean BTC.
+    #Solve transport, write VTI snapshots every $out_every steps, save the
+    #per-realization BTC, and accumulate into the ensemble-mean BTC.
     g.solve_transport   t_end=$t_end,
-                        dt_factor=0.5,
-                        output_interval=$out_every,
-                        output_dir=$out/r$i/transport,
-                        output_base=transport_C,
+                       dt_factor=0.5,
+                       output_interval=$out_every,
+                       output_dir=$out/r$i/transport,
+                       output_base=transport_C,
                         realization=$i,
                         save_btc=$out/r$i/btc.csv,
                         accumulate=btc_mean

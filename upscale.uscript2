@@ -17,19 +17,20 @@
 # ==========================================================================
 
 # ---- Paths ---------------------------------------------------------------
-set in  = /home/arash/Projects/UpscalingResults/Test
-set out = /home/arash/Projects/UpscalingResults/Test/Upscaled
+set in  = /home/arash/Projects/UpscalingResults/D=0_0001
+set out = /home/arash/Projects/UpscalingResults/D=0_0001/Upscaled
 
 # ---- Fixed copula distances (must match the fine-scale extraction) -------
-set lambda_a = 1.0
+set lambda_a = 0.2
 set lambda_d = 0.1
 
 # ---- Transport parameters (shared across the D sweep) --------------------
-set t_end     = 10.0
+set t_end     = 50.0
 set dt        = 0.01
 set c_left    = 1.0
-set btc_x     = 0.5, 1.0, 1.5, 2.0, 2.5
+set btc_x     = 0.5, 1.5, 2.5
 set out_every = 50
+set diffusion = 0.0001
 
 # ==========================================================================
 # Grid for the upscaled solve
@@ -39,7 +40,7 @@ set out_every = 50
 # velocity rank u, whose resolution comes from the loaded copula size.
 # ny=1 makes the y-dimension degenerate.
 # ==========================================================================
-grid g_up = nx:60, ny:20, Lx:3.0, Ly:1.0
+grid g_up = nx:300, ny:100, Lx:3.0, Ly:1.0
 
 # ==========================================================================
 # Load precomputed mean copulas and mean velocity CDF from disk
@@ -56,11 +57,11 @@ g_up.solve_copula_transport  theta_adv=theta_adv,
                              v_of_u=v_of_u,
                              lambda_a=$lambda_a,
                              lambda_d=$lambda_d,
-                             diffusion=0.0,
+                             diffusion=$diffusion,
                              t_end=$t_end,
                              dt=$dt,
                              c_left=$c_left,
                              btc_x=$btc_x,
                              output_interval=$out_every,
-                             output_dir=$out/D_0/transport,
-                             save_btc=$out/D_0/btc.csv
+                             output_dir=$out/transport,
+                             save_btc=$out/btc.csv
