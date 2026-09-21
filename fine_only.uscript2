@@ -18,7 +18,7 @@
 # ==========================================================================
 
 # ---- Output root ----------------------------------------------------------
-set out = /home/arash/Projects/UpscalingResults/D=0_01
+set out = /home/arash/Projects/UpscalingResults/D=0_0
 
 # ---- K-field parameters --------------------------------------------------
 set stdev     = 2.0
@@ -36,7 +36,7 @@ set d_diff = 0.1
 # ---- Transport parameters -------------------------------------------------
 set t_end       = 50.0
 set dt          = 0.01
-set diffusion   = 0.01
+set diffusion   = 0.0
 set porosity    = 1.0
 set c_left      = 1.0
 set btc_x       = 0.5, 1.5, 2.5
