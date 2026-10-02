@@ -2953,8 +2953,8 @@ void Grid2D::SolveCopulaTransport(
     //  DIAGONAL:
     //    inv_dt                          time derivative
     //    + v_j * inv_dx                  upwind advection (assumes v_j >= 0)
-    //    + D * inv_dx2 (boundary) or
-    //      2D * inv_dx2 (interior)       x-diffusion
+    //    + face diffusion losses: 2D/dx^2 at the inlet (half-cell
+    //      Dirichlet distance), D/dx^2 per interior face, zero at outlet
     //    + K_diag[j_u]                   exchange loss (both copulas)
     //
     //  OFF-DIAGONAL IN x  (same j_u):
@@ -2984,10 +2984,11 @@ void Grid2D::SolveCopulaTransport(
                           + vj * inv_dx
                           + K_diag[j_u];
 
-            if (D > 0.0)
-                diag += (i_x > 0 && i_x < NX - 1)
-                            ? 2.0 * D * inv_dx2     // interior: two neighbours
-                            :       D * inv_dx2;    // boundary: one neighbour
+            if (D > 0.0) {
+                const double west = (i_x == 0) ? 2.0 : 1.0;
+                const double east = (i_x < NX - 1) ? 1.0 : 0.0;
+                diag += (west + east) * D * inv_dx2;
+            }
 
             // ---- west neighbour ----
             if (i_x > 0) {
@@ -3094,11 +3095,11 @@ void Grid2D::SolveCopulaTransport(
 
                 double rhs = static_cast<double>(c_arr[Irow]) * inv_dt;
 
-                // Left boundary: ghost cell = c_left_ (uniform across u)
+                // Inlet lies half a cell from the first cell centre.
                 if (i_x == 0) {
                     rhs += vj * inv_dx * c_left_;          // advection
                     if (D > 0.0)
-                        rhs += D * inv_dx2 * c_left_;      // diffusion
+                        rhs += 2.0 * D * inv_dx2 * c_left_; // diffusion
                 }
 
                 b_vec.setValue(Irow, rhs, INSERT_VALUES);
