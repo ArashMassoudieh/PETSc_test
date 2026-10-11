@@ -412,6 +412,30 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
             }
         }
 
+        // Save the sampled-field correlation without changing its definition.
+        // Directory creation here is rank-local; ensureDir includes a barrier
+        // and must not be called inside a rank-zero-only branch.
+        if (!savecorr.empty()) {
+            int saved = 1;
+            if (rank == 0) {
+                const auto slash = savecorr.find_last_of("/\\");
+                if (slash != std::string::npos)
+                    saved = createDirectory(savecorr.substr(0, slash));
+                if (saved) {
+                    std::ofstream out(savecorr);
+                    out << std::setprecision(17);
+                    for (int i = 0; i < static_cast<int>(corr_ts.size()); ++i)
+                        out << corr_ts.getTime(i) << ',' << corr_ts.getValue(i) << '\n';
+                    out.close();
+                    saved = !out.fail();
+                }
+                if (!saved)
+                    std::cerr << "[err] extract_copula: cannot write " << savecorr << '\n';
+            }
+            MPI_Bcast(&saved, 1, MPI_INT, 0, PETSC_COMM_WORLD);
+            if (!saved) return false;
+        }
+
         // ---- Build copula at delta_rep, once ----
         std::vector<double> copula_mat;
         try {
