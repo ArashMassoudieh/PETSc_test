@@ -10,6 +10,10 @@
 #include "TimeSeries.h"
 #include "TimeSeriesSet.h"
 
+// Forward declare clustering structures
+struct ClusterMetrics;
+struct ClusterInfo;
+
 // -----------------------------
 // Simulation switches / options
 // -----------------------------

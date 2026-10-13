@@ -2,6 +2,7 @@
 #include "sim_runner.h"
 #include "sim_helpers.h"
 #include "copula_analysis.h"
+#include "clustering.h"
 
 #include <mpi.h>
 
