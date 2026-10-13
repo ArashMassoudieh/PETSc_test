@@ -204,6 +204,76 @@ static void append_reject_log(const std::string& run_dir,
     f << realization << "," << attempt << "," << esc(stage) << "," << esc(what) << "\n";
 }
 
+static void write_run_manifest(
+    const std::string& run_dir,
+    const SimParams& P,
+    const RunOptions& opts,
+    const FineScaleOutputs& fine_outputs,
+    int nReal_completed)
+{
+    const std::string manifest_path = joinPath(run_dir, "run_manifest.txt");
+    std::ofstream f(manifest_path);
+    if (!f) return;
+
+    f << std::setprecision(15);
+    f << "# Run Manifest\n";
+    f << "timestamp=" << makeTimestamp() << "\n";
+    f << "\n# Simulation Parameters\n";
+    f << "nx=" << P.nx << "\n";
+    f << "ny=" << P.ny << "\n";
+    f << "nu=" << P.nu << "\n";
+    f << "Lx=" << P.Lx << "\n";
+    f << "Ly=" << P.Ly << "\n";
+    f << "correlation_ls_x=" << P.correlation_ls_x << "\n";
+    f << "correlation_ls_y=" << P.correlation_ls_y << "\n";
+    f << "stdev=" << P.stdev << "\n";
+    f << "g_mean=" << P.g_mean << "\n";
+    f << "diffusion_factor=" << P.diffusion_factor << "\n";
+    f << "Diffusion_coefficient=" << P.Diffusion_coefficient << "\n";
+    f << "run_seed=" << P.run_seed << "\n";
+    f << "t_end_pdf=" << P.t_end_pdf << "\n";
+    f << "num_x_locations=" << P.xLocations.size() << "\n";
+
+    f << "\n# Run Options\n";
+    f << "upscale_only=" << (opts.upscale_only ? "true" : "false") << "\n";
+    f << "hardcoded_mean=" << (opts.hardcoded_mean ? "true" : "false") << "\n";
+    f << "solve_fine_scale_transport=" << (opts.solve_fine_scale_transport ? "true" : "false") << "\n";
+    f << "solve_upscale_transport=" << (opts.solve_upscale_transport ? "true" : "false") << "\n";
+    f << "upscale_each_realization=" << (opts.upscale_each_realization ? "true" : "false") << "\n";
+    f << "control_mode=";
+    switch (opts.control_mode) {
+        case RunOptions::ControlMode::Standard:
+            f << "Standard\n";
+            break;
+        case RunOptions::ControlMode::MeanVelocityIndividualLc:
+            f << "MeanVelocityIndividualLc\n";
+            break;
+        case RunOptions::ControlMode::IndividualVelocityMeanLc:
+            f << "IndividualVelocityMeanLc\n";
+            break;
+    }
+    f << "use_representative_clustering=" << (opts.use_representative_clustering ? "true" : "false") << "\n";
+    if (opts.use_representative_clustering) {
+        f << "num_representatives=" << opts.num_representatives << "\n";
+        f << "clustering_metric=" << opts.clustering_metric << "\n";
+    }
+
+    f << "\n# Mean Parameters\n";
+    f << "lc_mean=" << fine_outputs.lc_mean << "\n";
+    f << "velocity_lx_mean=" << fine_outputs.velocity_lx_mean << "\n";
+    f << "velocity_ly_mean=" << fine_outputs.velocity_ly_mean << "\n";
+    f << "lambda_K_x_mean=" << fine_outputs.lambda_K_x_mean << "\n";
+    f << "lambda_K_y_mean=" << fine_outputs.lambda_K_y_mean << "\n";
+    f << "dt_mean=" << fine_outputs.dt_mean << "\n";
+    f << "nu_x_mean=" << fine_outputs.nu_x_mean << "\n";
+    f << "nu_y_mean=" << fine_outputs.nu_y_mean << "\n";
+
+    f << "\n# Results\n";
+    f << "nReal_completed=" << nReal_completed << "\n";
+    f << "git_revision=" << fine_outputs.git_revision << "\n";
+}
+
+
 // ============================================================================
 // PT mean-arrival helpers
 // ============================================================================
@@ -490,6 +560,13 @@ static bool run_fine_loop_collect(
     outputs.BTCs_transport_cdf.resize(P.xLocations.size());
     outputs.PT_pdfs.resize(P.xLocations.size());
     outputs.PT_cdfs.resize(P.xLocations.size());
+
+    if (opts.upscale_each_realization) {
+        outputs.BTCs_upscaled_pdf.resize(P.xLocations.size());
+        outputs.BTCs_upscaled_cdf.resize(P.xLocations.size());
+        outputs.PT_upscaled_pdfs.resize(P.xLocations.size());
+        outputs.PT_upscaled_cdfs.resize(P.xLocations.size());
+    }
 
     const int nReal = P.nReal_default;
 
@@ -1190,6 +1267,10 @@ static bool run_fine_loop_collect(
                 outputs.dt_all.push_back(dt_optimal);
                 outputs.lc_all.push_back(lc_emp);
 
+                if (opts.upscale_each_realization) {
+                    outputs.qx_inverse_cdf_all.push_back(qx_inverse_cdf);
+                }
+
                 if (opts.solve_fine_scale_transport) {
                     TimeSeriesSet<double> BTCs_FineScaled_deriv = BTCs_FineScaled.derivative();
 
@@ -1214,6 +1295,13 @@ static bool run_fine_loop_collect(
                     const int nmin2 = std::min((int)P.xLocations.size(), (int)PT_cdf_local.size());
                     for (int i = 0; i < nmin2; ++i)
                         outputs.PT_cdfs[i].append(PT_cdf_local[i], pfx + fmt_x(P.xLocations[i]));
+                }
+
+                // Store realization parameters for later per-realization upscaling
+                if (opts.upscale_each_realization) {
+                    // Store in a temporary container to use after fine loop completes
+                    // (we need mean parameters first)
+                    // For now, just note that we need to do this after fine loop
                 }
 
                 if (rank == 0) {
@@ -1285,6 +1373,19 @@ static bool run_fine_loop_collect(
 
         writeMeanCorrelations(run_dir, P, outputs, opts);
         computeFinalMeans(outputs);
+
+        // Write per-realization upscaled outputs if available
+        if (opts.upscale_each_realization) {
+            for (int i = 0; i < (int)P.xLocations.size(); ++i) {
+                outputs.BTCs_upscaled_pdf[i].write(
+                    joinPath(run_dir, fmt_x(P.xLocations[i]) + "_upscaled_per_real_pdf.csv"));
+                outputs.BTCs_upscaled_cdf[i].write(
+                    joinPath(run_dir, fmt_x(P.xLocations[i]) + "_upscaled_per_real_cdf.csv"));
+            }
+        }
+
+        // Write run manifest
+        write_run_manifest(run_dir, P, opts, outputs, success);
 
         if (opts.analyze_qx_ranks && outputs.qx_rank_selected_correlations.size() > 0) {
             const TimeSeries<double> mean_rank_selected = mean_ts_by_opts(outputs.qx_rank_selected_correlations, opts);
@@ -1664,6 +1765,120 @@ static void broadcastMeanParameters(
 //   - explicit _pdf/_cdf files use the corresponding explicit stacks
 // ============================================================================
 
+// Upscale a single realization with its own parameters
+static bool run_upscaled_per_realization(
+    const SimParams& P,
+    const RunOptions& opts,
+    const std::string& run_dir,
+    int realization,
+    double lc_r,
+    double lx_r,
+    double ly_r,
+    double nu_x_r,
+    double nu_y_r,
+    double dt_r,
+    const TimeSeries<double>& invcdf_r,
+    double lc_mean,
+    const TimeSeries<double>& invcdf_mean,
+    std::vector<TimeSeriesSet<double>>& BTCs_upscaled_pdf,
+    std::vector<TimeSeriesSet<double>>& BTCs_upscaled_cdf,
+    std::vector<TimeSeriesSet<double>>& PT_upscaled_pdf,
+    std::vector<TimeSeriesSet<double>>& PT_upscaled_cdf,
+    int rank)
+{
+    const int nx = P.nx, ny = P.ny, nu = P.nu;
+    const double Lx = P.Lx, Ly = P.Ly;
+
+    // Choose velocity CDF and lc based on control mode
+    const TimeSeries<double>& invcdf_use = (opts.control_mode == RunOptions::ControlMode::MeanVelocityIndividualLc)
+                                            ? invcdf_mean
+                                            : invcdf_r;
+    double lc_use = (opts.control_mode == RunOptions::ControlMode::IndividualVelocityMeanLc)
+                    ? lc_mean
+                    : lc_r;
+
+    std::string up_real_dir = joinPath(run_dir, "upscaled_r" + aquiutils::numbertostring(realization));
+    if (rank == 0) createDirectory(up_real_dir);
+    MPI_Barrier(PETSC_COMM_WORLD);
+    if (!up_real_dir.empty() && up_real_dir.back() != '/' && up_real_dir.back() != '\\')
+        up_real_dir += "/";
+
+    Grid2D g_u(nx, ny, Lx, Ly);
+
+    switch (opts.upscaled_mixing_model) {
+    case RunOptions::UpscaledMixingModel::Exponential:
+        g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::exponential;
+        break;
+    case RunOptions::UpscaledMixingModel::ExponentialVDep:
+        g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::exponential_vdep;
+        break;
+    case RunOptions::UpscaledMixingModel::Gaussian:
+        g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::gaussian;
+        break;
+    case RunOptions::UpscaledMixingModel::Matern:
+        g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::matern;
+        break;
+    case RunOptions::UpscaledMixingModel::OneOverSum:
+    default:
+        g_u.VelocityCorrelationModel = Grid2D::velocity_correlation_model::oneoversum;
+        break;
+    }
+
+    g_u.setDiffusionFactor(P.diffusion_factor);
+
+    int qx_size = nu * (nx + 1);
+    auto& qx_u = g_u.flux("qx");
+    qx_u.resize(qx_size, 0.0);
+
+    for (int j = 0; j < nu; ++j) {
+        double u = (nu <= 1) ? 0.0 : static_cast<double>(j) / (nu - 1);
+        double v_at_u = invcdf_use.interpol(u);
+        for (int i = 0; i < nx + 1; ++i) {
+            int id = j * (nx + 1) + i;
+            if (id >= qx_size) return false;
+            qx_u[id] = v_at_u;
+        }
+    }
+
+    g_u.setMixingParams(lc_use, lx_r, ly_r, nu_x_r, nu_y_r);
+    g_u.SetVal("diffusion", P.Diffusion_coefficient);
+    g_u.SetVal("porosity", 1.0);
+    g_u.SetVal("c_left", 1.0);
+    g_u.computeMixingDiffusionCoefficient();
+    g_u.assignConstant("C", Grid2D::ArrayKind::Cell, 0.0);
+    g_u.setBTCLocations(P.xLocations);
+
+    if (opts.solve_upscale_transport) {
+        TimeSeriesSet<double> BTCs_up;
+        g_u.SolveTransport(P.t_end_pdf, dt_r, "transport_", 500, up_real_dir, "C", &BTCs_up);
+
+        TimeSeriesSet<double> BTCs_up_deriv = BTCs_up.derivative();
+
+        std::string mode_tag;
+        if (opts.control_mode == RunOptions::ControlMode::MeanVelocityIndividualLc)
+            mode_tag = "meanvel_";
+        else if (opts.control_mode == RunOptions::ControlMode::IndividualVelocityMeanLc)
+            mode_tag = "meanLC_";
+        else
+            mode_tag = "";
+
+        std::string pfx = mode_tag + "r" + aquiutils::numbertostring(realization) + "_";
+
+        // Store raw BTC in CDF stack, derivative in PDF stack
+        for (int i = 0; i < (int)P.xLocations.size() && i < (int)BTCs_up.size(); ++i) {
+            BTCs_up.setSeriesName(i, fmt_x(P.xLocations[i]));
+            BTCs_upscaled_cdf[i].append(BTCs_up[i], pfx + fmt_x(P.xLocations[i]));
+        }
+
+        for (int i = 0; i < (int)P.xLocations.size() && i < (int)BTCs_up_deriv.size(); ++i) {
+            BTCs_up_deriv.setSeriesName(i, fmt_x(P.xLocations[i]));
+            BTCs_upscaled_pdf[i].append(BTCs_up_deriv[i], pfx + fmt_x(P.xLocations[i]));
+        }
+    }
+
+    return true;
+}
+
 static bool run_upscaled(
     const SimParams& P,
     const RunOptions& opts,
@@ -1814,6 +2029,56 @@ static bool run_upscaled(
     up_dir_out = up_dir;
     up_btc_path_out = up_btc_path;
     up_btc_deriv_path_out = up_btc_deriv_path;
+    return true;
+}
+
+// ============================================================================
+// Run per-realization upscaling after fine loop
+// ============================================================================
+
+static bool run_all_realizations_upscaled(
+    const SimParams& P,
+    const RunOptions& opts,
+    const std::string& run_dir,
+    const FineScaleOutputs& fine_outputs,
+    const TimeSeries<double>& invcdf_mean,
+    std::vector<TimeSeriesSet<double>>& BTCs_upscaled_pdf,
+    std::vector<TimeSeriesSet<double>>& BTCs_upscaled_cdf,
+    int rank)
+{
+    if (!opts.upscale_each_realization) return true;
+    if (fine_outputs.qx_inverse_cdf_all.empty()) return true;
+
+    if (rank == 0) {
+        std::cout << "Running per-realization upscaling for "
+                  << fine_outputs.qx_inverse_cdf_all.size() << " realizations\n";
+    }
+
+    for (size_t r = 0; r < fine_outputs.qx_inverse_cdf_all.size(); ++r) {
+        int realization = r + 1;
+
+        if (!run_upscaled_per_realization(
+            P, opts, run_dir, realization,
+            fine_outputs.lc_all[r],
+            fine_outputs.velocity_lx_all[r],
+            fine_outputs.velocity_ly_all[r],
+            std::numeric_limits<double>::quiet_NaN(),  // nu_x_r
+            std::numeric_limits<double>::quiet_NaN(),  // nu_y_r
+            fine_outputs.dt_all[r],
+            fine_outputs.qx_inverse_cdf_all[r],
+            fine_outputs.lc_mean,
+            invcdf_mean,
+            BTCs_upscaled_pdf,
+            BTCs_upscaled_cdf,
+            std::vector<TimeSeriesSet<double>>(),  // PT upscaled PDFs (not used yet)
+            std::vector<TimeSeriesSet<double>>(),  // PT upscaled CDFs (not used yet)
+            rank)) {
+            if (rank == 0) {
+                std::cerr << "WARNING: per-realization upscaling failed for r=" << realization << "\n";
+            }
+        }
+    }
+
     return true;
 }
 
@@ -2054,11 +2319,41 @@ bool run_simulation_blocks(
     out.Fine_Scale_PT_pdf = fine_outputs.PT_pdfs;
     out.Fine_Scale_PT_cdf = fine_outputs.PT_cdfs;
 
+    // If per-realization upscaling was done, merge those outputs with main stacks
+    if (opts.upscale_each_realization && fine_outputs.BTCs_upscaled_pdf.size() == P.xLocations.size()) {
+        for (int i = 0; i < (int)P.xLocations.size(); ++i) {
+            // Merge per-realization upscaled curves into the main stacks
+            for (size_t j = 0; j < fine_outputs.BTCs_upscaled_pdf[i].size(); ++j) {
+                out.Fine_Scale_BTCs_pdf[i].append(fine_outputs.BTCs_upscaled_pdf[i][j],
+                                                   fine_outputs.BTCs_upscaled_pdf[i].getName(j));
+                out.Fine_Scale_BTCs_cdf[i].append(fine_outputs.BTCs_upscaled_cdf[i][j],
+                                                   fine_outputs.BTCs_upscaled_cdf[i].getName(j));
+            }
+        }
+    }
+
     TimeSeries<double> invcdf_mean;
     const bool ok_mean = build_mean_for_upscaled(P, opts, H, out.run_dir, resume_run_dir, fine_outputs, invcdf_mean, rank);
     if (!ok_mean) return false;
 
     broadcastMeanParameters(fine_outputs, invcdf_mean, rank);
+
+    // Per-realization upscaling (if enabled)
+    if (opts.upscale_each_realization && !opts.upscale_only) {
+        fine_outputs.BTCs_upscaled_pdf.resize(P.xLocations.size());
+        fine_outputs.BTCs_upscaled_cdf.resize(P.xLocations.size());
+        const bool ok_per_real = run_all_realizations_upscaled(
+            P, opts, out.run_dir, fine_outputs, invcdf_mean,
+            fine_outputs.BTCs_upscaled_pdf,
+            fine_outputs.BTCs_upscaled_cdf,
+            rank
+        );
+        if (!ok_per_real) {
+            if (rank == 0) {
+                std::cerr << "WARNING: per-realization upscaling had issues\n";
+            }
+        }
+    }
 
     std::string up_dir, up_btc_path, up_btc_deriv_path;
     const bool ok_up = run_upscaled(

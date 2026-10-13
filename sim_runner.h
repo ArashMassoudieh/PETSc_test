@@ -105,6 +105,26 @@ struct RunOptions
     double wiener_dt = 1e-3;
     unsigned long wiener_seed = 12345UL;
     std::string wiener_release = "left-flux"; // "left-uniform" | "left-flux" | "center"
+
+    // Per-realization upscaling control
+    // ----------------------------------
+    bool upscale_each_realization = false;  // run upscaled transport for each realization separately
+    enum class ControlMode {
+        Standard,                    // individual params for each realization (default)
+        MeanVelocityIndividualLc,   // use mean velocity CDF with individual lc
+        IndividualVelocityMeanLc,   // use individual velocity CDF with mean lc
+    };
+    ControlMode control_mode = ControlMode::Standard;
+
+    // Representative clustering (for fast production runs)
+    // ---------------------------------------------------
+    // TODO: Implement clustering in a future phase
+    // - Cluster realizations by: velocity inverse CDF, lc, lambda_x/y
+    // - Select representatives and weight by cluster size
+    // - Run upscaling on representatives, weight average the BTCs
+    bool use_representative_clustering = false;
+    int num_representatives = 10;  // if clustering enabled, cluster into this many representatives
+    std::string clustering_metric = "velocity_lc"; // "velocity_lc", "lc_only", "all"
 };
 
 // -----------------------------
@@ -161,6 +181,9 @@ struct FineScaleOutputs
     std::vector<double> K_ly_all;
     std::vector<double> dt_all;
 
+    // Velocity inverse CDFs per realization (for per-realization upscaling)
+    std::vector<TimeSeries<double>> qx_inverse_cdf_all;
+
     // Mean parameters (filled after fine loop OR via hardcoded/input-source load)
     double nu_x_mean = 1.5;
     double nu_y_mean = 1.5;
@@ -179,6 +202,16 @@ struct FineScaleOutputs
     // PT compare stacks (SEPARATE)
     std::vector<TimeSeriesSet<double>> PT_pdfs;
     std::vector<TimeSeriesSet<double>> PT_cdfs;
+
+    // Per-realization upscaled transport stacks (when upscale_each_realization=true)
+    std::vector<TimeSeriesSet<double>> BTCs_upscaled_pdf;
+    std::vector<TimeSeriesSet<double>> BTCs_upscaled_cdf;
+    std::vector<TimeSeriesSet<double>> PT_upscaled_pdfs;
+    std::vector<TimeSeriesSet<double>> PT_upscaled_cdfs;
+
+    // Metadata for reproducibility
+    std::string git_revision;       // git commit hash
+    double run_time_seconds = 0.0;
 };
 
 // -----------------------------

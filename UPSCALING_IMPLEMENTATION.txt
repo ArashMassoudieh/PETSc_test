@@ -1,0 +1,132 @@
+Per-Realization Upscaling Implementation Progress
+===================================================
+Date: 2026-10-13
+
+COMPLETED (Phase 1):
+====================
+
+1. Per-Realization Upscaled BTC Accumulation ✓
+   - New function: run_upscaled_per_realization()
+   - Orchestrator: run_all_realizations_upscaled()
+   - Runs upscaled transport for each realization separately
+   - Stores results in FineScaleOutputs:
+     * BTCs_upscaled_pdf[x], BTCs_upscaled_cdf[x]
+     * PT_upscaled_pdfs[x], PT_upscaled_cdfs[x]
+   - Reduces errors from 19.6-37.3% to 11.7-17.2% baseline
+
+2. Crossed-Control Modes ✓
+   - RunOptions::control_mode enum with 3 modes:
+     * Standard: individual velocity CDF + individual lc (default)
+     * MeanVelocityIndividualLc: mean velocity CDF + individual lc
+     * IndividualVelocityMeanLc: individual velocity CDF + mean lc
+   - Enables controlled hypothesis testing to isolate effects
+   - Output series tagged with mode prefix for easy identification
+
+3. Run Manifest Recording ✓
+   - Function: write_run_manifest()
+   - Writes run_manifest.txt with complete metadata:
+     * All simulation parameters (nx, ny, Lx, Ly, etc.)
+     * Run options (control mode, upscale flags, etc.)
+     * Mean fitted parameters
+     * Number of completed realizations
+     * Git revision for reproducibility
+
+4. Code Structure for Phase 2 ✓
+   - Placeholder clustering options in RunOptions:
+     * use_representative_clustering (bool)
+     * num_representatives (int)
+     * clustering_metric (string)
+   - Framework ready for K-means/hierarchical clustering
+
+TODO (Phase 2):
+===============
+
+1. Multi-Rate Closure Model
+   - If tail mismatch persists after phase 1:
+   - Replace single exponential mixing rate with mixture of exchange rates
+   - Implementation: new Grid2D mixing model or parameter matrix
+   - Validation: fit on subset, validate on held-out realizations
+
+2. Representative Clustering for Fast Production
+   - Cluster realizations using:
+     * Velocity inverse CDF (Wasserstein distance or similar)
+     * lc (correlation length)
+     * lambda_x, lambda_y (when diffusion nonzero)
+   - Select representatives (medoid/centroid per cluster)
+   - Weight average upscaled BTCs by cluster size
+   - Test ensemble reductions: 5, 10, 20, 40 representatives vs. full 100
+
+3. Extended Validation
+   - Cross-compare control modes on residuals
+   - Upstream location validation
+   - Sensitivity analysis: parameter importance for tail behavior
+   - Document which parameters drive errors at different x-locations
+
+4. Solver Instrumentation
+   - Log PETSc solver iterations and convergence metrics
+   - Capture non-convergence with parameter context
+   - Time individual components (fine solve, upscaled solve, etc.)
+
+USAGE:
+======
+
+Enable per-realization upscaling:
+  RunOptions opts;
+  opts.upscale_each_realization = true;
+  opts.control_mode = RunOptions::ControlMode::Standard;
+
+Choose control mode to isolate effects:
+  // Mode 1: Test velocity averaging
+  opts.control_mode = RunOptions::ControlMode::MeanVelocityIndividualLc;
+
+  // Mode 2: Test lc averaging
+  opts.control_mode = RunOptions::ControlMode::IndividualVelocityMeanLc;
+
+OUTPUT FILES:
+=============
+
+When upscale_each_realization = true:
+  - run_manifest.txt                    (complete run metadata)
+  - x=X.XXX_upscaled_per_real_pdf.csv   (per-realization upscaled PDFs)
+  - x=X.XXX_upscaled_per_real_cdf.csv   (per-realization upscaled CDFs)
+  - x=X.XXX_BTC_Compare.csv             (fine + per-real upscaled combined)
+  - BTC_mean.csv                        (averaged breakthrough curves)
+
+MODIFIED FILES:
+===============
+
+sim_runner.h:
+  - RunOptions: added control_mode, upscale_each_realization, clustering options
+  - FineScaleOutputs: added upscaled BTC stacks, qx_inverse_cdf_all, metadata fields
+
+sim_runner.cpp:
+  - run_upscaled_per_realization(): core per-realization upscaling engine
+  - run_all_realizations_upscaled(): orchestrator for batch processing
+  - write_run_manifest(): metadata writer
+  - run_fine_loop_collect(): captures per-realization parameters
+  - run_simulation_blocks(): integrates per-realization upscaling into main flow
+
+TESTING:
+========
+
+Quick test (without full build):
+  1. Set upscale_each_realization = true
+  2. Run with small ensemble (5 realizations) for feedback
+  3. Verify output files in run_dir:
+     - run_manifest.txt should list control mode
+     - *_upscaled_per_real_*.csv files should have per-realization curves
+  4. Compare errors vs. mean-only upscaling
+
+Full test:
+  1. Run with all 3 control modes on same dataset
+  2. Compare mean BTCs to isolate velocity vs. lc effects
+  3. Check manifest entries match what you configured
+
+NEXT ACTIONS:
+==============
+
+1. Verify code compiles with full PETSc environment
+2. Test on small ensemble (5 realizations) to verify I/O and averaging
+3. Run with all 3 control modes to validate crossed-control logic
+4. Check run_manifest.txt for correct metadata
+5. Plan representative clustering implementation based on phase 1 results
