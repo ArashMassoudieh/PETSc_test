@@ -10,6 +10,7 @@
 
 #include "sim_runner.h"
 #include "sim_helpers.h"
+#include "grid.h"
 
 #include <iostream>
 #include <fstream>
@@ -126,6 +127,7 @@ RunOptions buildRunOptions(const ScriptContext& ctx)
     opts.solve_upscale_transport   = getb("upscale_transport", true);
     opts.perform_particle_tracking = getb("particle_tracking", false);
     opts.perform_upscaled_PT       = getb("upscaled_pt", false);
+    opts.upscale_each_realization  = getb("upscale_each_realization", false);
     opts.analyze_qx_ranks          = getb("qx_ranks", true);
     opts.analyze_qx_copula_diagnostics = getb("copula_analysis", false);
     opts.qx_copula_bootstrap       = geti("copula_bootstrap", 5);
@@ -133,6 +135,25 @@ RunOptions buildRunOptions(const ScriptContext& ctx)
     opts.empirical_copula_bins     = geti("copula_bins", 20);
     opts.qx_rank_num_samples       = geti("qx_rank_num_samples", 10000);
     opts.qx_rank_num_delta         = geti("qx_rank_num_delta", 30);
+
+    if (ctx.has("upscale_control")) {
+        const std::string mode = lower(ctx.expand(ctx.get("upscale_control")));
+        if (mode == "standard") {
+            opts.control_mode = RunOptions::ControlMode::Standard;
+        } else if (mode == "mean_velocity" || mode == "mean_velocity_individual_lc") {
+            opts.control_mode = RunOptions::ControlMode::MeanVelocityIndividualLc;
+        } else if (mode == "mean_lc" || mode == "individual_velocity_mean_lc") {
+            opts.control_mode = RunOptions::ControlMode::IndividualVelocityMeanLc;
+        } else {
+            throw std::invalid_argument(
+                "upscale_control must be standard, mean_velocity, or mean_lc");
+        }
+    }
+
+    if (getb("representative_clustering", false)) {
+        throw std::invalid_argument(
+            "representative_clustering is not implemented yet");
+    }
 
     // Copula dependence model
     if (ctx.has("copula_model")) {
@@ -301,8 +322,7 @@ bool execCopulaTransport(ScriptContext& ctx, RunOutputs& out, int rank)
         };
 
         // Build a minimal Grid2D just for the upscaled solver
-        Grid2D g(P.nx, P.nu);
-        g.setDX(P.Lx / P.nx);
+        Grid2D g(P.nx, P.nu, P.Lx, P.Ly);
         g.SetVal("diffusion", P.Diffusion_coefficient);
         g.SetVal("c_left",    1.0);
         g.setBTCLocations(P.xLocations);

@@ -15,6 +15,7 @@
 #include <string>
 #include <mpi.h>
 
+#include "script_executor.h"    // sim_runner pipeline          (.uscript)
 #include "script2_executor.h"   // direct Grid2D engine         (.uscript2)
 
 int main(int argc, char** argv)
@@ -51,8 +52,18 @@ int main(int argc, char** argv)
 
     bool ok = false;
 
-    if (rank == 0) std::cout << "=== Direct Grid2D script ===\n\n";
-    ok = runScript2File(script_path, rank);
+    if (ext == ".uscript") {
+        if (rank == 0) std::cout << "=== Simulation pipeline script ===\n\n";
+        ok = runScriptFile(script_path, rank);
+    } else if (ext == ".uscript2") {
+        if (rank == 0) std::cout << "=== Direct Grid2D script ===\n\n";
+        ok = runScript2File(script_path, rank);
+    } else {
+        if (rank == 0) {
+            std::cerr << "Unsupported script extension '" << ext
+                      << "'. Use .uscript or .uscript2.\n";
+        }
+    }
 
 
     MPI_Barrier(PETSC_COMM_WORLD);

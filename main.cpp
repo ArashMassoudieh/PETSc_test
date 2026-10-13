@@ -167,6 +167,24 @@ int main(int argc, char** argv)
         else if (a == "--fine-transport")    opts.solve_fine_scale_transport = true;
         else if (a == "--no-up-transport")   opts.solve_upscale_transport = false;
         else if (a == "--up-transport")      opts.solve_upscale_transport = true;
+        else if (a == "--upscale-each-realization") opts.upscale_each_realization = true;
+        else if (a == "--no-upscale-each-realization") opts.upscale_each_realization = false;
+        else if (a.rfind("--upscale-control=", 0) == 0) {
+            const std::string mode = a.substr(std::string("--upscale-control=").size());
+            if (mode == "standard") {
+                opts.control_mode = RunOptions::ControlMode::Standard;
+            } else if (mode == "mean-velocity" || mode == "mean_velocity") {
+                opts.control_mode = RunOptions::ControlMode::MeanVelocityIndividualLc;
+            } else if (mode == "mean-lc" || mode == "mean_lc") {
+                opts.control_mode = RunOptions::ControlMode::IndividualVelocityMeanLc;
+            } else {
+                if (rank == 0) {
+                    std::cerr << "ERROR: --upscale-control must be standard, "
+                              << "mean-velocity, or mean-lc\n";
+                }
+                return 2;
+            }
+        }
         else if (a == "--no-qx-ranks")       opts.analyze_qx_ranks = false;
         else if (a == "--qx-ranks")          opts.analyze_qx_ranks = true;
         else if (a == "--copula-analysis")   opts.analyze_qx_copula_diagnostics = true;

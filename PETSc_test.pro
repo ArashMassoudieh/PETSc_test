@@ -34,6 +34,9 @@ SOURCES += \
     petscsolver.cpp \
     petscvector.cpp \
     plotter.cpp \
+    script_executor.cpp \
+    script_parser.cpp \
+    script_types.cpp \
     script2_executor.cpp \
     script2_parser.cpp \
     sim_helpers.cpp \
@@ -87,6 +90,9 @@ HEADERS += \
     petscsolver.h \
     petscvector.h \
     plotter.h \
+    script_executor.h \
+    script_parser.h \
+    script_types.h \
     script2_executor.h \
     script2_parser.h \
     script2_types.h \

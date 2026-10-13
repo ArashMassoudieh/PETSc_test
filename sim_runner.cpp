@@ -270,7 +270,9 @@ static void write_run_manifest(
 
     f << "\n# Results\n";
     f << "nReal_completed=" << nReal_completed << "\n";
-    f << "git_revision=" << fine_outputs.git_revision << "\n";
+    f << "git_revision="
+      << (fine_outputs.git_revision.empty() ? "unknown" : fine_outputs.git_revision)
+      << "\n";
 }
 
 
@@ -546,7 +548,7 @@ static bool run_fine_loop_collect(
     FineScaleOutputs& outputs,
     int rank)
 {
-    const int nx = P.nx, ny = P.ny, nu = P.nu;
+    const int nx = P.nx, ny = P.ny;
     const double Lx = P.Lx, Ly = P.Ly;
 
     const std::string stats_csv = joinPath(run_dir, "fine_params_all.csv");
@@ -1374,16 +1376,6 @@ static bool run_fine_loop_collect(
         writeMeanCorrelations(run_dir, P, outputs, opts);
         computeFinalMeans(outputs);
 
-        // Write per-realization upscaled outputs if available
-        if (opts.upscale_each_realization) {
-            for (int i = 0; i < (int)P.xLocations.size(); ++i) {
-                outputs.BTCs_upscaled_pdf[i].write(
-                    joinPath(run_dir, fmt_x(P.xLocations[i]) + "_upscaled_per_real_pdf.csv"));
-                outputs.BTCs_upscaled_cdf[i].write(
-                    joinPath(run_dir, fmt_x(P.xLocations[i]) + "_upscaled_per_real_cdf.csv"));
-            }
-        }
-
         // Write run manifest
         write_run_manifest(run_dir, P, opts, outputs, success);
 
@@ -1782,8 +1774,6 @@ static bool run_upscaled_per_realization(
     const TimeSeries<double>& invcdf_mean,
     std::vector<TimeSeriesSet<double>>& BTCs_upscaled_pdf,
     std::vector<TimeSeriesSet<double>>& BTCs_upscaled_cdf,
-    std::vector<TimeSeriesSet<double>>& PT_upscaled_pdf,
-    std::vector<TimeSeriesSet<double>>& PT_upscaled_cdf,
     int rank)
 {
     const int nx = P.nx, ny = P.ny, nu = P.nu;
@@ -1827,8 +1817,11 @@ static bool run_upscaled_per_realization(
     g_u.setDiffusionFactor(P.diffusion_factor);
 
     int qx_size = nu * (nx + 1);
+    int qy_size = (nu + 1) * nx;
     auto& qx_u = g_u.flux("qx");
+    auto& qy_u = g_u.flux("qy");
     qx_u.resize(qx_size, 0.0);
+    qy_u.resize(qy_size, 0.0);
 
     for (int j = 0; j < nu; ++j) {
         double u = (nu <= 1) ? 0.0 : static_cast<double>(j) / (nu - 1);
@@ -2047,14 +2040,34 @@ static bool run_all_realizations_upscaled(
     int rank)
 {
     if (!opts.upscale_each_realization) return true;
+    if (opts.use_representative_clustering) {
+        if (rank == 0) {
+            std::cerr << "ERROR: representative clustering is not implemented; "
+                      << "disable it before running per-realization upscaling.\n";
+        }
+        return false;
+    }
     if (fine_outputs.qx_inverse_cdf_all.empty()) return true;
+
+    const size_t n = fine_outputs.qx_inverse_cdf_all.size();
+    if (fine_outputs.lc_all.size() != n ||
+        fine_outputs.velocity_lx_all.size() != n ||
+        fine_outputs.velocity_ly_all.size() != n ||
+        fine_outputs.dt_all.size() != n) {
+        if (rank == 0) {
+            std::cerr << "ERROR: incomplete per-realization parameter arrays; "
+                      << "cannot run matched upscaled realizations.\n";
+        }
+        return false;
+    }
 
     if (rank == 0) {
         std::cout << "Running per-realization upscaling for "
                   << fine_outputs.qx_inverse_cdf_all.size() << " realizations\n";
     }
 
-    for (size_t r = 0; r < fine_outputs.qx_inverse_cdf_all.size(); ++r) {
+    bool all_ok = true;
+    for (size_t r = 0; r < n; ++r) {
         int realization = r + 1;
 
         if (!run_upscaled_per_realization(
@@ -2062,24 +2075,23 @@ static bool run_all_realizations_upscaled(
             fine_outputs.lc_all[r],
             fine_outputs.velocity_lx_all[r],
             fine_outputs.velocity_ly_all[r],
-            std::numeric_limits<double>::quiet_NaN(),  // nu_x_r
-            std::numeric_limits<double>::quiet_NaN(),  // nu_y_r
+            fine_outputs.nu_x_mean,
+            fine_outputs.nu_y_mean,
             fine_outputs.dt_all[r],
             fine_outputs.qx_inverse_cdf_all[r],
             fine_outputs.lc_mean,
             invcdf_mean,
             BTCs_upscaled_pdf,
             BTCs_upscaled_cdf,
-            std::vector<TimeSeriesSet<double>>(),  // PT upscaled PDFs (not used yet)
-            std::vector<TimeSeriesSet<double>>(),  // PT upscaled CDFs (not used yet)
             rank)) {
+            all_ok = false;
             if (rank == 0) {
                 std::cerr << "WARNING: per-realization upscaling failed for r=" << realization << "\n";
             }
         }
     }
 
-    return true;
+    return all_ok;
 }
 
 // ============================================================================
@@ -2319,19 +2331,6 @@ bool run_simulation_blocks(
     out.Fine_Scale_PT_pdf = fine_outputs.PT_pdfs;
     out.Fine_Scale_PT_cdf = fine_outputs.PT_cdfs;
 
-    // If per-realization upscaling was done, merge those outputs with main stacks
-    if (opts.upscale_each_realization && fine_outputs.BTCs_upscaled_pdf.size() == P.xLocations.size()) {
-        for (int i = 0; i < (int)P.xLocations.size(); ++i) {
-            // Merge per-realization upscaled curves into the main stacks
-            for (size_t j = 0; j < fine_outputs.BTCs_upscaled_pdf[i].size(); ++j) {
-                out.Fine_Scale_BTCs_pdf[i].append(fine_outputs.BTCs_upscaled_pdf[i][j],
-                                                   fine_outputs.BTCs_upscaled_pdf[i].getName(j));
-                out.Fine_Scale_BTCs_cdf[i].append(fine_outputs.BTCs_upscaled_cdf[i][j],
-                                                   fine_outputs.BTCs_upscaled_cdf[i].getName(j));
-            }
-        }
-    }
-
     TimeSeries<double> invcdf_mean;
     const bool ok_mean = build_mean_for_upscaled(P, opts, H, out.run_dir, resume_run_dir, fine_outputs, invcdf_mean, rank);
     if (!ok_mean) return false;
@@ -2348,9 +2347,14 @@ bool run_simulation_blocks(
             fine_outputs.BTCs_upscaled_cdf,
             rank
         );
-        if (!ok_per_real) {
-            if (rank == 0) {
-                std::cerr << "WARNING: per-realization upscaling had issues\n";
+        if (!ok_per_real) return false;
+
+        if (rank == 0) {
+            for (int i = 0; i < (int)P.xLocations.size(); ++i) {
+                fine_outputs.BTCs_upscaled_pdf[i].write(
+                    joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "_upscaled_per_real_pdf.csv"));
+                fine_outputs.BTCs_upscaled_cdf[i].write(
+                    joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "_upscaled_per_real_cdf.csv"));
             }
         }
     }
@@ -2387,9 +2391,30 @@ bool run_simulation_blocks(
     computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_pdf,   out.mean_pt_pdf,        opts);
     computeMeanBTCs(P.xLocations, out.Fine_Scale_PT_cdf,   out.mean_pt_cdf,        opts);
 
+    // Add per-realization upscaled curves to the comparison files only after
+    // computing the fine/mean-upscaled summaries. Otherwise these extra curves
+    // would change the ensemble means that they are intended to diagnose.
+    if (opts.upscale_each_realization &&
+        fine_outputs.BTCs_upscaled_pdf.size() == P.xLocations.size() &&
+        fine_outputs.BTCs_upscaled_cdf.size() == P.xLocations.size()) {
+        for (int i = 0; i < (int)P.xLocations.size(); ++i) {
+            for (size_t j = 0; j < fine_outputs.BTCs_upscaled_pdf[i].size(); ++j) {
+                out.Fine_Scale_BTCs_pdf[i].append(
+                    fine_outputs.BTCs_upscaled_pdf[i][j],
+                    fine_outputs.BTCs_upscaled_pdf[i][j].name());
+            }
+            for (size_t j = 0; j < fine_outputs.BTCs_upscaled_cdf[i].size(); ++j) {
+                out.Fine_Scale_BTCs_cdf[i].append(
+                    fine_outputs.BTCs_upscaled_cdf[i][j],
+                    fine_outputs.BTCs_upscaled_cdf[i][j].name());
+            }
+        }
+    }
+
     // Legacy transport mean now points to PDF mean
     out.mean_transport_full = out.mean_transport_pdf;
     out.mean_BTCs = out.mean_transport_pdf;
+    out.Fine_Scale_BTCs = out.Fine_Scale_BTCs_pdf;
 
     // Write per-x PT compare files
     //

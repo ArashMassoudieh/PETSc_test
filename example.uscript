@@ -38,6 +38,8 @@ set copula_model      = empirical
 set copula_bins       = 20
 set mixing_model      = ExponentialVDep
 set mean_ts_mode      = Longest
+set upscale_each_realization = false
+set upscale_control   = standard
 
 # ---- Run fine-scale simulations -------------------------------------------
 # Generates K-fields, solves flow+transport, extracts and averages copulas.

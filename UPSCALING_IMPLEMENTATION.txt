@@ -11,8 +11,9 @@ COMPLETED (Phase 1):
    - Runs upscaled transport for each realization separately
    - Stores results in FineScaleOutputs:
      * BTCs_upscaled_pdf[x], BTCs_upscaled_cdf[x]
-     * PT_upscaled_pdfs[x], PT_upscaled_cdfs[x]
-   - Reduces errors from 19.6-37.3% to 11.7-17.2% baseline
+   - Writes per-realization PDF/CDF files after all runs complete
+   - Adds the curves to comparison files without including them in the
+     fine/mean-upscaled ensemble averages
 
 2. Crossed-Control Modes ✓
    - RunOptions::control_mode enum with 3 modes:
@@ -29,14 +30,14 @@ COMPLETED (Phase 1):
      * Run options (control mode, upscale flags, etc.)
      * Mean fitted parameters
      * Number of completed realizations
-     * Git revision for reproducibility
+     * Git revision when supplied (otherwise recorded as "unknown")
 
 4. Code Structure for Phase 2 ✓
    - Placeholder clustering options in RunOptions:
      * use_representative_clustering (bool)
      * num_representatives (int)
      * clustering_metric (string)
-   - Framework ready for K-means/hierarchical clustering
+   - Configuration is rejected clearly until clustering is implemented
 
 TODO (Phase 2):
 ===============
@@ -71,6 +72,17 @@ USAGE:
 ======
 
 Enable per-realization upscaling:
+  In a .uscript pipeline file:
+    set upscale_each_realization = true
+    set upscale_control = standard
+
+  Supported upscale_control values:
+    standard, mean_velocity, mean_lc
+
+  From the legacy command-line entry point:
+    --upscale-each-realization --upscale-control=standard
+
+  From C++:
   RunOptions opts;
   opts.upscale_each_realization = true;
   opts.control_mode = RunOptions::ControlMode::Standard;
@@ -89,8 +101,8 @@ When upscale_each_realization = true:
   - run_manifest.txt                    (complete run metadata)
   - x=X.XXX_upscaled_per_real_pdf.csv   (per-realization upscaled PDFs)
   - x=X.XXX_upscaled_per_real_cdf.csv   (per-realization upscaled CDFs)
-  - x=X.XXX_BTC_Compare.csv             (fine + per-real upscaled combined)
-  - BTC_mean.csv                        (averaged breakthrough curves)
+  - x=X.XXBTC_Compare.csv               (fine + mean + per-real upscaled)
+  - BTC_mean.csv                        (fine/mean-upscaled summary)
 
 MODIFIED FILES:
 ===============
@@ -105,6 +117,10 @@ sim_runner.cpp:
   - write_run_manifest(): metadata writer
   - run_fine_loop_collect(): captures per-realization parameters
   - run_simulation_blocks(): integrates per-realization upscaling into main flow
+
+main_script2.cpp and PETSc_test.pro:
+  - route .uscript files through the sim_runner pipeline
+  - retain .uscript2 routing through the direct Grid2D engine
 
 TESTING:
 ========
