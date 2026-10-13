@@ -4,13 +4,13 @@ CONFIG += c++17 core gui
 CONFIG -= app_bundle
 CONFIG -= qt
 
-DEFINES += GRID_USE_VTK
-CONFIG += GRID_USE_VTK
+#DEFINES += GRID_USE_VTK
+#CONFIG += GRID_USE_VTK
 DEFINES += GSL
 
-VTKBUILDPATH = /home/arash/Projects/VTK-9.4.1/build
-VTKHEADERPATH = /home/arash/Projects/VTK-9.4.1
-VTK_V = -9.4
+#VTKBUILDPATH = /home/arash/Projects/VTK-9.4.1/build
+#VTKHEADERPATH = /home/arash/Projects/VTK-9.4.1
+#VTK_V = -9.4
 
 DEFINES += Arash
 
