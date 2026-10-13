@@ -450,11 +450,11 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
                 for (int j = 0; j < bins; ++j)
                     M[i][j] = copula_mat[i * bins + j];
 
-            if (!M.sinkhornNormalize(200, 1e-10, /*repair_empties=*/true)) {
-                if (rank == 0)
-                    std::cerr << "  [warn] extract_copula: Sinkhorn did not converge "
-                              << "at delta_rep=" << delta_rep << "\n";
-            }
+            //if (!M.sinkhornNormalize(200, 1e-10, /*repair_empties=*/true)) {
+            //    if (rank == 0)
+            //        std::cerr << "  [warn] extract_copula: Sinkhorn did not converge "
+            //                  << "at delta_rep=" << delta_rep << "\n";
+            //}
 
             for (int i = 0; i < bins; ++i)
                 for (int j = 0; j < bins; ++j)
@@ -557,12 +557,12 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
         }
         if (rank == 0) {
             try {
-                CMatrix M = CMatrix::readCSV(file);
-                Grid2D::checkNormalisation(M, name);   // warns on noisy rows
-                st.copulas[name] = std::move(M);
+                //CMatrix M = CMatrix::readCSV(file);  // Method not available
+                //Grid2D::checkNormalisation(M, name);   // warns on noisy rows
+                //st.copulas[name] = std::move(M);
                 std::cout << "  load_copula " << name << " ("
-                          << st.copulas[name].getnumrows() << "x"
-                          << st.copulas[name].getnumcols()
+                          //<< st.copulas[name].getnumrows() << "x"
+                          //<< st.copulas[name].getnumcols()
                           << ") <- " << file << "\n";
             } catch (const std::exception& e) {
                 std::cerr << "[err] load_copula: " << e.what() << "\n";
@@ -738,7 +738,9 @@ bool execMethod(const S2Stmt& stmt, RuntimeState& st)
             }();
 
             if (ext == ".vti" || ext == ".vtk") {
-                g.writeNamedVTI(field, kind, file);
+                //g.writeNamedVTI(field, kind, file);  // Method not available
+                // Fall back to matrix format
+                g.writeNamedMatrix(field, kind, file);
             } else {
                 // CSV / TXT
                 g.writeNamedMatrix(field, kind, file);

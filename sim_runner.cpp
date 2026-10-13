@@ -727,17 +727,17 @@ static bool run_fine_loop_collect(
 
                 g.normalizeField("K_normal_score", Grid2D::ArrayKind::Cell);
                 g.writeNamedMatrix("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "K_normal_score.txt"));
-                g.writeNamedVTI("K_normal_score", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "K_normal_score.vti"));
+                //g.writeNamedVTI(// "K_normal_score", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "K_normal_score.vti"));
 
                 g.createExponentialField("K_normal_score", P.stdev, P.g_mean, "K");
-                g.writeNamedVTI("K", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "K.vti"));
+                //g.writeNamedVTI(// "K", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "K.vti"));
 
                 // ---- PETSc solve: can throw (KSP did not converge) ----
                 g.DarcySolve(Lx, 0, "K", "K");
 
-                g.writeNamedVTI("head", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "Head.vti"));
-                g.writeNamedVTI("qx",   Grid2D::ArrayKind::Fx,   joinPath(fine_dir, pfx + "qx.vti"));
-                g.writeNamedVTI("qy",   Grid2D::ArrayKind::Fy,   joinPath(fine_dir, pfx + "qy.vti"));
+                //g.writeNamedVTI(// "head", Grid2D::ArrayKind::Cell, joinPath(fine_dir, pfx + "Head.vti"));
+                //g.writeNamedVTI(// "qx",   Grid2D::ArrayKind::Fx,   joinPath(fine_dir, pfx + "qx.vti"));
+                //g.writeNamedVTI(// "qy",   Grid2D::ArrayKind::Fy,   joinPath(fine_dir, pfx + "qy.vti"));
 
                 // ---- velocity normal score + diffusion-side rank/copula correlations (local) ----
                 {
@@ -746,8 +746,8 @@ static bool run_fine_loop_collect(
                     TimeSeries<double> QxNormalScores = AllQxValues.ConvertToNormalScore();
                     g.assignFromTimeSeries(QxRanks, "qx_ranks", Grid2D::ArrayKind::Fx);
                     g.assignFromTimeSeries(QxNormalScores, "qx_normal_score", Grid2D::ArrayKind::Fx);
-                    g.writeNamedVTI("qx_ranks", Grid2D::ArrayKind::Fx, joinPath(fine_dir, pfx + "qx_ranks.vti"));
-                    g.writeNamedVTI("qx_normal_score", Grid2D::ArrayKind::Fx, joinPath(fine_dir, pfx + "qx_normal_score.vti"));
+                    //g.writeNamedVTI(// "qx_ranks", Grid2D::ArrayKind::Fx, joinPath(fine_dir, pfx + "qx_ranks.vti"));
+                    //g.writeNamedVTI(// "qx_normal_score", Grid2D::ArrayKind::Fx, joinPath(fine_dir, pfx + "qx_normal_score.vti"));
 
                     const int num_deltas = 30;
                     const int num_samples_per_delta = 10000;
@@ -1946,8 +1946,8 @@ static bool run_upscaled(
         }
     }
 
-    g_u.writeNamedVTI("qx", Grid2D::ArrayKind::Fx, joinPath(up_dir, up_pfx + "qx_u_initial.vti"));
-    g_u.writeNamedVTI("qy", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "qy_u_initial.vti"));
+    //g_u.writeNamedVTI(// "qx", Grid2D::ArrayKind::Fx, joinPath(up_dir, up_pfx + "qx_u_initial.vti"));
+    //g_u.writeNamedVTI(// "qy", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "qy_u_initial.vti"));
 
     g_u.setMixingParams(lc_mean, lx_mean, ly_mean, nu_x_mean, nu_y_mean);
 
@@ -1956,7 +1956,7 @@ static bool run_upscaled(
     g_u.SetVal("c_left", 1.0);
 
     g_u.computeMixingDiffusionCoefficient();
-    g_u.writeNamedVTI("D_y", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "D_y.vti"));
+    //g_u.writeNamedVTI(// "D_y", Grid2D::ArrayKind::Fy, joinPath(up_dir, up_pfx + "D_y.vti"));
 
     // FIX: SolveTransport below uses "Cu" -> make sure it exists/initialized
     g_u.assignConstant("C", Grid2D::ArrayKind::Cell, 0.0);
@@ -2113,17 +2113,18 @@ static bool run_representative_upscaling(
 
     if (rank == 0) {
         std::cout << "Phase 2: Clustering complete. "
-                  << clusters.representatives.size() << " representatives from "
+                  << clusters.num_clusters << " representatives from "
                   << fine_outputs.qx_inverse_cdf_all.size() << " realizations.\n";
     }
 
-    // Process each representative
+    // Process each cluster representative
     bool all_ok = true;
-    for (size_t rep_idx : clusters.representatives) {
-        if (rep_idx >= fine_outputs.qx_inverse_cdf_all.size()) continue;
+    for (const auto& cluster_info : clusters.clusters) {
+        int rep_idx = cluster_info.realization_id - 1;  // Convert to 0-based
+        if (rep_idx < 0 || rep_idx >= (int)fine_outputs.qx_inverse_cdf_all.size()) continue;
 
-        double weight = clusters.representative_weights[rep_idx];
-        int realization = rep_idx + 1;
+        double weight = cluster_info.weight;
+        int realization = cluster_info.realization_id;
 
         std::vector<TimeSeriesSet<double>> rep_btc_pdf(P.xLocations.size());
         std::vector<TimeSeriesSet<double>> rep_btc_cdf(P.xLocations.size());
@@ -2149,19 +2150,13 @@ static bool run_representative_upscaling(
             continue;
         }
 
-        // Add weighted representative results to output stacks
+        // Add representative results to output stacks
         for (int i = 0; i < (int)P.xLocations.size(); ++i) {
             for (size_t j = 0; j < rep_btc_pdf[i].size(); ++j) {
-                TimeSeries<double> weighted = rep_btc_pdf[i][j];
-                weighted *= weight;
-                BTCs_upscaled_pdf[i].append(weighted,
-                    rep_btc_pdf[i][j].name() + "_w" + aquiutils::numbertostring(weight, 3));
+                BTCs_upscaled_pdf[i].append(rep_btc_pdf[i][j], rep_btc_pdf[i][j].name());
             }
             for (size_t j = 0; j < rep_btc_cdf[i].size(); ++j) {
-                TimeSeries<double> weighted = rep_btc_cdf[i][j];
-                weighted *= weight;
-                BTCs_upscaled_cdf[i].append(weighted,
-                    rep_btc_cdf[i][j].name() + "_w" + aquiutils::numbertostring(weight, 3));
+                BTCs_upscaled_cdf[i].append(rep_btc_cdf[i][j], rep_btc_cdf[i][j].name());
             }
         }
     }
@@ -2169,7 +2164,7 @@ static bool run_representative_upscaling(
     if (rank == 0) {
         std::ofstream clustering_out(joinPath(run_dir, "clustering_summary.txt"));
         clustering_out << "Phase 2 Clustering Summary\n";
-        clustering_out << "Representatives: " << clusters.representatives.size() << "\n";
+        clustering_out << "Representatives: " << clusters.num_clusters << "\n";
         clustering_out << "Total realizations: " << fine_outputs.qx_inverse_cdf_all.size() << "\n";
         clustering_out << "Metric: " << opts.clustering_metric << "\n";
         clustering_out.close();

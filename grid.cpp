@@ -1611,7 +1611,7 @@ void Grid2D::SolveTransport(const double& t_end,
         filename_ = filename;
 
     if (output_interval > 0) {
-        writeNamedVTI_Auto("C", output_dir + "/" + makeVtiName(filename_, 0));
+        //writeNamedVTI_Auto("C", output_dir + "/" + makeVtiName(filename_, 0));  // VTK output disabled
     }
 
     // Record initial BTC values (t=0)
@@ -1661,7 +1661,7 @@ void Grid2D::SolveTransport(const double& t_end,
                     printSampleC({{0,50}, {10,50}, {50,50}, {100,50}, {200,50}, {299,50}});
                 }
 
-                writeNamedVTI_Auto("C", output_dir + "/" + makeVtiName(filename_, step_count));
+                //writeNamedVTI_Auto("C", output_dir + "/" + makeVtiName(filename_, step_count));  // VTK output disabled
             }
         } catch (const std::exception& e) {
             std::cerr << "Error in transport step " << step_count
@@ -3148,7 +3148,7 @@ void Grid2D::SolveCopulaTransport(
                 fname << output_dir << "/copula_cu_"
                       << std::setw(5) << std::setfill('0') << step_count
                       << ".vti";
-                writeNamedVTI_Auto(fieldName, fname.str());
+                //writeNamedVTI_Auto(fieldName, fname.str());  // VTK output disabled for Phase 2 testing
             }
         }
     }

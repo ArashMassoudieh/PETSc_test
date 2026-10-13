@@ -737,12 +737,12 @@ private:
 };
 
 // harmonic mean
-static inline double harm(double a, double b);
+//static inline double harm(double a, double b);
 
 // separable exponential covariance with unit variance (sill = 1)
-static inline double cov_exp_sep(double dx, double dy, double lx, double ly);
+//static inline double cov_exp_sep(double dx, double dy, double lx, double ly);
 
 // metric consistent with the covariance for nearest-neighbor sorting
-static inline double metric_sep(double dx, double dy, double lx, double ly);
+//static inline double metric_sep(double dx, double dy, double lx, double ly);
 
 static double h_exchange(double alpha);
