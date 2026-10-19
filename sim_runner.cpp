@@ -18,6 +18,7 @@
 #include <iomanip>
 #include <filesystem>
 #include <stdexcept>
+#include <chrono>
 #include <cstdint>
 #include <vector>
 #include <random>
@@ -564,7 +565,7 @@ static bool run_fine_loop_collect(
     outputs.PT_pdfs.resize(P.xLocations.size());
     outputs.PT_cdfs.resize(P.xLocations.size());
 
-    if (opts.upscale_each_realization) {
+    if (opts.upscale_each_realization || opts.use_representative_clustering) {
         outputs.BTCs_upscaled_pdf.resize(P.xLocations.size());
         outputs.BTCs_upscaled_cdf.resize(P.xLocations.size());
         outputs.PT_upscaled_pdfs.resize(P.xLocations.size());
@@ -1270,7 +1271,11 @@ static bool run_fine_loop_collect(
                 outputs.dt_all.push_back(dt_optimal);
                 outputs.lc_all.push_back(lc_emp);
 
-                if (opts.upscale_each_realization) {
+                // Phase 2 (representative clustering) selects representatives from
+                // this same per-realization array and then upscales them via
+                // run_upscaled_per_realization, exactly like Phase 1 -- so it needs
+                // this array populated even when upscale_each_realization is off.
+                if (opts.upscale_each_realization || opts.use_representative_clustering) {
                     outputs.qx_inverse_cdf_all.push_back(qx_inverse_cdf);
                 }
 
@@ -2041,7 +2046,14 @@ static bool run_all_realizations_upscaled(
     int rank)
 {
     if (!opts.upscale_each_realization) return true;
-    if (fine_outputs.qx_inverse_cdf_all.empty()) return true;
+    if (fine_outputs.qx_inverse_cdf_all.empty()) {
+        if (rank == 0) {
+            std::cerr << "ERROR: upscale_each_realization=true but "
+                      << "qx_inverse_cdf_all is empty -- no fine-scale realization "
+                      << "succeeded, so there is nothing to upscale per-realization.\n";
+        }
+        return false;
+    }
 
     const size_t n = fine_outputs.qx_inverse_cdf_all.size();
     if (fine_outputs.lc_all.size() != n ||
@@ -2090,7 +2102,69 @@ static bool run_all_realizations_upscaled(
 
 // ============================================================================
 // Phase 2: Representative clustering upscaling
+//
+// Behavior when Phase 1 (upscale_each_realization) and Phase 2
+// (use_representative_clustering) are BOTH requested: they run
+// independently and do not share work. Phase 1 upscales every realization
+// and contributes the full-ensemble mean-of-upscaled curve plus one
+// diagnostic column per realization. Phase 2 clusters the same
+// qx_inverse_cdf_all into K representatives, upscales only those, and
+// contributes (a) one diagnostic column per representative and (b) a
+// separately-named weighted-aggregate curve (see below). Running both does
+// re-upscale the realizations that happen to be chosen as representatives
+// a second time; that redundant compute was judged simpler and safer than
+// trying to splice Phase 1's per-realization results into Phase 2's
+// cluster weighting, and is only paid when a caller explicitly asks for
+// both at once.
+//
+// Weighted aggregation (Task 3): the aggregate at each BTC location is
+// computed explicitly as sum(cluster_weight_k * representative_curve_k(t))
+// on a common time grid, NOT by averaging already-weighted series and NOT
+// by reusing the unweighted per-representative diagnostic curves as the
+// answer. It is written to its own x=..._representative_weighted_{pdf,cdf}
+// files, kept out of the fine-scale ensemble mean (appended to the
+// comparison stacks only after computeMeanBTCs has already run, same as
+// the existing per-representative diagnostics), and given an unambiguous
+// series name ("representative_weighted_x=...").
 // ============================================================================
+
+namespace {
+
+// Interpolate `curve` at time t, clamping to its own endpoints outside its
+// native range (consistent with TimeSeries::interpol's own behavior for
+// in-range queries; representative curves can end at different times
+// because each realization keeps its own optimal dt).
+double interp_clamped(const TimeSeries<double>& curve, double t)
+{
+    if (curve.size() == 0) return 0.0;
+    const double t0 = curve.getTime(0);
+    const double t1 = curve.getTime(curve.size() - 1);
+    if (t <= t0) return curve.getValue(0);
+    if (t >= t1) return curve.getValue(curve.size() - 1);
+    return curve.interpol(t);
+}
+
+// sum(weight_k * curve_k(t)) over a common uniform time grid spanning
+// [0, t_end]. Each curve is resampled independently via interp_clamped, so
+// curves with different native time grids (different dt_r) combine
+// correctly.
+TimeSeries<double> weighted_sum_curve(
+    const std::vector<std::pair<double, TimeSeries<double>>>& weighted_curves,
+    double t_end,
+    int n_points = 2001)
+{
+    TimeSeries<double> result;
+    if (weighted_curves.empty() || t_end <= 0.0) return result;
+    for (int k = 0; k < n_points; ++k) {
+        const double t = t_end * static_cast<double>(k) / (n_points - 1);
+        double v = 0.0;
+        for (const auto& wc : weighted_curves) v += wc.first * interp_clamped(wc.second, t);
+        result.addPoint(t, v);
+    }
+    return result;
+}
+
+} // namespace
 
 static bool run_representative_upscaling(
     const SimParams& P,
@@ -2103,28 +2177,64 @@ static bool run_representative_upscaling(
     int rank)
 {
     if (!opts.use_representative_clustering) return true;
-    if (fine_outputs.qx_inverse_cdf_all.empty()) return true;
 
-    // Cluster realizations by velocity CDF + correlation length
-    ClusterMetrics clusters = KMeansClustering::cluster(
+    if (fine_outputs.qx_inverse_cdf_all.empty()) {
+        if (rank == 0) {
+            std::cerr << "ERROR: use_representative_clustering=true but "
+                      << "qx_inverse_cdf_all is empty -- no fine-scale realization "
+                      << "succeeded, so there is nothing to cluster or upscale.\n";
+        }
+        return false;
+    }
+
+    const int n_real = static_cast<int>(fine_outputs.qx_inverse_cdf_all.size());
+    if (opts.num_representatives < 1 || opts.num_representatives > n_real) {
+        if (rank == 0) {
+            std::cerr << "ERROR: num_representatives=" << opts.num_representatives
+                      << " is out of range; must satisfy 1 <= N <= "
+                      << n_real << " (the number of successful realizations).\n";
+        }
+        return false;
+    }
+
+    const auto t_start = std::chrono::steady_clock::now();
+
+    // Cluster realizations by velocity CDF + correlation length (k-medoids).
+    ClusterMetrics clusters = KMedoidsClustering::cluster(
         fine_outputs,
         opts.num_representatives,
         opts.clustering_metric);
 
-    if (rank == 0) {
-        std::cout << "Phase 2: Clustering complete. "
-                  << clusters.num_clusters << " representatives from "
-                  << fine_outputs.qx_inverse_cdf_all.size() << " realizations.\n";
+    if (clusters.clusters.empty()) {
+        if (rank == 0) {
+            std::cerr << "ERROR: clustering produced zero nonempty clusters "
+                      << "for " << n_real << " realizations, K="
+                      << opts.num_representatives << ".\n";
+        }
+        return false;
     }
 
-    // Process each cluster representative
+    if (rank == 0) {
+        std::cout << "Phase 2: Clustering complete. "
+                  << clusters.num_clusters << " representatives (requested "
+                  << opts.num_representatives << ") from "
+                  << n_real << " realizations.\n";
+    }
+
+    // Per-location (weight, representative curve) pairs, built up as each
+    // representative is upscaled, used afterward for the explicit weighted
+    // sum. Kept separate from BTCs_upscaled_pdf/cdf (the unweighted,
+    // individually-named diagnostic columns) per Task 3.
+    std::vector<std::vector<std::pair<double, TimeSeries<double>>>>
+        weighted_pdf_curves(P.xLocations.size()), weighted_cdf_curves(P.xLocations.size());
+
     bool all_ok = true;
     for (const auto& cluster_info : clusters.clusters) {
         int rep_idx = cluster_info.realization_id - 1;  // Convert to 0-based
-        if (rep_idx < 0 || rep_idx >= (int)fine_outputs.qx_inverse_cdf_all.size()) continue;
+        if (rep_idx < 0 || rep_idx >= n_real) continue;
 
-        double weight = cluster_info.weight;
-        int realization = cluster_info.realization_id;
+        const double weight = cluster_info.weight;
+        const int realization = cluster_info.realization_id;
 
         std::vector<TimeSeriesSet<double>> rep_btc_pdf(P.xLocations.size());
         std::vector<TimeSeriesSet<double>> rep_btc_cdf(P.xLocations.size());
@@ -2150,24 +2260,45 @@ static bool run_representative_upscaling(
             continue;
         }
 
-        // Add representative results to output stacks
+        // Diagnostic: each representative's own (unweighted) curve, under
+        // its own name -- unchanged from before.
         for (int i = 0; i < (int)P.xLocations.size(); ++i) {
             for (size_t j = 0; j < rep_btc_pdf[i].size(); ++j) {
                 BTCs_upscaled_pdf[i].append(rep_btc_pdf[i][j], rep_btc_pdf[i][j].name());
+                weighted_pdf_curves[i].push_back({weight, rep_btc_pdf[i][j]});
             }
             for (size_t j = 0; j < rep_btc_cdf[i].size(); ++j) {
                 BTCs_upscaled_cdf[i].append(rep_btc_cdf[i][j], rep_btc_cdf[i][j].name());
+                weighted_cdf_curves[i].push_back({weight, rep_btc_cdf[i][j]});
             }
         }
     }
 
+    // Explicit weighted aggregate: sum(weight_k * curve_k(t)), not an
+    // average of already-weighted series.
+    for (int i = 0; i < (int)P.xLocations.size(); ++i) {
+        if (weighted_pdf_curves[i].empty()) continue;
+        TimeSeries<double> agg_pdf = weighted_sum_curve(weighted_pdf_curves[i], P.t_end_pdf);
+        TimeSeries<double> agg_cdf = weighted_sum_curve(weighted_cdf_curves[i], P.t_end_pdf);
+
+        const std::string name = "representative_weighted_" + fmt_x(P.xLocations[i]);
+        BTCs_upscaled_pdf[i].append(agg_pdf, name);
+        BTCs_upscaled_cdf[i].append(agg_cdf, name);
+
+        if (rank == 0) {
+            TimeSeriesSet<double> single_pdf, single_cdf;
+            single_pdf.append(agg_pdf, name);
+            single_cdf.append(agg_cdf, name);
+            single_pdf.write(joinPath(run_dir, fmt_x(P.xLocations[i]) + "_representative_weighted_pdf.csv"));
+            single_cdf.write(joinPath(run_dir, fmt_x(P.xLocations[i]) + "_representative_weighted_cdf.csv"));
+        }
+    }
+
+    const double runtime_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - t_start).count();
+
     if (rank == 0) {
-        std::ofstream clustering_out(joinPath(run_dir, "clustering_summary.txt"));
-        clustering_out << "Phase 2 Clustering Summary\n";
-        clustering_out << "Representatives: " << clusters.num_clusters << "\n";
-        clustering_out << "Total realizations: " << fine_outputs.qx_inverse_cdf_all.size() << "\n";
-        clustering_out << "Metric: " << opts.clustering_metric << "\n";
-        clustering_out.close();
+        write_clustering_summary(run_dir + "/", clusters, runtime_seconds);
     }
 
     return all_ok;
@@ -2416,21 +2547,16 @@ bool run_simulation_blocks(
 
     broadcastMeanParameters(fine_outputs, invcdf_mean, rank);
 
-    // Per-realization or representative upscaling (if enabled)
+    // Per-realization and/or representative upscaling (if enabled).
+    //
+    // Phase 1 (upscale_each_realization) and Phase 2
+    // (use_representative_clustering) are independent and both run if both
+    // are requested -- see the comment above run_representative_upscaling
+    // for why they are not merged into a single pass.
     if (!opts.upscale_only) {
-        if (opts.use_representative_clustering) {
-            // Phase 2: Cluster and run representatives only
-            fine_outputs.BTCs_upscaled_pdf.resize(P.xLocations.size());
-            fine_outputs.BTCs_upscaled_cdf.resize(P.xLocations.size());
-            const bool ok_rep = run_representative_upscaling(
-                P, opts, out.run_dir, fine_outputs, invcdf_mean,
-                fine_outputs.BTCs_upscaled_pdf,
-                fine_outputs.BTCs_upscaled_cdf,
-                rank
-            );
-            if (!ok_rep) return false;
-        } else if (opts.upscale_each_realization) {
+        if (opts.upscale_each_realization) {
             // Phase 1: Run all realizations separately
+            const auto t0 = std::chrono::steady_clock::now();
             fine_outputs.BTCs_upscaled_pdf.resize(P.xLocations.size());
             fine_outputs.BTCs_upscaled_cdf.resize(P.xLocations.size());
             const bool ok_per_real = run_all_realizations_upscaled(
@@ -2440,6 +2566,33 @@ bool run_simulation_blocks(
                 rank
             );
             if (!ok_per_real) return false;
+            out.phase1_upscale_seconds = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t0).count();
+            if (rank == 0)
+                std::cout << "TIMING: phase1_upscale_seconds=" << out.phase1_upscale_seconds << "\n";
+        }
+        if (opts.use_representative_clustering) {
+            // Phase 2: Cluster and run representatives only. Appends into
+            // the SAME stacks Phase 1 may have just populated, so if both
+            // ran, BTCs_upscaled_pdf/cdf end up holding both the full set of
+            // per-realization curves and the per-representative +
+            // weighted-aggregate curves, each under its own distinct name.
+            const auto t0 = std::chrono::steady_clock::now();
+            if (fine_outputs.BTCs_upscaled_pdf.empty())
+                fine_outputs.BTCs_upscaled_pdf.resize(P.xLocations.size());
+            if (fine_outputs.BTCs_upscaled_cdf.empty())
+                fine_outputs.BTCs_upscaled_cdf.resize(P.xLocations.size());
+            const bool ok_rep = run_representative_upscaling(
+                P, opts, out.run_dir, fine_outputs, invcdf_mean,
+                fine_outputs.BTCs_upscaled_pdf,
+                fine_outputs.BTCs_upscaled_cdf,
+                rank
+            );
+            if (!ok_rep) return false;
+            out.phase2_upscale_seconds = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t0).count();
+            if (rank == 0)
+                std::cout << "TIMING: phase2_upscale_seconds=" << out.phase2_upscale_seconds << "\n";
         }
 
         // Write results for both Phase 1 and Phase 2
@@ -2456,6 +2609,7 @@ bool run_simulation_blocks(
     }
 
     std::string up_dir, up_btc_path, up_btc_deriv_path;
+    const auto t0_baseline = std::chrono::steady_clock::now();
     const bool ok_up = run_upscaled(
         P, opts, out.run_dir,
         fine_outputs.lc_mean,
@@ -2473,6 +2627,10 @@ bool run_simulation_blocks(
         rank
     );
     if (!ok_up) return false;
+    out.baseline_upscale_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - t0_baseline).count();
+    if (rank == 0)
+        std::cout << "TIMING: baseline_upscale_seconds=" << out.baseline_upscale_seconds << "\n";
 
     // Legacy transport compare now points to PDF stack after upscaled append too
     out.Fine_Scale_BTCs = out.Fine_Scale_BTCs_pdf;

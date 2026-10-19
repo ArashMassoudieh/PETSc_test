@@ -150,9 +150,25 @@ RunOptions buildRunOptions(const ScriptContext& ctx)
         }
     }
 
-    if (getb("representative_clustering", false)) {
-        throw std::invalid_argument(
-            "representative_clustering is not implemented yet");
+    opts.use_representative_clustering = getb("representative_clustering", false);
+    if (opts.use_representative_clustering) {
+        opts.num_representatives = geti("num_representatives", opts.num_representatives);
+        if (opts.num_representatives < 1) {
+            throw std::invalid_argument(
+                "num_representatives must be >= 1 (got " +
+                std::to_string(opts.num_representatives) + ")");
+        }
+        // Upper bound (num_representatives <= realization count) is checked
+        // in run_representative_upscaling once the fine loop's actual
+        // success count is known; it cannot be checked here.
+        if (ctx.has("clustering_metric")) {
+            const std::string m = lower(ctx.expand(ctx.get("clustering_metric")));
+            if (m != "velocity_lc" && m != "lc_only" && m != "velocity") {
+                throw std::invalid_argument(
+                    "clustering_metric must be velocity_lc, lc_only, or velocity");
+            }
+            opts.clustering_metric = m;
+        }
     }
 
     // Copula dependence model

@@ -277,6 +277,12 @@ struct RunOutputs
 {
     std::string run_dir;
 
+    // Wall-clock timing of each upscaling stage (seconds), for Task 5's
+    // speedup measurements. -1 means that stage did not run.
+    double baseline_upscale_seconds = -1.0;
+    double phase1_upscale_seconds   = -1.0;
+    double phase2_upscale_seconds   = -1.0;
+
     // TRANSPORT compare stacks (per-x)
     // Legacy transport compare now maps to PDF
     std::vector<TimeSeriesSet<double>> Fine_Scale_BTCs;

@@ -1,3 +1,14 @@
+================================================================================
+CORRECTION -- see PHASE2_VALIDATION_CORRECTION.md for the full story.
+Everything below was written before Phase 2 was ever run end-to-end.
+"Tested" and "Expected Impact" numbers here were projections, not
+measurements -- standalone clustering was actually a silent no-op at the
+time. That bug is fixed, the clustering algorithm was corrected (k-medoids,
+true Wasserstein distance, deterministic init, empty-cluster handling),
+weighted aggregation was implemented, and it has now actually been run and
+measured. Treat every number below as unverified at the time it was written.
+================================================================================
+
 ╔════════════════════════════════════════════════════════════════════════════╗
 ║         PETSc TWO-STAGE UPSCALING IMPLEMENTATION - COMPLETE                ║
 ║                           October 13, 2026                                  ║

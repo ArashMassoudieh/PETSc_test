@@ -12,6 +12,7 @@
 #include <limits>
 #include <fstream>
 #include <algorithm>
+#include <optional>
 
 #include "sim_helpers.h"
 #include "plotter.h"     // TBaseMode, AlignMode, run_final_aggregation_and_plots
@@ -111,6 +112,16 @@ int main(int argc, char** argv)
     //resume_run_dir = joinPath(output_dir, "Finished Runs/100Realizations_20260207_111642_std1_D0.1_aniso0.1&1_df0.15");
 
     // -----------------------------
+    // Optional overrides of the hardcoded SimParams block below (CLI flags
+    // documented alongside the Phase 1/2 flags; useful for reproducible
+    // small-scale validation runs without editing source). Left unset
+    // (nullopt), each keeps the hardcoded default it already had.
+    // -----------------------------
+    std::optional<int>    override_nx, override_ny, override_nu, override_nreal;
+    std::optional<double> override_stdev, override_diffusion, override_tend;
+    std::optional<std::string> override_output_dir;
+
+    // -----------------------------
     // Plot options (kept in main only)
     // -----------------------------
     bool plotter = false;
@@ -169,6 +180,47 @@ int main(int argc, char** argv)
         else if (a == "--up-transport")      opts.solve_upscale_transport = true;
         else if (a == "--upscale-each-realization") opts.upscale_each_realization = true;
         else if (a == "--no-upscale-each-realization") opts.upscale_each_realization = false;
+        else if (a.rfind("--representative-clustering=", 0) == 0) {
+            opts.use_representative_clustering = true;
+            const std::string n_str = a.substr(std::string("--representative-clustering=").size());
+            try {
+                opts.num_representatives = std::stoi(n_str);
+            } catch (const std::exception&) {
+                if (rank == 0) {
+                    std::cerr << "ERROR: --representative-clustering=N requires an integer N, got '"
+                              << n_str << "'\n";
+                }
+                return 2;
+            }
+            if (opts.num_representatives < 1) {
+                if (rank == 0) {
+                    std::cerr << "ERROR: --representative-clustering=N requires N >= 1, got "
+                              << opts.num_representatives << "\n";
+                }
+                return 2;
+            }
+            // Upper bound (N <= realization count) is checked once the fine
+            // loop's actual success count is known (run_representative_upscaling);
+            // it cannot be checked here, before any realization has run.
+        }
+        else if (a.rfind("--clustering-metric=", 0) == 0) {
+            const std::string m = a.substr(std::string("--clustering-metric=").size());
+            if (m != "velocity_lc" && m != "lc_only" && m != "velocity") {
+                if (rank == 0) {
+                    std::cerr << "ERROR: --clustering-metric must be velocity_lc, lc_only, or velocity\n";
+                }
+                return 2;
+            }
+            opts.clustering_metric = m;
+        }
+        else if (a.rfind("--nx=", 0) == 0)       override_nx = std::stoi(a.substr(5));
+        else if (a.rfind("--ny=", 0) == 0)       override_ny = std::stoi(a.substr(5));
+        else if (a.rfind("--nu=", 0) == 0)       override_nu = std::stoi(a.substr(5));
+        else if (a.rfind("--nreal=", 0) == 0)    override_nreal = std::stoi(a.substr(8));
+        else if (a.rfind("--stdev=", 0) == 0)    override_stdev = std::stod(a.substr(8));
+        else if (a.rfind("--diffusion=", 0) == 0) override_diffusion = std::stod(a.substr(12));
+        else if (a.rfind("--tend=", 0) == 0)     override_tend = std::stod(a.substr(7));
+        else if (a.rfind("--output-dir=", 0) == 0) override_output_dir = a.substr(13);
         else if (a.rfind("--upscale-control=", 0) == 0) {
             const std::string mode = a.substr(std::string("--upscale-control=").size());
             if (mode == "standard") {
@@ -369,6 +421,18 @@ int main(int argc, char** argv)
     P.run_seed = 20260115UL;
 
     P.xLocations = {0.5, 1.5, 2.5};
+
+    // Apply any --nx=/--ny=/--nu=/--nreal=/--stdev=/--diffusion=/--tend=/
+    // --output-dir= CLI overrides parsed above, on top of the hardcoded
+    // defaults just set.
+    if (override_nx)         P.nx = *override_nx;
+    if (override_ny)         P.ny = *override_ny;
+    if (override_nu)         P.nu = *override_nu;
+    if (override_nreal)      P.nReal_default = *override_nreal;
+    if (override_stdev)      P.stdev = *override_stdev;
+    if (override_diffusion)  P.Diffusion_coefficient = *override_diffusion;
+    if (override_tend)       P.t_end_pdf = *override_tend;
+    if (override_output_dir) output_dir = *override_output_dir;
 
     // -----------------------------
     // stdev integer check
