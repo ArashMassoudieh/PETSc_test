@@ -2634,6 +2634,14 @@ bool run_simulation_blocks(
             return false;
         }
     }
+    // run_fine_loop_collect() writes run_manifest.txt (so it records
+    // use_representative_clustering/num_representatives/clustering_metric)
+    // right after the fine loop in the normal path; --upscale-only skips
+    // that function entirely, so write it here instead, with the same
+    // final opts/fine_outputs state.
+    if (opts.upscale_only && rank == 0) {
+        write_run_manifest(out.run_dir, P, opts, fine_outputs, (int)fine_outputs.qx_inverse_cdf_all.size());
+    }
     {
         if (opts.upscale_each_realization) {
             // Phase 1: Run all realizations separately
