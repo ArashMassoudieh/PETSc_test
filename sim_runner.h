@@ -40,6 +40,19 @@ struct RunOptions
     // When enabled, rank-pair samples are generated for logarithmically-spaced
     // projected separations Delta_x and written under each realization folder.
     bool analyze_qx_ranks = true;
+
+    // When analyze_qx_ranks is on, the per-delta rank/copula analysis still
+    // computes every correlation length, summary statistic, and inverse-CDF
+    // value it always has -- this flag only controls whether the raw
+    // per-delta scatter-pair files (qx_rank_perturb_pairs_*.csv/.vtp,
+    // qx_rank_pairs_*.csv/.vtp) are also written to disk. Those raw-pair
+    // files are the dominant disk cost of qx-rank analysis (>95% of it,
+    // measured: ~540MB of ~562MB per realization at a 60x20/nu=20 grid) and
+    // are not needed to reproduce any of the summary outputs (correlation
+    // lengths, rank-copula summaries, binned empirical copula matrices).
+    // Default true preserves the original behavior exactly.
+    bool analyze_qx_write_pair_files = true;
+
     bool analyze_qx_copula_diagnostics = false; // expensive GOF + moment diagnostics
     int  qx_copula_bootstrap = 50;
     int  qx_copula_max_points = 1200;

@@ -129,6 +129,7 @@ RunOptions buildRunOptions(const ScriptContext& ctx)
     opts.perform_upscaled_PT       = getb("upscaled_pt", false);
     opts.upscale_each_realization  = getb("upscale_each_realization", false);
     opts.analyze_qx_ranks          = getb("qx_ranks", true);
+    opts.analyze_qx_write_pair_files = getb("qx_rank_pair_files", true);
     opts.analyze_qx_copula_diagnostics = getb("copula_analysis", false);
     opts.qx_copula_bootstrap       = geti("copula_bootstrap", 5);
     opts.qx_copula_max_points      = geti("copula_max_points", 1200);

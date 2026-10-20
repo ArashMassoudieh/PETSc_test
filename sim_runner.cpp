@@ -791,6 +791,7 @@ static bool run_fine_loop_collect(
                                     copts.bootstrap_B = opts.qx_copula_bootstrap;
                                     copts.max_points = opts.qx_copula_max_points;
                                     copts.empirical_copula_bins = opts.empirical_copula_bins;
+                                    copts.write_pair_files = opts.analyze_qx_write_pair_files;
                                     copts.dependence_model =
                                         (opts.qx_dependence_model == RunOptions::CopulaDependenceModel::Empirical)
                                             ? CopulaDependenceModel::Empirical
@@ -1010,6 +1011,7 @@ static bool run_fine_loop_collect(
                         copts.bootstrap_B = opts.qx_copula_bootstrap;
                         copts.max_points = opts.qx_copula_max_points;
                         copts.empirical_copula_bins = opts.empirical_copula_bins;
+                        copts.write_pair_files = opts.analyze_qx_write_pair_files;
                         copts.dependence_model =
                             (opts.qx_dependence_model == RunOptions::CopulaDependenceModel::Empirical)
                                 ? CopulaDependenceModel::Empirical
@@ -1616,6 +1618,72 @@ static bool loadMeanParamsForUpscaleOnly_FromInputSource(
     }
 
     invcdf_mean = mean_qx_cdf;
+    return true;
+}
+
+// Reuse a previously-run fine-scale ensemble for Phase 1 / Phase 2 upscaling
+// in --upscale-only mode, instead of re-solving the (expensive) fine loop.
+//
+// Every value this needs is already written unconditionally at the end of a
+// normal ("run fine") pass -- no new cache format was needed:
+//   - fine_params_all.csv  : realization,lc,lambda_x,lambda_y,lambda_K_x,lambda_K_y,dt_opt
+//                            (one row per realization, in realization order)
+//   - qx_inverse_cdfs.txt  : one (t,v) column-pair per realization, same order,
+//                            written via TimeSeriesSet::write/read
+// This loader reads both back into fine_outputs.lc_all / velocity_lx_all /
+// velocity_ly_all / dt_all / qx_inverse_cdf_all, so run_all_realizations_upscaled
+// (Phase 1) and run_representative_upscaling (Phase 2) see exactly the same
+// per-realization arrays they would after a real fine loop.
+static bool loadPerRealizationCacheForUpscaleOnly_FromInputSource(
+    const std::string& input_dir,
+    FineScaleOutputs& outputs)
+{
+    const std::string params_path = joinPath(input_dir, "fine_params_all.csv");
+    const std::string cdf_path    = joinPath(input_dir, "qx_inverse_cdfs.txt");
+
+    std::ifstream pf(params_path);
+    if (!pf.is_open()) {
+        std::cerr << "ERROR: --upscale-only with --upscale-each-realization/--representative-clustering "
+                  << "requires fine_params_all.csv in INPUT folder:\n  " << input_dir << "\n";
+        return false;
+    }
+
+    std::vector<double> lc, lx, ly, dt;
+    std::string line;
+    std::getline(pf, line); // header
+    while (std::getline(pf, line)) {
+        if (line.empty()) continue;
+        std::vector<std::string> tok = aquiutils::split(line, ',');
+        if (tok.size() < 7) continue;
+        lc.push_back(std::stod(tok[1]));
+        lx.push_back(std::stod(tok[2]));
+        ly.push_back(std::stod(tok[3]));
+        dt.push_back(std::stod(tok[6]));
+    }
+    if (lc.empty()) {
+        std::cerr << "ERROR: fine_params_all.csv in INPUT folder has no realization rows:\n  "
+                  << input_dir << "\n";
+        return false;
+    }
+
+    TimeSeriesSet<double> cdf_set;
+    if (!fileExists(cdf_path) || !cdf_set.read(cdf_path, true)) {
+        std::cerr << "ERROR: --upscale-only with --upscale-each-realization/--representative-clustering "
+                  << "requires qx_inverse_cdfs.txt in INPUT folder:\n  " << input_dir << "\n";
+        return false;
+    }
+    if (cdf_set.size() != lc.size()) {
+        std::cerr << "ERROR: fine_params_all.csv (" << lc.size() << " realizations) and "
+                  << "qx_inverse_cdfs.txt (" << cdf_set.size() << " realizations) disagree "
+                  << "in INPUT folder:\n  " << input_dir << "\n";
+        return false;
+    }
+
+    outputs.lc_all = lc;
+    outputs.velocity_lx_all = lx;
+    outputs.velocity_ly_all = ly;
+    outputs.dt_all = dt;
+    outputs.qx_inverse_cdf_all.assign(cdf_set.begin(), cdf_set.end());
     return true;
 }
 
@@ -2553,7 +2621,20 @@ bool run_simulation_blocks(
     // (use_representative_clustering) are independent and both run if both
     // are requested -- see the comment above run_representative_upscaling
     // for why they are not merged into a single pass.
-    if (!opts.upscale_only) {
+    //
+    // In --upscale-only mode there is no fine loop to populate
+    // qx_inverse_cdf_all/lc_all/velocity_lx_all/velocity_ly_all/dt_all, so
+    // load them from the INPUT run's already-written fine_params_all.csv +
+    // qx_inverse_cdfs.txt (see loadPerRealizationCacheForUpscaleOnly_FromInputSource).
+    // This lets a single fine-scale ensemble be reused across baseline,
+    // Phase 1, and Phase 2 runs without re-solving it each time.
+    if (opts.upscale_only && rank == 0 &&
+        (opts.upscale_each_realization || opts.use_representative_clustering)) {
+        if (!loadPerRealizationCacheForUpscaleOnly_FromInputSource(resume_run_dir, fine_outputs)) {
+            return false;
+        }
+    }
+    {
         if (opts.upscale_each_realization) {
             // Phase 1: Run all realizations separately
             const auto t0 = std::chrono::steady_clock::now();

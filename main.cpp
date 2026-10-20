@@ -239,6 +239,8 @@ int main(int argc, char** argv)
         }
         else if (a == "--no-qx-ranks")       opts.analyze_qx_ranks = false;
         else if (a == "--qx-ranks")          opts.analyze_qx_ranks = true;
+        else if (a == "--no-qx-rank-pair-files") opts.analyze_qx_write_pair_files = false;
+        else if (a == "--qx-rank-pair-files")    opts.analyze_qx_write_pair_files = true;
         else if (a == "--copula-analysis")   opts.analyze_qx_copula_diagnostics = true;
         else if (a == "--no-copula-analysis")opts.analyze_qx_copula_diagnostics = false;
         else if (a.rfind("--copula-bootstrap=", 0) == 0) {

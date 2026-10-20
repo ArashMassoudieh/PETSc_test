@@ -87,6 +87,14 @@ struct CopulaAnalysisOptions
     int empirical_copula_bins = 20;      // Resolution for binned empirical copula
 
     CopulaDependenceModel dependence_model = CopulaDependenceModel::GaussianRank;
+
+    // Whether analyze_and_write_rank_pairs/analyze_and_write_sample_pairs
+    // also write the raw per-delta scatter-pair CSV/VTP files, in addition
+    // to computing and returning CopulaDiagnostics. Default true preserves
+    // existing behavior; set false for low-disk-footprint runs (the
+    // diagnostics -- correlations, rank dependence, GOF stats -- are
+    // computed either way).
+    bool write_pair_files = true;
 };
 
 // ============================================================================

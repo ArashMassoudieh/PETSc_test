@@ -893,17 +893,19 @@ CopulaDiagnostics analyze_and_write_rank_pairs(
         *empirical_binned_out = build_empirical_binned_copula(data.u1, data.u2, opts.empirical_copula_bins);
     }
 
-    write_rank_pairs_csv(data, scatter_csv_path);
+    if (opts.write_pair_files) {
+        write_rank_pairs_csv(data, scatter_csv_path);
 
-    std::string vtp_path = scatter_csv_path;
-    const std::string ext = ".csv";
-    if (vtp_path.size() >= ext.size() &&
-        vtp_path.substr(vtp_path.size() - ext.size()) == ext)
-        vtp_path.replace(vtp_path.size() - ext.size(), ext.size(), ".vtp");
-    else
-        vtp_path += ".vtp";
+        std::string vtp_path = scatter_csv_path;
+        const std::string ext = ".csv";
+        if (vtp_path.size() >= ext.size() &&
+            vtp_path.substr(vtp_path.size() - ext.size()) == ext)
+            vtp_path.replace(vtp_path.size() - ext.size(), ext.size(), ".vtp");
+        else
+            vtp_path += ".vtp";
 
-    write_rank_points_as_vtp(data, vtp_path);
+        write_rank_points_as_vtp(data, vtp_path);
+    }
     return analyze_copula_pair_data(data, delta_x, opts);
 }
 
@@ -924,16 +926,18 @@ CopulaDiagnostics analyze_and_write_sample_pairs(
         *empirical_binned_out = build_empirical_binned_copula(data.u1, data.u2, opts.empirical_copula_bins);
     }
 
-    write_rank_pairs_csv(data, scatter_csv_path);
+    if (opts.write_pair_files) {
+        write_rank_pairs_csv(data, scatter_csv_path);
 
-    std::string vtp_path = scatter_csv_path;
-    const std::string ext = ".csv";
-    if (vtp_path.size() >= ext.size() &&
-        vtp_path.substr(vtp_path.size() - ext.size()) == ext)
-        vtp_path.replace(vtp_path.size() - ext.size(), ext.size(), ".vtp");
-    else
-        vtp_path += ".vtp";
+        std::string vtp_path = scatter_csv_path;
+        const std::string ext = ".csv";
+        if (vtp_path.size() >= ext.size() &&
+            vtp_path.substr(vtp_path.size() - ext.size()) == ext)
+            vtp_path.replace(vtp_path.size() - ext.size(), ext.size(), ".vtp");
+        else
+            vtp_path += ".vtp";
 
-    write_rank_points_as_vtp(data, vtp_path);
+        write_rank_points_as_vtp(data, vtp_path);
+    }
     return analyze_copula_pair_data(data, delta_x, opts);
 }
