@@ -1818,6 +1818,44 @@ static void broadcastMeanParameters(
     broadcastTimeSeries(invcdf_mean, rank);
 }
 
+// Broadcast the per-realization arrays loaded by
+// loadPerRealizationCacheForUpscaleOnly_FromInputSource() from rank 0 to
+// every other rank. Without this, run_all_realizations_upscaled /
+// run_representative_upscaling see fine_outputs.qx_inverse_cdf_all (and
+// lc_all/velocity_lx_all/velocity_ly_all/dt_all) as empty on every rank
+// but 0 whenever -np > 1, which is caught by their existing "array is
+// empty" checks -- but those checks return false independently per rank,
+// which would desynchronize the collective PETSc/MPI calls inside
+// run_upscaled_per_realization (each rank reaching a different point in
+// the program). Broadcasting here keeps every rank's control flow
+// identical, the same way broadcastMeanParameters already does for the
+// mean-only values.
+static void broadcastPerRealizationCache(FineScaleOutputs& outputs, int rank)
+{
+    int n = 0;
+    if (rank == 0) n = (int)outputs.qx_inverse_cdf_all.size();
+    MPI_Bcast(&n, 1, MPI_INT, 0, PETSC_COMM_WORLD);
+
+    if (rank != 0) {
+        outputs.lc_all.resize(n);
+        outputs.velocity_lx_all.resize(n);
+        outputs.velocity_ly_all.resize(n);
+        outputs.dt_all.resize(n);
+        outputs.qx_inverse_cdf_all.resize(n);
+    }
+
+    if (n > 0) {
+        MPI_Bcast(outputs.lc_all.data(), n, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
+        MPI_Bcast(outputs.velocity_lx_all.data(), n, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
+        MPI_Bcast(outputs.velocity_ly_all.data(), n, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
+        MPI_Bcast(outputs.dt_all.data(), n, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
+    }
+
+    for (int i = 0; i < n; ++i) {
+        broadcastTimeSeries(outputs.qx_inverse_cdf_all[i], rank);
+    }
+}
+
 // ============================================================================
 // Upscaled run (transport + PT separate)
 //
@@ -2628,11 +2666,19 @@ bool run_simulation_blocks(
     // qx_inverse_cdfs.txt (see loadPerRealizationCacheForUpscaleOnly_FromInputSource).
     // This lets a single fine-scale ensemble be reused across baseline,
     // Phase 1, and Phase 2 runs without re-solving it each time.
-    if (opts.upscale_only && rank == 0 &&
+    if (opts.upscale_only &&
         (opts.upscale_each_realization || opts.use_representative_clustering)) {
-        if (!loadPerRealizationCacheForUpscaleOnly_FromInputSource(resume_run_dir, fine_outputs)) {
-            return false;
+        int load_ok = 1;
+        if (rank == 0) {
+            load_ok = loadPerRealizationCacheForUpscaleOnly_FromInputSource(resume_run_dir, fine_outputs) ? 1 : 0;
         }
+        // Every rank must agree before proceeding: loadPerRealizationCacheForUpscaleOnly_FromInputSource
+        // only runs on rank 0, so without this broadcast a load failure would
+        // make rank 0 return false while every other rank kept going into
+        // the collective PETSc/MPI calls below, deadlocking under -np > 1.
+        MPI_Bcast(&load_ok, 1, MPI_INT, 0, PETSC_COMM_WORLD);
+        if (!load_ok) return false;
+        broadcastPerRealizationCache(fine_outputs, rank);
     }
     // run_fine_loop_collect() writes run_manifest.txt (so it records
     // use_representative_clustering/num_representatives/clustering_metric)
@@ -2659,6 +2705,42 @@ bool run_simulation_blocks(
                 std::chrono::steady_clock::now() - t0).count();
             if (rank == 0)
                 std::cout << "TIMING: phase1_upscale_seconds=" << out.phase1_upscale_seconds << "\n";
+
+            // Explicit Phase 1 aggregate: the equal-weighted mean of every
+            // per-realization upscaled curve (sum((1/n) * curve_k(t)), same
+            // weighted_sum_curve machinery Phase 2 uses for its weighted
+            // aggregate, just with uniform weights). This is the curve the
+            // K-vs-Phase-1 comparison in Task 5's validation is actually
+            // measured against, so it is written out explicitly here rather
+            // than only existing implicitly inside an external analysis
+            // script -- the package that ships these results can be
+            // independently checked against this file.
+            if (rank == 0) {
+                for (int i = 0; i < (int)P.xLocations.size(); ++i) {
+                    const size_t n_curves = fine_outputs.BTCs_upscaled_pdf[i].size();
+                    if (n_curves == 0) continue;
+                    const double w = 1.0 / static_cast<double>(n_curves);
+
+                    std::vector<std::pair<double, TimeSeries<double>>> wpdf, wcdf;
+                    for (size_t j = 0; j < fine_outputs.BTCs_upscaled_pdf[i].size(); ++j)
+                        wpdf.push_back({w, fine_outputs.BTCs_upscaled_pdf[i][j]});
+                    for (size_t j = 0; j < fine_outputs.BTCs_upscaled_cdf[i].size(); ++j)
+                        wcdf.push_back({w, fine_outputs.BTCs_upscaled_cdf[i][j]});
+
+                    TimeSeries<double> agg_pdf = weighted_sum_curve(wpdf, P.t_end_pdf);
+                    TimeSeries<double> agg_cdf = weighted_sum_curve(wcdf, P.t_end_pdf);
+
+                    const std::string name = "phase1_mean_" + fmt_x(P.xLocations[i]);
+                    fine_outputs.BTCs_upscaled_pdf[i].append(agg_pdf, name);
+                    fine_outputs.BTCs_upscaled_cdf[i].append(agg_cdf, name);
+
+                    TimeSeriesSet<double> single_pdf, single_cdf;
+                    single_pdf.append(agg_pdf, name);
+                    single_cdf.append(agg_cdf, name);
+                    single_pdf.write(joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "_phase1_mean_pdf.csv"));
+                    single_cdf.write(joinPath(out.run_dir, fmt_x(P.xLocations[i]) + "_phase1_mean_cdf.csv"));
+                }
+            }
         }
         if (opts.use_representative_clustering) {
             // Phase 2: Cluster and run representatives only. Appends into
