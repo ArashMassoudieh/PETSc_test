@@ -119,6 +119,7 @@ int main(int argc, char** argv)
     // -----------------------------
     std::optional<int>    override_nx, override_ny, override_nu, override_nreal;
     std::optional<double> override_stdev, override_diffusion, override_tend;
+    std::optional<double> override_corr_lx, override_corr_ly;
     std::optional<std::string> override_output_dir;
 
     // -----------------------------
@@ -219,6 +220,8 @@ int main(int argc, char** argv)
         else if (a.rfind("--nreal=", 0) == 0)    override_nreal = std::stoi(a.substr(8));
         else if (a.rfind("--stdev=", 0) == 0)    override_stdev = std::stod(a.substr(8));
         else if (a.rfind("--diffusion=", 0) == 0) override_diffusion = std::stod(a.substr(12));
+        else if (a.rfind("--corr-lx=", 0) == 0)   override_corr_lx = std::stod(a.substr(10));
+        else if (a.rfind("--corr-ly=", 0) == 0)   override_corr_ly = std::stod(a.substr(10));
         else if (a.rfind("--tend=", 0) == 0)     override_tend = std::stod(a.substr(7));
         else if (a.rfind("--output-dir=", 0) == 0) override_output_dir = a.substr(13);
         else if (a.rfind("--upscale-control=", 0) == 0) {
@@ -404,6 +407,10 @@ int main(int argc, char** argv)
 
     P.correlation_ls_x = 1;
     P.correlation_ls_y = 0.1;
+    // Must apply before correlation_x_range/correlation_y_range are derived
+    // from these below.
+    if (override_corr_lx) P.correlation_ls_x = *override_corr_lx;
+    if (override_corr_ly) P.correlation_ls_y = *override_corr_ly;
 
     // calibration target
     P.diffusion_factor = 1;
