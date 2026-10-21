@@ -1888,8 +1888,8 @@ static bool run_upscaled_per_realization(
     std::vector<TimeSeriesSet<double>>& BTCs_upscaled_cdf,
     int rank)
 {
-    const int nx = P.nx, ny = P.ny, nu = P.nu;
-    const double Lx = P.Lx, Ly = P.Ly;
+    const int nx = P.nx, nu = P.nu;
+    const double Lx = P.Lx;
 
     // Choose velocity CDF and lc based on control mode
     const TimeSeries<double>& invcdf_use = (opts.control_mode == RunOptions::ControlMode::MeanVelocityIndividualLc)
@@ -1905,7 +1905,9 @@ static bool run_upscaled_per_realization(
     if (!up_real_dir.empty() && up_real_dir.back() != '/' && up_real_dir.back() != '\\')
         up_real_dir += "/";
 
-    Grid2D g_u(nx, ny, Lx, Ly);
+    // The upscaled model is solved in physical x and velocity-rank u. Its
+    // second grid dimension therefore has nu bins over the unit interval.
+    Grid2D g_u(nx, nu, Lx, 1.0);
 
     switch (opts.upscaled_mixing_model) {
     case RunOptions::UpscaledMixingModel::Exponential:
@@ -2004,8 +2006,8 @@ static bool run_upscaled(
     std::vector<TimeSeriesSet<double>>& Fine_Scale_PT_cdf,
     int rank)
 {
-    const int nx = P.nx, ny = P.ny, nu = P.nu;
-    const double Lx = P.Lx, Ly = P.Ly;
+    const int nx = P.nx, nu = P.nu;
+    const double Lx = P.Lx;
 
     std::string up_dir = joinPath(run_dir, "upscaled_mean");
     if (rank == 0) createDirectory(up_dir);
@@ -2014,7 +2016,8 @@ static bool run_upscaled(
 
     const std::string up_pfx = "upscaled_";
 
-    Grid2D g_u(nx, ny, Lx, Ly);
+    // The upscaled model's second dimension is velocity-rank u, not physical y.
+    Grid2D g_u(nx, nu, Lx, 1.0);
 
     switch (opts.upscaled_mixing_model) {
     case RunOptions::UpscaledMixingModel::Exponential:
